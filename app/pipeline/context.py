@@ -41,6 +41,8 @@ class PipelineContext:
     router_strategy: str = "off"
     router_decision: str = ""
     router_latency_ms: int = 0
+    domain_switched: bool = False  # 本次请求是否发生了领域切换（跨语义切换时强制摘要）
+    current_domain: Optional[str] = None  # 会话当前领域（从 SessionState 读取，供滞回判定）
 
     # ── ② AccountSelector 输出 ──
     account: Optional["ModelAccount"] = None

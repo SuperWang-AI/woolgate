@@ -119,10 +119,15 @@ class Executor:
         # ② ModelRouter 路由决策（写入 ctx.domain_tag / ctx.target_model）
         await self._model_router.route(ctx)
 
-        # ②.5 路由后更新会话领域
-        if session and ctx.domain_tag:
-            from app.services.session_service import SessionStateService
-            await SessionStateService(self.db).set_domain(ctx.session_id, ctx.domain_tag)
+        # ②.5 检测跨语义切换，路由后更新会话领域
+        if session:
+            old_domain = session.current_domain
+            if old_domain and ctx.domain_tag and old_domain != ctx.domain_tag:
+                ctx.domain_switched = True
+                logger.info(f"[executor] 跨语义切换: {old_domain} → {ctx.domain_tag}")
+            if ctx.domain_tag:
+                from app.services.session_service import SessionStateService
+                await SessionStateService(self.db).set_domain(ctx.session_id, ctx.domain_tag)
 
         # ③ ContextManager 组装消息（写入 ctx.assembled_messages）
         await self._context_manager.assemble(ctx, session=session)

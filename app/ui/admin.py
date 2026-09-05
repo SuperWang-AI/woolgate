@@ -143,6 +143,7 @@ def create_ui():
     NAV_PAGES = [
         ('🏠 首页', '/', 'home'),
         ('👥 账号管理', '/accounts', 'accounts'),
+        ('🧠 管线策略', '/pipeline', 'pipeline'),
         ('⚙️ 系统配置', '/config', 'config'),
         ('📋 请求日志', '/logs', 'logs'),
     ]
@@ -462,33 +463,6 @@ def create_ui():
                 ui.label('日志配置').classes('text-xl font-bold text-gray-700 mb-3')
                 log_retention = ui.number('日志保留天数', value=config.log_retention_days, min=1).classes('w-full')
 
-                ui.separator().classes('my-6')
-
-                # ── M1 管线策略配置 ──
-                ui.label('🧠 管线策略配置').classes('text-xl font-bold text-gray-700 mb-3')
-                ui.label('三层策略：模型路由（选羊）→ 账号调度（薅羊毛）→ 上下文管理').classes('text-xs text-gray-500 -mt-2 mb-3')
-
-                router_strategy = ui.select(
-                    ['off', 'rules', 'vector', 'llm'],
-                    label='① 模型路由策略（选羊）',
-                    value=getattr(config, 'router_strategy', 'off')
-                ).classes('w-full')
-                ui.label('off=不路由 / rules=关键词匹配 / vector=向量相似度(企业) / llm=小模型分类(企业)').classes('text-xs text-gray-400 -mt-2 mb-2')
-
-                selector_strategy = ui.select(
-                    ['pin', 'free-first', 'round-robin', 'sticky', 'failover', 'cost-first'],
-                    label='② 账号调度策略（薅羊毛）',
-                    value=getattr(config, 'selector_strategy', 'pin')
-                ).classes('w-full')
-                ui.label('pin=指定模型 / free-first=免费优先 / round-robin=轮询 / sticky=会话粘性 / failover=主备 / cost-first=成本最低').classes('text-xs text-gray-400 -mt-2 mb-2')
-
-                context_strategy = ui.select(
-                    ['passthrough', 'window', 'summary'],
-                    label='③ 上下文管理策略',
-                    value=getattr(config, 'context_strategy', 'passthrough')
-                ).classes('w-full')
-                ui.label('passthrough=直传 / window=滑动窗口 / summary=摘要压缩(企业)').classes('text-xs text-gray-400 -mt-2 mb-2')
-
                 # 保存按钮
                 async def save():
                     config_data = {
@@ -498,22 +472,86 @@ def create_ui():
                         'ollama_enabled': ollama_enabled.value,
                         'ollama_base_url': ollama_url.value,
                         'log_retention_days': int(log_retention.value),
-                        'router_strategy': router_strategy.value,
-                        'selector_strategy': selector_strategy.value,
-                        'context_strategy': context_strategy.value,
                     }
                     success = await save_system_config(config_data)
                     if success:
-                        # 使 PipelineConfig 缓存失效，下次请求加载新配置
-                        from app.pipeline.config import PipelineConfig
-                        PipelineConfig.invalidate_cache()
-                        ui.notify('配置已保存，策略切换立即生效', type='positive')
+                        ui.notify('配置已保存', type='positive')
                     else:
                         ui.notify('保存失败', type='negative')
 
                 ui.button('💾 保存配置', on_click=save).props('color=primary size=lg').classes('mt-6')
-    
-    
+
+
+    @ui.page('/pipeline')
+    async def pipeline_page():
+        """管线策略配置页面（M1 三层策略管线）"""
+        ui.page_title('管线策略 - WoolGate')
+
+        # 顶部导航栏
+        nav_header('pipeline')
+
+        with ui.column().classes('w-full max-w-4xl mx-auto p-6 gap-6'):
+            ui.label('🧠 管线策略配置').classes('text-3xl font-bold text-gray-800')
+            ui.label('三层策略串行：模型路由（选羊）→ 账号调度（薅羊毛）→ 上下文管理，保存后立即生效').classes('text-sm text-gray-500 -mt-4')
+
+            # 获取当前配置
+            config = await get_system_config()
+
+            # ── ① 模型路由（选羊）──
+            with ui.card().classes('w-full shadow-lg'):
+                ui.label('① 模型路由策略（选羊）').classes('text-xl font-bold text-gray-700 mb-1')
+                ui.label('根据用户请求语义，智能选择最适合的模型领域').classes('text-xs text-gray-500 mb-3')
+
+                router_strategy = ui.select(
+                    ['off', 'rules', 'vector', 'llm'],
+                    label='路由策略',
+                    value=getattr(config, 'router_strategy', 'off')
+                ).classes('w-full')
+                ui.label('off=不路由（默认） / rules=关键词匹配 / vector=向量相似度(企业) / llm=小模型分类(企业)').classes('text-xs text-gray-400 -mt-2')
+
+            # ── ② 账号调度（薅羊毛）──
+            with ui.card().classes('w-full shadow-lg'):
+                ui.label('② 账号调度策略（薅羊毛）').classes('text-xl font-bold text-gray-700 mb-1')
+                ui.label('从可用账号池中选择具体账号，管理免费额度消耗顺序').classes('text-xs text-gray-500 mb-3')
+
+                selector_strategy = ui.select(
+                    ['pin', 'free-first', 'round-robin', 'sticky', 'failover', 'cost-first'],
+                    label='调度策略',
+                    value=getattr(config, 'selector_strategy', 'pin')
+                ).classes('w-full')
+                ui.label('pin=指定模型（默认） / free-first=免费额度优先 / round-robin=轮询 / sticky=会话粘性 / failover=主备(企业) / cost-first=成本最低(企业)').classes('text-xs text-gray-400 -mt-2')
+
+            # ── ③ 上下文管理 ──
+            with ui.card().classes('w-full shadow-lg'):
+                ui.label('③ 上下文管理策略').classes('text-xl font-bold text-gray-700 mb-1')
+                ui.label('控制发送给上游的消息组装方式，平衡上下文完整性与 token 消耗').classes('text-xs text-gray-500 mb-3')
+
+                context_strategy = ui.select(
+                    ['passthrough', 'window', 'summary'],
+                    label='上下文策略',
+                    value=getattr(config, 'context_strategy', 'passthrough')
+                ).classes('w-full')
+                ui.label('passthrough=直传（默认） / window=滑动窗口 / summary=摘要压缩(企业)').classes('text-xs text-gray-400 -mt-2')
+
+            # 保存按钮
+            async def save_pipeline():
+                config_data = {
+                    'router_strategy': router_strategy.value,
+                    'selector_strategy': selector_strategy.value,
+                    'context_strategy': context_strategy.value,
+                }
+                success = await save_system_config(config_data)
+                if success:
+                    # 使 PipelineConfig 缓存失效，下次请求加载新配置
+                    from app.pipeline.config import PipelineConfig
+                    PipelineConfig.invalidate_cache()
+                    ui.notify('管线策略已保存，立即生效', type='positive')
+                else:
+                    ui.notify('保存失败', type='negative')
+
+            ui.button('💾 保存策略', on_click=save_pipeline).props('color=primary size=lg').classes('mt-2')
+
+
     @ui.page('/logs')
     async def logs_page():
         """请求日志页面"""

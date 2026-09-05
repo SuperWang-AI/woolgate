@@ -27,6 +27,13 @@ from app.models.database import RequestLog
 from app.services.router import AccountRouter
 from app.services.llm_client import llm_client
 from app.pipeline.context import PipelineContext
+from app.pipeline.config import PipelineConfig
+from app.pipeline.router import OffRouter, RulesRouter
+from app.pipeline.router.vector import VectorRouter
+from app.pipeline.router.llm import LLMRouter
+from app.pipeline.context_manager import PassthroughManager
+from app.pipeline.context_manager.window import WindowManager
+from app.pipeline.context_manager.summary import SummaryManager
 
 logger = logging.getLogger(__name__)
 
@@ -34,20 +41,57 @@ MAX_RETRIES = 3  # 与现有硬编码一致
 
 
 class Executor:
-    """统一执行层——流式/非流式共用账号选择+失败切换+记账逻辑"""
+    """统一执行层——ModelRouter → AccountSelector → ContextManager → Executor 四层管线"""
 
     def __init__(self, db: AsyncSession):
         self.db = db
         self._router = AccountRouter(db)
+        self._model_router = None  # 延迟初始化（M1 默认 OffRouter）
+        self._context_manager = None  # 延迟初始化（M1 默认 PassthroughManager）
+
+    async def _init_strategies(self, ctx: PipelineContext) -> None:
+        """根据 PipelineConfig 初始化 ModelRouter 和 ContextManager（带缓存）"""
+        config = await PipelineConfig.load(self.db)
+
+        # ① ModelRouter（选羊）
+        if config.router_strategy == "rules":
+            self._model_router = RulesRouter(self.db, config.router_config.rules_match_mode)
+        elif config.router_strategy == "vector":
+            self._model_router = VectorRouter(config.router_config)
+        elif config.router_strategy == "llm":
+            self._model_router = LLMRouter(config.router_config)
+        else:
+            self._model_router = OffRouter()
+
+        # ③ ContextManager（上下文）
+        if config.context_strategy == "window":
+            self._context_manager = WindowManager(config.context_config.window_turns)
+        elif config.context_strategy == "summary":
+            self._context_manager = SummaryManager(config.context_config)
+        else:
+            self._context_manager = PassthroughManager()
 
     async def execute(self, ctx: PipelineContext) -> Union[AsyncGenerator, JSONResponse]:
         """
         统一执行入口。
 
+        管线顺序：ModelRouter → 账号选择循环 → ContextManager → 上游调用
+        M1 默认 router=off, context=passthrough，行为与现有完全一致。
+
         Returns:
             流式: AsyncGenerator（yield SSE chunks）
             非流式: JSONResponse
         """
+        # ① 初始化策略（带缓存，60秒内不重复查库）
+        await self._init_strategies(ctx)
+
+        # ② ModelRouter 路由决策（写入 ctx.domain_tag / ctx.target_model）
+        await self._model_router.route(ctx)
+
+        # ③ ContextManager 组装消息（写入 ctx.assembled_messages）
+        await self._context_manager.assemble(ctx)
+
+        # ④ 账号选择 + 上游调用（原有逻辑）
         if ctx.stream:
             return self._execute_stream(ctx)
         return await self._execute_non_stream(ctx)
@@ -134,7 +178,7 @@ class Executor:
 
         try:
             async for chunk in llm_client.chat_completion_stream(
-                account, ctx.original_messages, **ctx.kwargs
+                account, ctx.assembled_messages, **ctx.kwargs
             ):
                 # 提取 token 统计
                 if "usage" in chunk:
@@ -222,7 +266,7 @@ class Executor:
 
         try:
             response = await llm_client.chat_completion(
-                account, ctx.original_messages, **ctx.kwargs
+                account, ctx.assembled_messages, **ctx.kwargs
             )
 
             usage = response.get("usage", {})

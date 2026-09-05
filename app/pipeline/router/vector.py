@@ -176,8 +176,8 @@ class VectorRouter(ModelRouter):
                 current_score = cosine_similarity(
                     self._last_user_vector or [], current_vec
                 ) if hasattr(self, '_last_user_vector') else 0
-                # 当前领域相似度还够高，保持
-                if current_score >= threshold_low:
+                # 当前领域相似度还够高，且没有更优领域超过切入阈值，保持（防抖动）
+                if current_score >= threshold_low and best_score < threshold_high:
                     return current_domain
 
         # 最高相似度超过切入阈值，切换

@@ -29,8 +29,10 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 async def _ensure_columns(conn):
-    """轻量迁移：为已存在的 model_account 表补充新增列（幂等）"""
+    """轻量迁移：为已存在的表补充新增列（幂等）"""
     from sqlalchemy import text
+
+    # ── model_account 补列 ──
     result = await conn.execute(text("PRAGMA table_info(model_account)"))
     cols = {row[1] for row in result.fetchall()}
     migrations = [
@@ -40,11 +42,49 @@ async def _ensure_columns(conn):
         ("daily_used_tokens", "INTEGER DEFAULT 0"),
         ("daily_used_currency", "FLOAT DEFAULT 0.0"),
         ("total_used_currency", "FLOAT DEFAULT 0.0"),
+        ("tenant_id", "VARCHAR(64)"),
     ]
     for col, coltype in migrations:
         if col not in cols:
             await conn.execute(text(f"ALTER TABLE model_account ADD COLUMN {col} {coltype}"))
             logger.info(f"迁移: model_account 增加列 {col}")
+
+    # ── system_config 补列（M1 架构重构）──
+    result = await conn.execute(text("PRAGMA table_info(system_config)"))
+    cols = {row[1] for row in result.fetchall()}
+    sys_migrations = [
+        ("router_strategy", "VARCHAR(20) DEFAULT 'off'"),
+        ("router_config_json", "JSON"),
+        ("selector_strategy", "VARCHAR(20) DEFAULT 'pin'"),
+        ("selector_config_json", "JSON"),
+        ("context_strategy", "VARCHAR(20) DEFAULT 'passthrough'"),
+        ("context_config_json", "JSON"),
+        ("tenant_enabled", "BOOLEAN DEFAULT 0"),
+        ("budget_enabled", "BOOLEAN DEFAULT 0"),
+        ("edition", "VARCHAR(20) DEFAULT 'opensource'"),
+    ]
+    for col, coltype in sys_migrations:
+        if col not in cols:
+            await conn.execute(text(f"ALTER TABLE system_config ADD COLUMN {col} {coltype}"))
+            logger.info(f"迁移: system_config 增加列 {col}")
+
+    # ── request_log 补列（M1 观测埋点）──
+    result = await conn.execute(text("PRAGMA table_info(request_log)"))
+    cols = {row[1] for row in result.fetchall()}
+    log_migrations = [
+        ("request_id", "VARCHAR(64)"),
+        ("domain_tag", "VARCHAR(50)"),
+        ("router_strategy", "VARCHAR(20)"),
+        ("selector_strategy", "VARCHAR(20)"),
+        ("context_strategy", "VARCHAR(20)"),
+        ("switch_count", "INTEGER DEFAULT 0"),
+        ("summary_used", "BOOLEAN DEFAULT 0"),
+        ("tenant_id", "VARCHAR(64)"),
+    ]
+    for col, coltype in log_migrations:
+        if col not in cols:
+            await conn.execute(text(f"ALTER TABLE request_log ADD COLUMN {col} {coltype}"))
+            logger.info(f"迁移: request_log 增加列 {col}")
 
 
 async def init_database():

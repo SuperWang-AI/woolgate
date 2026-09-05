@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import ModelAccount, SystemConfig, RequestLog
+from app.pipeline.selector import FreeFirstSelector, RoundRobinSelector
 import logging
 import random
 
@@ -18,7 +19,10 @@ class AccountRouter:
     
     def __init__(self, session: AsyncSession):
         self.session = session
-        self._round_robin_index = {}  # 轮询索引缓存
+        self._round_robin_index = {}  # 轮询索引缓存（保留兼容，实际委托给 RoundRobinSelector）
+        # M1: 委托给 Selector 策略类（行为与现有完全一致）
+        self._free_first_selector = FreeFirstSelector()
+        self._round_robin_selector = RoundRobinSelector()
     
     async def get_system_config(self) -> SystemConfig:
         """获取系统配置"""
@@ -218,18 +222,11 @@ class AccountRouter:
     
     async def _select_sequential(self, accounts: List[ModelAccount]) -> Optional[ModelAccount]:
         """
-        顺序耗尽策略
+        顺序耗尽策略（委托给 FreeFirstSelector）
         按优先级降序排序，选择第一个可用账号
         """
-        # 按优先级降序排序
-        sorted_accounts = sorted(accounts, key=lambda x: x.priority, reverse=True)
-        
-        if sorted_accounts:
-            selected = sorted_accounts[0]
-            logger.info(f"顺序策略选中账号: {selected.id} (优先级: {selected.priority})")
-            return selected
-        
-        return None
+        # M1: 委托给 Selector 策略类，行为与原实现完全一致
+        return self._free_first_selector.select(accounts)
     
     async def _select_round_robin(
         self,
@@ -237,28 +234,11 @@ class AccountRouter:
         model_name: str
     ) -> Optional[ModelAccount]:
         """
-        轮询策略
+        轮询策略（委托给 RoundRobinSelector）
         轮流选择账号，忽略优先级
         """
-        if not accounts:
-            return None
-        
-        # 按ID排序保证顺序稳定
-        sorted_accounts = sorted(accounts, key=lambda x: x.id)
-        
-        # 获取当前模型的轮询索引
-        if model_name not in self._round_robin_index:
-            self._round_robin_index[model_name] = 0
-        
-        # 选择账号
-        index = self._round_robin_index[model_name] % len(sorted_accounts)
-        selected = sorted_accounts[index]
-        
-        # 更新索引
-        self._round_robin_index[model_name] = (index + 1) % len(sorted_accounts)
-        
-        logger.info(f"轮询策略选中账号: {selected.id} (索引: {index})")
-        return selected
+        # M1: 委托给 Selector 策略类，行为与原实现完全一致
+        return self._round_robin_selector.select(accounts, model_name=model_name)
     
     async def mark_account_failed(self, account_id: int):
         """标记账号失败，进入冷却"""

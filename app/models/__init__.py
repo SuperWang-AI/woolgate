@@ -86,6 +86,17 @@ async def _ensure_columns(conn):
             await conn.execute(text(f"ALTER TABLE request_log ADD COLUMN {col} {coltype}"))
             logger.info(f"迁移: request_log 增加列 {col}")
 
+    # ── domain_prototype 补列（M3 多示例平均向量）──
+    result = await conn.execute(text("PRAGMA table_info(domain_prototype)"))
+    cols = {row[1] for row in result.fetchall()}
+    domain_migrations = [
+        ("examples", "JSON"),
+    ]
+    for col, coltype in domain_migrations:
+        if col not in cols:
+            await conn.execute(text(f"ALTER TABLE domain_prototype ADD COLUMN {col} {coltype}"))
+            logger.info(f"迁移: domain_prototype 增加列 {col}")
+
 
 async def init_database():
     """初始化数据库（创建表 + 轻量迁移 + 默认配置）"""

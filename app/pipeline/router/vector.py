@@ -57,11 +57,26 @@ class VectorRouter(ModelRouter):
             return
 
         try:
+            # 0. 斜杠命令强制指定领域（最高优先级）
+            if ctx.forced_domain:
+                target_model = await self._select_model_for_domain(ctx.forced_domain)
+                ctx.domain_tag = ctx.forced_domain
+                ctx.target_model = target_model
+                ctx.router_decision = f"vector: 斜杠命令强制领域={ctx.forced_domain}, 模型={target_model or '无映射'}"
+                logger.info(f"[vector-router] 斜杠命令强制: 领域={ctx.forced_domain}, 模型={target_model}")
+                ctx.router_latency_ms = int((time.time() - start) * 1000)
+                return
+
             # 1. 提取最新用户消息
             user_text = self._extract_latest_user_message(ctx.original_messages)
             if not user_text:
-                ctx.domain_tag = self.config.fallback_domain
-                ctx.router_decision = "vector: 无用户消息，使用 fallback"
+                # 无用户消息时，使用 API Key 默认领域或 fallback
+                target_domain = ctx.default_domain or self.config.fallback_domain
+                target_model = await self._select_model_for_domain(target_domain)
+                ctx.domain_tag = target_domain
+                ctx.target_model = target_model
+                ctx.router_decision = f"vector: 无用户消息，使用默认领域={target_domain}"
+                ctx.router_latency_ms = int((time.time() - start) * 1000)
                 return
 
             # 2. 计算用户消息向量
@@ -69,23 +84,34 @@ class VectorRouter(ModelRouter):
             user_vector = await embed_svc.embed(user_text)
             self._last_user_vector = user_vector
             if not user_vector:
-                ctx.domain_tag = self.config.fallback_domain
-                ctx.router_decision = "vector: embedding 失败，使用 fallback"
+                target_domain = ctx.default_domain or self.config.fallback_domain
+                target_model = await self._select_model_for_domain(target_domain)
+                ctx.domain_tag = target_domain
+                ctx.target_model = target_model
+                ctx.router_decision = f"vector: embedding 失败，使用默认领域={target_domain}"
                 logger.warning("[vector-router] embedding 返回空向量")
+                ctx.router_latency_ms = int((time.time() - start) * 1000)
                 return
 
-            # 3. 读取启用的领域原型
-            domains = await self._load_active_domains()
+            # 3. 读取启用的领域原型（受 API Key allowed_domains 限制）
+            domains = await self._load_active_domains(allowed_domains=ctx.allowed_domains)
             if not domains:
-                ctx.domain_tag = self.config.fallback_domain
-                ctx.router_decision = "vector: 无启用领域，使用 fallback"
+                target_domain = ctx.default_domain or self.config.fallback_domain
+                target_model = await self._select_model_for_domain(target_domain)
+                ctx.domain_tag = target_domain
+                ctx.target_model = target_model
+                ctx.router_decision = f"vector: 无可用领域，使用默认领域={target_domain}"
+                ctx.router_latency_ms = int((time.time() - start) * 1000)
                 return
 
             # 4. 计算相似度，选最高
             best_domain, best_score = self._find_best_domain(user_vector, domains)
 
-            # 5. 滞回阈值判定（当前领域从 ctx 读取，M2-4 后从 SessionState 读）
+            # 5. 滞回阈值判定（当前领域从 ctx 读取）
             current_domain = getattr(ctx, "current_domain", None)
+            # 如果有 API Key 默认领域且无当前领域，用默认领域作为滞回基准
+            if not current_domain and ctx.default_domain:
+                current_domain = ctx.default_domain
             target_domain = self._hysteresis_decision(
                 best_domain, best_score, current_domain, domains
             )
@@ -102,10 +128,11 @@ class VectorRouter(ModelRouter):
             logger.info(f"[vector-router] 路由决策: 领域={target_domain}, 相似度={best_score:.3f}, 模型={target_model}")
 
         except Exception as e:
-            # 路由失败不阻塞请求，回退 fallback
+            # 路由失败不阻塞请求，回退默认领域或 fallback
             logger.error(f"[vector-router] 路由异常: {e}", exc_info=True)
-            ctx.domain_tag = self.config.fallback_domain
-            ctx.router_decision = f"vector: 路由异常({e})，使用 fallback"
+            target_domain = getattr(ctx, "default_domain", None) or self.config.fallback_domain
+            ctx.domain_tag = target_domain
+            ctx.router_decision = f"vector: 路由异常({e})，使用默认领域={target_domain}"
         finally:
             ctx.router_latency_ms = int((time.time() - start) * 1000)
 
@@ -122,14 +149,15 @@ class VectorRouter(ModelRouter):
                     return " ".join(texts).strip()
         return ""
 
-    async def _load_active_domains(self) -> List[DomainPrototype]:
-        """加载所有启用且有向量的领域原型"""
-        result = await self.db.execute(
-            select(DomainPrototype).where(
-                DomainPrototype.is_active == True,  # noqa: E712
-                DomainPrototype.embedding_vector.isnot(None),
-            )
+    async def _load_active_domains(self, allowed_domains: Optional[List[str]] = None) -> List[DomainPrototype]:
+        """加载所有启用且有向量的领域原型，受 allowed_domains 限制"""
+        stmt = select(DomainPrototype).where(
+            DomainPrototype.is_active == True,  # noqa: E712
+            DomainPrototype.embedding_vector.isnot(None),
         )
+        if allowed_domains is not None:
+            stmt = stmt.where(DomainPrototype.name.in_(allowed_domains))
+        result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
     def _find_best_domain(

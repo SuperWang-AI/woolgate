@@ -222,13 +222,28 @@ class RouterRule(Base):
 # ══════════════════════════════════════════════════════════════
 
 class DomainPrototype(Base):
-    """领域原型表——向量路由的领域定义，每个领域有描述文本和预计算向量"""
+    """领域原型表——向量路由的领域定义，每个领域有多条示例文本和平均向量"""
     __tablename__ = "domain_prototype"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(50), nullable=False, unique=True, comment="领域名称，如 general/code/creative/data")
-    description = Column(Text, nullable=False, comment="领域描述文本，用于计算向量")
-    embedding_vector = Column(JSON, nullable=True, comment="描述文本的向量（List[float]，JSON 存储）")
+    description = Column(Text, nullable=True, comment="领域描述文本（兼容旧版，多示例模式下可空）")
+    examples = Column(JSON, nullable=True, comment="领域示例文本列表（List[str]，用于计算平均向量）")
+    embedding_vector = Column(JSON, nullable=True, comment="示例文本的平均向量（List[float]，JSON 存储）")
+    is_active = Column(Boolean, default=True, comment="是否启用")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ApiKey(Base):
+    """API Key 表——绑定可用领域和默认领域，企业化部署的权限控制"""
+    __tablename__ = "api_key"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    api_key = Column(String(128), nullable=False, unique=True, index=True, comment="API Key 字符串")
+    name = Column(String(100), nullable=True, comment="Key 名称，便于管理")
+    allowed_domains = Column(JSON, nullable=True, comment="允许的领域列表，如 ['general','code']；NULL=全部领域")
+    default_domain = Column(String(50), nullable=True, comment="默认领域；NULL=向量路由自动选择")
     is_active = Column(Boolean, default=True, comment="是否启用")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

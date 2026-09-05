@@ -40,16 +40,62 @@ async def lifespan(app: FastAPI):
     # 初始化数据库
     await init_database()
 
-    # 初始化预置领域（M2 向量路由用，向量延迟计算）
+    # 初始化预置领域（M2 向量路由用，M3 多示例平均向量）
     try:
         from app.models import AsyncSessionLocal
         from app.services.domain_service import DomainService
+        from app.services.embedding import EmbeddingService
+        from app.pipeline.config import RouterConfig
         async with AsyncSessionLocal() as session:
             domain_svc = DomainService(session)
+            # 先确保领域存在（补充 examples）
             await domain_svc.ensure_default_domains(embedding_service=None)
+            # 异步触发向量重算（多示例平均，不阻塞启动，使用独立会话）
+            try:
+                from app.pipeline.config import PipelineConfig
+                import asyncio
+
+                async def _recompute_embeddings_async():
+                    try:
+                        async with AsyncSessionLocal() as s:
+                            cfg = await PipelineConfig.load(s)
+                            embed_svc = EmbeddingService(cfg.router_config, db=s)
+                            ds = DomainService(s)
+                            await ds.recompute_all_embeddings(embed_svc)
+                    except Exception as e:
+                        logger.warning(f"领域向量重算失败: {e}")
+
+                asyncio.create_task(_recompute_embeddings_async())
+                logger.info("领域向量重算任务已启动（多示例平均）")
+            except Exception as e:
+                logger.warning(f"领域向量重算启动失败（不影响启动）: {e}")
         logger.info("预置领域初始化完成")
     except Exception as e:
         logger.warning(f"预置领域初始化失败（不影响启动）: {e}")
+
+    # 初始化默认 API Key（M3 企业化部署）
+    try:
+        from app.models import AsyncSessionLocal
+        from app.models.database import ApiKey
+        from sqlalchemy import select
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(ApiKey).where(ApiKey.api_key == settings.GATEWAY_BEARER_TOKEN)
+            )
+            existing = result.scalar_one_or_none()
+            if not existing:
+                default_key = ApiKey(
+                    api_key=settings.GATEWAY_BEARER_TOKEN,
+                    name="默认全局Key（兼容旧版，全部领域可用）",
+                    allowed_domains=None,  # None=全部领域
+                    default_domain=None,   # None=自动路由
+                    is_active=True,
+                )
+                session.add(default_key)
+                await session.commit()
+                logger.info("默认 API Key 初始化完成")
+    except Exception as e:
+        logger.warning(f"默认 API Key 初始化失败（不影响启动）: {e}")
 
     # 启动定时任务
     start_scheduler()

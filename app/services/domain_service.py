@@ -1,7 +1,8 @@
 """
 领域服务——DomainPrototype 和 DomainModelMapping 的 CRUD + 自动向量计算。
 
-向量路由依赖领域原型的预计算向量，每次保存/更新领域描述时自动调用 EmbeddingService 重算。
+向量路由依赖领域原型的预计算向量，每个领域有多条典型用户示例，
+保存/更新时自动调用 EmbeddingService 逐条计算并取平均。
 """
 import logging
 from typing import List, Optional
@@ -16,23 +17,71 @@ from app.pipeline.config import RouterConfig
 logger = logging.getLogger(__name__)
 
 
-# 预置领域（首次启动时自动插入）
+# 预置领域（每个领域10条口语化典型用户示例）
 DEFAULT_DOMAINS = [
     {
         "name": "general",
         "description": "通用对话、日常聊天、问答、闲聊、生活建议、常识解答",
+        "examples": [
+            "你好",
+            "今天天气怎么样",
+            "帮我翻译这句话成英文",
+            "北京有什么好玩的地方",
+            "怎么煮面条好吃",
+            "推荐一本好看的书",
+            "失眠怎么办",
+            "1+1等于几",
+            "介绍一下长城",
+            "今天心情不好，聊聊天",
+        ],
     },
     {
         "name": "code",
         "description": "编程开发、代码编写、调试、算法、技术架构、API 设计、代码审查",
+        "examples": [
+            "用Python写一个快速排序",
+            "这个报错是什么意思",
+            "帮我设计一个登录接口",
+            "JavaScript闭包怎么理解",
+            "Docker怎么部署项目",
+            "MySQL索引失效的原因",
+            "写一个爬虫抓取网页",
+            "Git合并冲突怎么解决",
+            "RESTful API怎么设计",
+            "这段代码有性能问题吗",
+        ],
     },
     {
         "name": "creative",
         "description": "文案写作、创意构思、故事创作、营销文案、诗歌、内容生成",
+        "examples": [
+            "写一首关于秋天的诗",
+            "帮我想一个品牌名字",
+            "写一段产品营销文案",
+            "编一个科幻小故事",
+            "给咖啡店写一句广告语",
+            "帮我写一封情书",
+            "想几个短视频脚本",
+            "写一篇端午节公众号文章",
+            "给孩子讲个睡前故事",
+            "帮我改一下这段文案，更有感染力",
+        ],
     },
     {
         "name": "data",
         "description": "数据分析、统计、报表、SQL、数据可视化、商业分析、数据建模",
+        "examples": [
+            "帮我分析上个月的销售数据",
+            "写一个SQL查询用户留存",
+            "这个报表怎么做",
+            "AB测试结果怎么看",
+            "用Excel做一个数据透视表",
+            "转化率下降了，帮我分析原因",
+            "画一个销售趋势图",
+            "用户画像怎么构建",
+            "同比环比怎么计算",
+            "这批数据有什么异常",
+        ],
     },
 ]
 
@@ -76,30 +125,33 @@ class DomainService:
         return result.scalar_one_or_none()
 
     async def create_domain(
-        self, name: str, description: str,
+        self, name: str,
+        description: Optional[str] = None,
+        examples: Optional[List[str]] = None,
         embedding_service: Optional[EmbeddingService] = None,
     ) -> DomainPrototype:
-        """创建领域，自动计算向量"""
-        domain = DomainPrototype(name=name, description=description)
+        """创建领域，自动计算向量（优先用 examples 平均，回退 description）"""
+        domain = DomainPrototype(name=name, description=description, examples=examples)
         self.db.add(domain)
-        await self.db.flush()  # 获取 id
+        await self.db.flush()
 
         if embedding_service:
             await self._compute_embedding(domain, embedding_service)
 
         await self.db.commit()
         await self.db.refresh(domain)
-        logger.info(f"创建领域: {name} (id={domain.id})")
+        logger.info(f"创建领域: {name} (id={domain.id}, examples={len(examples or [])})")
         return domain
 
     async def update_domain(
         self, domain_id: int,
         name: Optional[str] = None,
         description: Optional[str] = None,
+        examples: Optional[List[str]] = None,
         is_active: Optional[bool] = None,
         embedding_service: Optional[EmbeddingService] = None,
     ) -> Optional[DomainPrototype]:
-        """更新领域，描述变更时自动重算向量"""
+        """更新领域，examples/description 变更时自动重算向量"""
         domain = await self.get_domain(domain_id)
         if not domain:
             return None
@@ -108,11 +160,14 @@ class DomainService:
             domain.name = name
         if description is not None:
             domain.description = description
-            # 描述变更，重算向量
-            if embedding_service:
-                await self._compute_embedding(domain, embedding_service)
+        if examples is not None:
+            domain.examples = examples
         if is_active is not None:
             domain.is_active = is_active
+
+        # examples 或 description 变更时重算向量
+        if (examples is not None or description is not None) and embedding_service:
+            await self._compute_embedding(domain, embedding_service)
 
         await self.db.commit()
         await self.db.refresh(domain)
@@ -124,7 +179,6 @@ class DomainService:
         if not domain:
             return False
 
-        # 删除关联的模型映射
         mappings = await self.list_mappings(domain_id)
         for m in mappings:
             await self.db.delete(m)
@@ -148,14 +202,33 @@ class DomainService:
         return count
 
     async def _compute_embedding(self, domain: DomainPrototype, embedding_service: EmbeddingService):
-        """计算并存储领域描述的向量"""
+        """计算并存储领域向量：优先用 examples 多条平均，回退 description 单条"""
         try:
-            vector = await embedding_service.embed(domain.description)
-            domain.embedding_vector = vector
-            logger.info(f"领域 {domain.name} 向量已更新（维度={len(vector)}）")
+            texts = domain.examples if domain.examples else [domain.description or domain.name]
+            if not texts or not any(texts):
+                logger.warning(f"领域 {domain.name} 无有效文本，跳过向量计算")
+                return
+
+            # 逐条计算 embedding，取平均
+            vectors = []
+            for text in texts:
+                if not text or not text.strip():
+                    continue
+                vec = await embedding_service.embed(text)
+                if vec:
+                    vectors.append(vec)
+
+            if not vectors:
+                logger.warning(f"领域 {domain.name} 所有示例向量计算失败")
+                return
+
+            # 平均向量
+            dim = len(vectors[0])
+            avg_vector = [sum(v[i] for v in vectors) / len(vectors) for i in range(dim)]
+            domain.embedding_vector = avg_vector
+            logger.info(f"领域 {domain.name} 向量已更新（{len(vectors)}条示例平均，维度={dim}）")
         except Exception as e:
             logger.error(f"计算领域 {domain.name} 向量失败: {e}")
-            # 向量计算失败不阻塞保存，保留旧向量或 None
 
     # ── 领域→模型映射 CRUD ──
 
@@ -233,7 +306,7 @@ class DomainService:
     # ── 初始化预置数据 ──
 
     async def ensure_default_domains(self, embedding_service: Optional[EmbeddingService] = None):
-        """确保预置领域存在（首次启动时调用）"""
+        """确保预置领域存在（首次启动时调用），使用多示例平均向量"""
         existing = await self.list_domains()
         existing_names = {d.name for d in existing}
 
@@ -242,10 +315,17 @@ class DomainService:
                 domain = await self.create_domain(
                     name=preset["name"],
                     description=preset["description"],
+                    examples=preset["examples"],
                     embedding_service=embedding_service,
                 )
-                # 添加预置模型映射
                 for model_name, priority in DEFAULT_DOMAIN_MODELS.get(preset["name"], []):
                     await self.add_mapping(domain.id, model_name, priority)
+            else:
+                # 已存在但没有 examples 的旧领域，补充示例（向量由后续 recompute_all_embeddings 统一计算）
+                existing_domain = next((d for d in existing if d.name == preset["name"]), None)
+                if existing_domain and not existing_domain.examples:
+                    existing_domain.examples = preset["examples"]
+                    await self.db.commit()
+                    logger.info(f"领域 {existing_domain.name} 已补充 {len(preset['examples'])} 条示例")
 
-        logger.info("预置领域初始化完成")
+        logger.info("预置领域初始化完成（多示例平均向量）")

@@ -97,15 +97,26 @@ class TestHysteresisDecision:
         assert result == "general"  # fallback
 
     def test_keep_current_domain_above_low_threshold(self):
-        """当前领域相似度高于 low 阈值，保持当前（即使新领域分数更高）"""
+        """当前领域相似度高于 low 阈值，且新领域未超 high 阈值，保持当前"""
         domains = [
             self._make_domain("code", [1.0, 0.0]),
             self._make_domain("general", [0.0, 1.0]),
         ]
-        # 当前 general，用户向量接近 general（0.65 > low 0.60），保持
+        # 当前 general，用户向量接近 general（0.65 > low 0.60），新领域 code=0.70 < high 0.75，保持
+        self.router._last_user_vector = [0.1, 0.9]
+        result = self.router._hysteresis_decision("code", 0.70, "general", domains)
+        assert result == "general"
+
+    def test_switch_when_new_domain_above_high_threshold(self):
+        """新领域相似度超过 high 阈值，即使当前领域 >= low，也强制切换"""
+        domains = [
+            self._make_domain("code", [1.0, 0.0]),
+            self._make_domain("general", [0.0, 1.0]),
+        ]
+        # 当前 general（0.65 > low），但 code=0.80 >= high 0.75，强制切换
         self.router._last_user_vector = [0.1, 0.9]
         result = self.router._hysteresis_decision("code", 0.80, "general", domains)
-        assert result == "general"
+        assert result == "code"
 
     def test_no_candidate_returns_fallback(self):
         result = self.router._hysteresis_decision(None, 0.0, None, [])

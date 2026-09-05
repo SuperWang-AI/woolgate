@@ -36,7 +36,35 @@ class SystemConfig(Base):
     # 路由策略
     default_route_strategy = Column(String(20), default="sequential", 
                                    comment="sequential/round_robin")
-    
+
+    # ── M1 架构重构：模型路由（选羊）──
+    router_strategy = Column(String(20), default="off",
+                             comment="off/rules/vector/llm")
+    router_config_json = Column(JSON, nullable=True,
+                                comment="RouterConfig 序列化（领域原型、阈值、关键词表等）")
+
+    # ── M1 架构重构：账号调度（薅羊毛）──
+    selector_strategy = Column(String(20), default="pin",
+                               comment="pin/free-first/cost-first/sticky/failover")
+    selector_config_json = Column(JSON, nullable=True,
+                                  comment="SelectorConfig 序列化（pin_model/pin_account_id 等）")
+
+    # ── M1 架构重构：上下文管理 ──
+    context_strategy = Column(String(20), default="passthrough",
+                              comment="passthrough/window/summary")
+    context_config_json = Column(JSON, nullable=True,
+                                 comment="ContextConfig 序列化")
+
+    # ── M1 架构重构：治理层（企业版）──
+    tenant_enabled = Column(Boolean, default=False,
+                            comment="多租户开关（企业版）")
+    budget_enabled = Column(Boolean, default=False,
+                            comment="配额预算开关（企业版）")
+
+    # ── M1 架构重构：版本标识 ──
+    edition = Column(String(20), default="opensource",
+                     comment="opensource/enterprise（决定哪些策略可用）")
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -89,7 +117,10 @@ class ModelAccount(Base):
     
     # 扩展参数
     extra_json = Column(JSON, nullable=True, comment="模型默认参数")
-    
+
+    # ── M1 架构重构：多租户地基（企业版）──
+    tenant_id = Column(String(64), nullable=True, comment="租户ID（企业版，NULL=单租户模式）")
+
     # 时间戳
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -122,5 +153,66 @@ class RequestLog(Base):
     # IP和路径
     client_ip = Column(String(50), nullable=True)
     endpoint = Column(String(100), nullable=True)
-    
+
+    # ── M1 架构重构：观测埋点 ──
+    request_id = Column(String(64), nullable=True, comment="请求唯一ID，关联管线上下文")
+    domain_tag = Column(String(50), nullable=True, comment="路由领域标签")
+    router_strategy = Column(String(20), nullable=True, comment="实际路由策略")
+    selector_strategy = Column(String(20), nullable=True, comment="实际调度策略")
+    context_strategy = Column(String(20), nullable=True, comment="实际上下文策略")
+    switch_count = Column(Integer, default=0, comment="本次请求切换账号次数")
+    summary_used = Column(Boolean, default=False, comment="是否使用了摘要压缩")
+    tenant_id = Column(String(64), nullable=True, comment="租户ID（企业版）")
+
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ══════════════════════════════════════════════════════════════
+# M1 架构重构：新增表
+# ══════════════════════════════════════════════════════════════
+
+class SessionState(Base):
+    """会话状态表（ContextManager 依赖，初期用 SQLite，可换 Redis）"""
+    __tablename__ = "session_state"
+
+    session_id = Column(String(64), primary_key=True, comment="会话ID")
+    current_domain = Column(String(50), nullable=True, comment="当前领域标签（滞回判定用）")
+    current_account_id = Column(Integer, nullable=True, comment="当前账号（会话粘性）")
+    summary = Column(Text, nullable=True, comment="异步维护的对话摘要")
+    summary_version = Column(Integer, default=0, comment="摘要版本号，每次更新+1")
+    turn_count = Column(Integer, default=0, comment="会话轮次")
+    last_activity = Column(DateTime, default=datetime.utcnow, comment="最后活跃时间")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ModelCatalog(Base):
+    """模型供应目录——账号/模型抽象为供应项（平台化地基，M1 建表不启用）"""
+    __tablename__ = "model_catalog"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    vendor = Column(String(50), nullable=False, comment="厂商名称")
+    model_name = Column(String(100), nullable=False, comment="真实模型ID")
+    display_name = Column(String(100), nullable=True, comment="展示名")
+    capability_tags = Column(JSON, nullable=True, comment="能力标签: ['code','chat','vision']")
+    domain_tags = Column(JSON, nullable=True, comment="适用领域: ['general','code']")
+    input_price = Column(Float, nullable=True, comment="输入单价 元/1M token")
+    output_price = Column(Float, nullable=True, comment="输出单价 元/1M token")
+    context_window = Column(Integer, nullable=True, comment="上下文窗口")
+    is_active = Column(Boolean, default=True, comment="是否启用")
+    description = Column(Text, nullable=True, comment="描述")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class RouterRule(Base):
+    """路由规则表——rules 策略的关键词/正则映射，管理界面可维护"""
+    __tablename__ = "router_rule"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    domain_tag = Column(String(50), nullable=False, comment="目标领域标签，如 code/general/creative")
+    keywords = Column(JSON, nullable=False, comment="关键词列表，如 ['python','代码','调试']")
+    pattern = Column(String(500), nullable=True, comment="正则表达式（可选，优先级高于关键词）")
+    priority = Column(Integer, default=50, comment="优先级（数值越大越先匹配）")
+    is_active = Column(Boolean, default=True, comment="是否启用")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

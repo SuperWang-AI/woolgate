@@ -62,7 +62,7 @@ class Executor:
         if config.router_strategy == "rules":
             self._model_router = RulesRouter(self.db, config.router_config.rules_match_mode)
         elif config.router_strategy == "vector":
-            self._model_router = VectorRouter(config.router_config)
+            self._model_router = VectorRouter(config.router_config, db=self.db)
         elif config.router_strategy == "llm":
             self._model_router = LLMRouter(config.router_config)
         else:

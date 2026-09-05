@@ -13,7 +13,9 @@ from sqlalchemy.pool import StaticPool
 from sqlalchemy import select
 
 from app.models.database import Base, ModelAccount, SystemConfig, RequestLog
-from app.routes.api import stream_with_failover, ChatCompletionRequest, Message
+from app.routes.api import ChatCompletionRequest, Message
+from app.pipeline.context import PipelineContext
+from app.pipeline.executor import Executor
 from app.services.llm_client import llm_client
 
 
@@ -47,11 +49,19 @@ def make_req(content="1+1等于几？"):
 
 
 async def collect_outputs(db, req, messages, kwargs=None, estimated=100):
-    """消费 stream_with_failover 的所有输出"""
+    """消费 Executor 流式执行的所有输出"""
+    ctx = PipelineContext(
+        request_id="test-001",
+        client_ip="127.0.0.1",
+        stream=True,
+        original_messages=messages,
+        requested_model=req.model,
+        kwargs=kwargs or {},
+        estimated_tokens=estimated,
+    )
+    executor = Executor(db)
     outputs = []
-    async for line in stream_with_failover(
-        db, req, messages, kwargs or {}, estimated, "127.0.0.1"
-    ):
+    async for line in await executor.execute(ctx):
         outputs.append(line)
     return "".join(outputs)
 

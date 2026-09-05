@@ -216,3 +216,32 @@ class RouterRule(Base):
     is_active = Column(Boolean, default=True, comment="是否启用")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# M2 智能路由：新增表
+# ══════════════════════════════════════════════════════════════
+
+class DomainPrototype(Base):
+    """领域原型表——向量路由的领域定义，每个领域有描述文本和预计算向量"""
+    __tablename__ = "domain_prototype"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(50), nullable=False, unique=True, comment="领域名称，如 general/code/creative/data")
+    description = Column(Text, nullable=False, comment="领域描述文本，用于计算向量")
+    embedding_vector = Column(JSON, nullable=True, comment="描述文本的向量（List[float]，JSON 存储）")
+    is_active = Column(Boolean, default=True, comment="是否启用")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DomainModelMapping(Base):
+    """领域→模型映射表——每个领域下可配置多个模型，按优先级排序"""
+    __tablename__ = "domain_model_mapping"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    domain_id = Column(Integer, nullable=False, index=True, comment="关联 domain_prototype.id")
+    model_name = Column(String(100), nullable=False, comment="真实模型名，如 kimi-k2.6/qwen-plus")
+    priority = Column(Integer, default=50, comment="优先级（数值越大越优先，同优先级按 id 排序）")
+    is_active = Column(Boolean, default=True, comment="是否启用")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

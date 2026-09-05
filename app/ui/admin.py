@@ -499,7 +499,37 @@ def create_ui():
                     label='路由策略',
                     value=getattr(config, 'router_strategy', 'off')
                 ).classes('w-full')
-                ui.label('off=不路由（默认） / rules=关键词匹配 / vector=向量相似度(企业) / llm=小模型分类(企业)').classes('text-xs text-gray-400 -mt-2')
+                ui.label('off=不路由（默认） / rules=关键词匹配 / vector=向量相似度 / llm=小模型分类').classes('text-xs text-gray-400 -mt-2 mb-3')
+
+                # 加载当前 router_config
+                from app.pipeline.config import PipelineConfig
+                _pipeline_cfg = await PipelineConfig.load(AsyncSessionLocal())
+                _router_cfg = _pipeline_cfg.router_config
+
+                ui.label('Embedding 配置（vector 策略用）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
+                with ui.row().classes('gap-2 w-full'):
+                    embedding_backend = ui.select(
+                        ['cloud', 'local'], label='后端', value=_router_cfg.embedding_backend
+                    ).classes('flex-1')
+                    embedding_model = ui.input(
+                        '模型名', value=_router_cfg.embedding_cloud_model
+                    ).classes('flex-1')
+                embedding_api_key = ui.input(
+                    'API Key（留空则自动借用阿里百炼账号的 Key）',
+                    value=_router_cfg.embedding_cloud_api_key, password=True
+                ).classes('w-full')
+                ui.label('云端默认阿里百炼 text-embedding-v3，免费额度 50 万 token').classes('text-xs text-gray-400 -mt-2 mb-3')
+
+                ui.label('滞回阈值（防频繁切换）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
+                with ui.row().classes('gap-2 w-full'):
+                    threshold_high = ui.number(
+                        '切入阈值（高于此值切换）', value=_router_cfg.threshold_high,
+                        min=0.0, max=1.0, step=0.05
+                    ).classes('flex-1')
+                    threshold_low = ui.number(
+                        '保持阈值（低于此值才允许切走）', value=_router_cfg.threshold_low,
+                        min=0.0, max=1.0, step=0.05
+                    ).classes('flex-1')
 
             # ── ② 账号调度（薅羊毛）──
             with ui.card().classes('w-full shadow-lg'):
@@ -523,7 +553,34 @@ def create_ui():
                     label='上下文策略',
                     value=getattr(config, 'context_strategy', 'passthrough')
                 ).classes('w-full')
-                ui.label('passthrough=直传（默认） / window=滑动窗口 / summary=摘要压缩(企业)').classes('text-xs text-gray-400 -mt-2')
+                ui.label('passthrough=直传（默认） / window=滑动窗口 / summary=摘要压缩').classes('text-xs text-gray-400 -mt-2 mb-3')
+
+                _context_cfg = _pipeline_cfg.context_config
+
+                ui.label('滑动窗口参数（window 策略用）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
+                window_turns = ui.number(
+                    '保留最近 N 轮对话', value=_context_cfg.window_turns, min=1, max=100
+                ).classes('w-full')
+
+                ui.label('摘要模型配置（summary 策略用）').classes('text-sm font-bold text-gray-600 mt-3 mb-1')
+                with ui.row().classes('gap-2 w-full'):
+                    summary_provider = ui.select(
+                        ['cloud', 'local'], label='摘要模型后端', value=_context_cfg.summary_provider
+                    ).classes('flex-1')
+                    summary_model = ui.input(
+                        '摘要模型名', value=_context_cfg.summary_model
+                    ).classes('flex-1')
+                with ui.row().classes('gap-2 w-full'):
+                    summary_trigger_turns = ui.number(
+                        '触发阈值（轮数）', value=_context_cfg.summary_trigger_turns, min=1
+                    ).classes('flex-1')
+                    summary_trigger_tokens = ui.number(
+                        '触发阈值（token）', value=_context_cfg.summary_trigger_tokens, min=100
+                    ).classes('flex-1')
+                summary_window_turns = ui.number(
+                    '摘要后保留最近 N 轮原文', value=_context_cfg.summary_window_turns, min=0, max=20
+                ).classes('w-full')
+                ui.label('cloud=从账号池选该模型的启用账号 / local=调用 Ollama；跨语义切换时强制摘要').classes('text-xs text-gray-400 -mt-2')
 
             # ── ④ 本地模型运行时 ──
             with ui.card().classes('w-full shadow-lg'):
@@ -630,12 +687,31 @@ def create_ui():
 
             # 保存按钮
             async def save_pipeline():
+                # 组装 router_config_json
+                router_config_json = {
+                    'embedding_backend': embedding_backend.value,
+                    'embedding_cloud_model': embedding_model.value,
+                    'embedding_cloud_api_key': embedding_api_key.value,
+                    'threshold_high': float(threshold_high.value),
+                    'threshold_low': float(threshold_low.value),
+                }
+                # 组装 context_config_json
+                context_config_json = {
+                    'window_turns': int(window_turns.value),
+                    'summary_provider': summary_provider.value,
+                    'summary_model': summary_model.value,
+                    'summary_trigger_turns': int(summary_trigger_turns.value),
+                    'summary_trigger_tokens': int(summary_trigger_tokens.value),
+                    'summary_window_turns': int(summary_window_turns.value),
+                }
                 config_data = {
                     'router_strategy': router_strategy.value,
                     'selector_strategy': selector_strategy.value,
                     'context_strategy': context_strategy.value,
                     'ollama_enabled': ollama_enabled.value,
                     'ollama_base_url': ollama_url.value,
+                    'router_config_json': router_config_json,
+                    'context_config_json': context_config_json,
                 }
                 success = await save_system_config(config_data)
                 if success:

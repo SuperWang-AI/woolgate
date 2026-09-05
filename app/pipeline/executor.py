@@ -169,10 +169,11 @@ class Executor:
         if not available:
             return None
 
-        # 3. AccountSelector 选择
+        # 3. AccountSelector 选择（优先用路由决策后的 target_model，回退到 requested_model）
+        target = ctx.target_model or ctx.requested_model
         account = self._account_selector.select(
             available,
-            model_name=ctx.requested_model,
+            model_name=target,
         )
         ctx.selector_strategy = self._account_selector.name
         if account:

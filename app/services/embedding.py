@@ -118,8 +118,8 @@ class EmbeddingService:
             return ""
         result = await self.db.execute(
             select(ModelAccount).where(
-                ModelAccount.enabled == True,  # noqa: E712
-                ModelAccount.vendor.in_(["aliyun", "qwen", "dashscope"]),
+                ModelAccount.is_enable == True,  # noqa: E712
+                ModelAccount.vendor.like("%百炼%"),
             )
         )
         accounts = result.scalars().all()

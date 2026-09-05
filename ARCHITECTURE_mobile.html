@@ -1,0 +1,1129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WoolGate 架构设计文档 v1.0</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+    line-height: 1.7;
+    color: #1a1a1a;
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 20px 16px 60px;
+    background: #fafafa;
+    -webkit-text-size-adjust: 100%;
+  }
+  h1 { font-size: 1.5em; border-bottom: 2px solid #333; padding-bottom: 8px; margin-top: 1.5em; }
+  h2 { font-size: 1.25em; border-bottom: 1px solid #ddd; padding-bottom: 6px; margin-top: 2em; color: #222; }
+  h3 { font-size: 1.1em; margin-top: 1.5em; color: #333; }
+  p { margin: 0.8em 0; font-size: 15px; }
+  blockquote {
+    border-left: 4px solid #4a90d9;
+    margin: 1em 0;
+    padding: 8px 14px;
+    background: #f0f6ff;
+    color: #444;
+    border-radius: 0 6px 6px 0;
+    font-size: 14px;
+  }
+  code {
+    background: #f0f0f0;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    word-break: break-all;
+  }
+  pre {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    padding: 14px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.5;
+    -webkit-overflow-scrolling: touch;
+  }
+  pre code { background: none; padding: 0; color: inherit; font-size: 12.5px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1em 0;
+    font-size: 13.5px;
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  th, td {
+    border: 1px solid #ddd;
+    padding: 8px 10px;
+    text-align: left;
+    white-space: normal;
+    word-break: break-word;
+  }
+  th { background: #f0f4f8; font-weight: 600; }
+  tr:nth-child(even) { background: #f9f9f9; }
+  ul, ol { padding-left: 22px; font-size: 15px; }
+  li { margin: 4px 0; }
+  hr { border: none; border-top: 1px solid #ddd; margin: 2em 0; }
+  strong { color: #111; }
+  .toc { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 12px 16px; margin: 1em 0; }
+</style>
+</head>
+<body>
+<h1 id="woolgate">WoolGate 架构设计文档</h1>
+<blockquote>
+<p><strong>版本</strong>: v1.0（2026-09-05）
+<strong>状态</strong>: 设计定稿，待实施
+<strong>阶段</strong>: M1 · 架构重构
+<strong>关联</strong>: MEMORY.md / Notion「WoolGate 架构演进笔记」</p>
+</blockquote>
+<hr />
+<h2 id="_1">一、现状分析</h2>
+<h3 id="11">1.1 当前架构</h3>
+<pre class="codehilite"><code>客户端请求 (model=&quot;chat&quot;, messages)
+        │
+        ▼
+  api.py /v1/chat/completions
+        │
+        ├─ 每日余额同步（异步，不阻塞）
+        │
+        ├─ AccountRouter.select_account()
+        │     ├─ 会话粘性（查最近10分钟成功日志）
+        │     ├─ 筛选可用账号（启用+匹配虚拟模型+冷却+额度）
+        │     └─ 策略选择（sequential / round_robin）
+        │
+        ├─ 流式: stream_with_failover() → stream_account() → llm_client
+        │     （3次重试，输出前失败可切换账号）
+        │
+        └─ 非流式: 循环3次 → non_stream_handler() → llm_client
+              （失败标记冷却，换下一个账号）
+</code></pre>
+
+<h3 id="12">1.2 现有模块职责</h3>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>职责</th>
+<th>关键类/函数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>api.py</code></td>
+<td>请求入口、鉴权、重试循环、记账、日志</td>
+<td><code>chat_completions</code>, <code>stream_with_failover</code>, <code>stream_account</code>, <code>non_stream_handler</code></td>
+</tr>
+<tr>
+<td><code>router.py</code></td>
+<td>账号选择、会话粘性、额度检查、冷却、记账</td>
+<td><code>AccountRouter</code></td>
+</tr>
+<tr>
+<td><code>llm_client.py</code></td>
+<td>上游 LLM 调用（httpx 流式/非流式）</td>
+<td><code>LLMClient</code></td>
+</tr>
+<tr>
+<td><code>balance.py</code></td>
+<td>厂商余额接口调用</td>
+<td><code>fetch_balance</code></td>
+</tr>
+<tr>
+<td><code>scheduler.py</code></td>
+<td>定时任务（每日重置、日志清理）</td>
+<td><code>reset_daily_quota</code>, <code>clean_old_logs</code></td>
+</tr>
+<tr>
+<td><code>models/database.py</code></td>
+<td>数据模型</td>
+<td><code>SystemConfig</code>, <code>ModelAccount</code>, <code>RequestLog</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="13">1.3 现有问题清单</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>问题</th>
+<th>影响</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P1</td>
+<td><strong>无模型路由层</strong>：只有账号调度（薅羊毛），没有"选羊"（按语义选模型/领域）</td>
+<td>无法实现智能路由，所有账号按同一虚拟模型 <code>chat</code> 平级竞争</td>
+</tr>
+<tr>
+<td>P2</td>
+<td><strong>无上下文管理层</strong>：messages 直接透传，无摘要/滑动窗口</td>
+<td>长会话超窗口、成本高、跨模型切换丢失上下文</td>
+</tr>
+<tr>
+<td>P3</td>
+<td><strong>策略硬编码</strong>：<code>sequential</code>/<code>round_robin</code> 是 if-elif，无策略接口</td>
+<td>新增策略（cost-first、vector、llm）需改核心代码</td>
+</tr>
+<tr>
+<td>P4</td>
+<td><strong>重试逻辑重复</strong>：流式 <code>stream_with_failover</code> 和非流式 <code>chat_completions</code> 循环各一套</td>
+<td>维护成本高，行为不一致风险</td>
+</tr>
+<tr>
+<td>P5</td>
+<td><strong>记账/日志重复</strong>：<code>stream_account</code> 和 <code>non_stream_handler</code> 各写一套记账+日志</td>
+<td>代码冗余</td>
+</tr>
+<tr>
+<td>P6</td>
+<td><strong>观测不足</strong>：<code>RequestLog</code> 只有 account_id/vendor/model_name，无路由决策、领域标签、切换次数</td>
+<td>无法回溯"为什么选了这个账号"，无法做成本分析</td>
+</tr>
+<tr>
+<td>P7</td>
+<td><strong>无多租户</strong>：全局单 Bearer Token，无 tenant 隔离</td>
+<td>无法企业级部署</td>
+</tr>
+<tr>
+<td>P8</td>
+<td><strong>无供应目录抽象</strong>：账号=模型，无"供应项"概念（价格/能力标签/可用性）</td>
+<td>无法平台化（商户入驻）</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_2">二、目标架构：三层策略管线</h2>
+<h3 id="21">2.1 架构总览</h3>
+<pre class="codehilite"><code>客户端请求 (model=&quot;chat&quot;, messages, stream=True/False)
+        │
+        ▼
+┌─────────────────────────────────────────────────┐
+│              请求管线 Pipeline                    │
+│                                                  │
+│  ① ModelRouter（选羊）                           │
+│     输入: messages + 配置                        │
+│     输出: domain_tag（领域标签）+ target_model   │
+│     策略: off / rules / vector / llm             │
+│                                                  │
+│  ② AccountSelector（薅羊毛）                     │
+│     输入: domain_tag + 可用账号池 + 配置         │
+│     输出: ModelAccount（具体账号）                │
+│     策略: free-first / cost-first / sticky       │
+│                                                  │
+│  ③ ContextManager（上下文管理）                  │
+│     输入: 原始 messages + 会话状态               │
+│     输出: 组装后的 messages（摘要+窗口+当前）    │
+│     策略: passthrough / window / summary         │
+│                                                  │
+│  ④ Executor（执行层，现有 llm_client）           │
+│     流式转发 + 失败切换 + 输出规范化             │
+│                                                  │
+│  ⑤ Observer（观测，贯穿全管线）                  │
+│     记录: 领域标签/路由决策/账号/token/耗时      │
+└─────────────────────────────────────────────────┘
+        │
+        ▼
+   客户端响应（SSE 流 / JSON）
+
+治理层（企业版激活，横切）:
+  - 多租户 tenant_id 鉴权与隔离
+  - 配额预算（按租户限流/停服）
+  - 审计日志（独立于请求日志）
+  - 账单汇总（按租户/按账号）
+</code></pre>
+
+<h3 id="22">2.2 核心原则</h3>
+<ol>
+<li><strong>三层串行是管线</strong>：① → ② → ③ → ④，每层输出作为下层输入，中间通过 <code>PipelineContext</code> 传递</li>
+<li><strong>每层策略可插拔</strong>：策略实现统一接口，通过配置选择，新增策略不改核心代码</li>
+<li><strong>模式 = 配置包</strong>：开源版/企业版不是两套代码，是各层策略的不同组合 + 治理层开关</li>
+<li><strong>增量重构</strong>：不推翻现有代码，先抽接口、再迁移逻辑、最后替换入口</li>
+<li><strong>观测先行</strong>：每次请求的路由决策必须可追溯，为未来账单/分析打底</li>
+</ol>
+<hr />
+<h2 id="_3">三、核心数据对象</h2>
+<h3 id="31-pipelinecontext">3.1 PipelineContext（管线上下文）</h3>
+<p>贯穿全管线的中间数据对象，每层读写自己的字段，不修改其他层的字段。</p>
+<pre class="codehilite"><code class="language-python">@dataclass
+class PipelineContext:
+    &quot;&quot;&quot;请求管线上下文——三层共享的中间数据&quot;&quot;&quot;
+
+    # ── 输入（只读，由 api 层填充）──
+    request_id: str                    # 请求唯一 ID（UUID，用于日志关联）
+    client_ip: str
+    stream: bool
+    original_messages: list[dict]      # 客户端原始 messages（不修改）
+    requested_model: str               # 客户端请求的虚拟模型名（如 &quot;chat&quot;）
+    kwargs: dict                       # temperature/max_tokens/top_p 等
+    estimated_tokens: int
+
+    # ── ① ModelRouter 输出 ──
+    domain_tag: Optional[str] = None   # 领域标签，如 &quot;code&quot; / &quot;general&quot; / &quot;creative&quot;
+    target_model: Optional[str] = None # 目标真实模型名（路由层决定，None=不限制）
+    router_strategy: str = &quot;off&quot;       # 实际使用的路由策略
+    router_decision: str = &quot;&quot;          # 决策说明（用于日志）
+    router_latency_ms: int = 0
+
+    # ── ② AccountSelector 输出 ──
+    account: Optional[&quot;ModelAccount&quot;] = None
+    selector_strategy: str = &quot;sticky&quot;  # 实际使用的调度策略
+    selector_decision: str = &quot;&quot;
+    tried_account_ids: list[int] = field(default_factory=list)
+    switch_count: int = 0              # 本次请求切换账号次数
+
+    # ── ③ ContextManager 输出 ──
+    assembled_messages: list[dict] = field(default_factory=list)  # 实际发给上游的 messages
+    context_strategy: str = &quot;passthrough&quot;
+    summary_used: bool = False         # 是否使用了摘要压缩
+    context_latency_ms: int = 0
+
+    # ── ④ Executor 输出 ──
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    response_time_ms: int = 0
+    status: str = &quot;success&quot;            # success / failed
+    error_message: Optional[str] = None
+
+    # ── 治理层（企业版）──
+    tenant_id: Optional[str] = None    # 租户 ID（None=单租户模式）
+</code></pre>
+
+<h3 id="32-sessionstate">3.2 会话状态（SessionState）</h3>
+<p>ContextManager 依赖的会话级状态，按 <code>session_id</code> 缓存（内存或 Redis）。</p>
+<pre class="codehilite"><code class="language-python">@dataclass
+class SessionState:
+    session_id: str
+    current_domain: Optional[str] = None       # 当前领域标签（用于滞回判定）
+    current_account_id: Optional[int] = None   # 当前账号（会话粘性）
+    summary: Optional[str] = None              # 异步维护的对话摘要
+    summary_version: int = 0                   # 摘要版本号，每次更新+1
+    last_activity: datetime = field(default_factory=datetime.utcnow)
+    turn_count: int = 0                        # 会话轮次
+</code></pre>
+
+<hr />
+<h2 id="_4">四、各层接口定义</h2>
+<h3 id="41-modelrouter">4.1 ModelRouter（模型路由层 · 选羊）</h3>
+<pre class="codehilite"><code class="language-python">class ModelRouter(ABC):
+    &quot;&quot;&quot;模型路由策略接口——根据消息语义决定领域标签和目标模型&quot;&quot;&quot;
+
+    name: str  # 策略标识：off / rules / vector / llm
+
+    @abstractmethod
+    async def route(self, ctx: PipelineContext) -&gt; None:
+        &quot;&quot;&quot;
+        执行路由决策，结果写入 ctx.domain_tag / ctx.target_model / ctx.router_*
+
+        规则：
+        - 不修改 ctx.original_messages
+        - 不做账号选择（那是 AccountSelector 的事）
+        - 决策过程必须可追溯（写入 ctx.router_decision）
+        &quot;&quot;&quot;
+        ...
+
+    @abstractmethod
+    async def detect_drift(self, ctx: PipelineContext, session: SessionState) -&gt; bool:
+        &quot;&quot;&quot;
+        检测话题漂移（会话中使用）。
+        返回 True 表示需要重新路由（切换领域模型）。
+        仅 vector/llm 策略有意义，off/rules 返回 False。
+        &quot;&quot;&quot;
+        ...
+</code></pre>
+
+<p><strong>内置策略实现：</strong></p>
+<table>
+<thead>
+<tr>
+<th>策略</th>
+<th>类名</th>
+<th>说明</th>
+<th>适用版本</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>off</code></td>
+<td><code>OffRouter</code></td>
+<td>不路由，domain_tag=None，所有账号平级</td>
+<td>开源/企业</td>
+</tr>
+<tr>
+<td><code>rules</code></td>
+<td><code>RulesRouter</code></td>
+<td>关键词/正则匹配 → 领域标签（配置化关键词表）</td>
+<td>开源/企业</td>
+</tr>
+<tr>
+<td><code>vector</code></td>
+<td><code>VectorRouter</code></td>
+<td>embedding 余弦相似度 + 领域原型向量 + 滞回阈值</td>
+<td>企业</td>
+</tr>
+<tr>
+<td><code>llm</code></td>
+<td><code>LLMRouter</code></td>
+<td>便宜小模型分类 → 领域标签</td>
+<td>企业</td>
+</tr>
+</tbody>
+</table>
+<p><strong>RouterConfig（路由配置，存 SystemConfig.router_config_json）：</strong></p>
+<pre class="codehilite"><code class="language-python">@dataclass
+class RouterConfig:
+    strategy: str = &quot;off&quot;                    # off / rules / vector / llm
+    fallback_domain: str = &quot;general&quot;         # 未命中时的兜底领域
+
+    # ── rules 策略：关键词/正则映射 ──
+    # 规则数据存在数据库表 router_rule（见 7.5），管理界面可维护；
+    # 也支持从 JSON 配置文件批量导入（启动时或手动触发 import）。
+    # 匹配优先级：正则(pattern) &gt; 关键词(keywords)，同类型按 priority 降序。
+    rules_match_mode: str = &quot;any&quot;            # any=命中任一关键词即匹配 / all=全部命中
+
+    # ── vector 策略：Embedding 后端配置 ──
+    embedding_backend: str = &quot;cloud&quot;         # cloud（云端API） / local（本地插件，选装）
+
+    # · cloud 配置
+    embedding_cloud_provider: str = &quot;aliyun&quot; # aliyun / openai / custom
+    embedding_cloud_base_url: str = &quot;&quot;       # custom 时必填，如 https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding
+    embedding_cloud_api_key: str = &quot;&quot;        # 加密存储（同 ModelAccount.api_key_encrypted 机制）
+    embedding_cloud_model: str = &quot;text-embedding-v3&quot;
+    embedding_cloud_input_field: str = &quot;input&quot;          # 请求体中输入文本的字段名
+    embedding_cloud_output_path: str = &quot;output.embeddings[0].embedding&quot;  # 响应中向量的 JSONPath
+    embedding_cloud_dimensions: int = 1024   # 向量维度（用于校验）
+
+    # · local 配置（选装插件，未安装不自动下载）
+    embedding_local_plugin: str = &quot;bge-small-zh&quot;  # 插件包标识
+    embedding_local_model_path: str = &quot;&quot;     # 本地模型文件路径（插件安装后填充）
+    embedding_local_installed: bool = False  # 是否已安装（管理界面显示安装状态，未安装时 vector 策略自动降级为 rules）
+
+    # · 领域原型与阈值
+    domain_prototypes: dict[str, str] = field(default_factory=dict)  # 领域→原型描述文本（如 &quot;code&quot;: &quot;编程、代码、调试、算法&quot;）
+    domain_prototype_vectors: dict[str, list[float]] = field(default_factory=dict)  # 原型向量缓存（离线计算后存入，避免每次重算）
+    threshold_high: float = 0.75             # 切入新领域阈值（余弦相似度 ≥ 此值才切换）
+    threshold_low: float = 0.60              # 切走当前领域阈值（滞回：低于此值才考虑离开当前领域）
+
+    # ── llm 策略：分类模型配置 ──
+    classifier_deploy: str = &quot;cloud&quot;         # cloud（云端账号） / local（本地 Ollama）
+    classifier_account_id: int = 0           # cloud：指定一个 ModelAccount.id（用该账号的模型做分类）
+    classifier_local_model: str = &quot;&quot;         # local：Ollama 模型名，如 qwen2.5:1.5b
+    classifier_prompt: str = (               # 分类 prompt 模板，{text} 替换为用户当前请求
+        &quot;你是一个对话分类器。请将以下用户请求分类到以下领域之一：{domains}。&quot;
+        &quot;只输出领域名称，不要解释。\n\n用户请求：{text}&quot;
+    )
+    classifier_max_tokens: int = 50          # 分类响应最大 token（分类只需要一个词）
+</code></pre>
+
+<h3 id="42-accountselector">4.2 AccountSelector（账号调度层 · 薅羊毛）</h3>
+<pre class="codehilite"><code class="language-python">class AccountSelector(ABC):
+    &quot;&quot;&quot;账号调度策略接口——从可用账号池中选一个具体账号&quot;&quot;&quot;
+
+    name: str  # free-first / cost-first / sticky / failover
+
+    @abstractmethod
+    async def select(
+        self,
+        ctx: PipelineContext,
+        available_accounts: list[&quot;ModelAccount&quot;],
+        session: Optional[SessionState],
+    ) -&gt; Optional[&quot;ModelAccount&quot;]:
+        &quot;&quot;&quot;
+        从可用账号中选择一个。
+
+        输入:
+          - available_accounts: 已通过基础筛选（启用/匹配/冷却/额度）的账号池
+          - session: 会话状态（用于粘性）
+        输出:
+          - 选中的 ModelAccount，无可用返回 None
+
+        规则：
+          - 不做基础筛选（由管线统一做）
+          - 不修改 messages（那是 ContextManager 的事）
+          - 决策写入 ctx.selector_decision
+        &quot;&quot;&quot;
+        ...
+</code></pre>
+
+<p><strong>内置策略实现：</strong></p>
+<table>
+<thead>
+<tr>
+<th>策略</th>
+<th>类名</th>
+<th>说明</th>
+<th>适用版本</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pin</code></td>
+<td><code>PinSelector</code></td>
+<td><strong>指定模型</strong>——按请求参数或系统配置指定具体模型/账号，不做自动调度。优先读请求 header <code>X-WoolGate-Pin-Model</code>，其次读系统配置 <code>pin_model</code>；在匹配该模型的启用账号中按优先级选一个；指定模型无可用账号时返回 None（不自动切换到其他模型）</td>
+<td>开源/企业</td>
+</tr>
+<tr>
+<td><code>free-first</code></td>
+<td><code>FreeFirstSelector</code></td>
+<td>免费额度优先耗尽（现有 sequential 逻辑）</td>
+<td>开源/企业</td>
+</tr>
+<tr>
+<td><code>cost-first</code></td>
+<td><code>CostFirstSelector</code></td>
+<td>按成本最低选择（需 currency_rate）</td>
+<td>企业</td>
+</tr>
+<tr>
+<td><code>sticky</code></td>
+<td><code>StickySelector</code></td>
+<td>会话粘性优先（现有 <code>_infer_previous_account</code>）</td>
+<td>开源/企业</td>
+</tr>
+<tr>
+<td><code>failover</code></td>
+<td><code>FailoverSelector</code></td>
+<td>主备模式，主账号失败才切备</td>
+<td>企业</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>默认策略说明</strong>：<code>pin</code>（指定模型）作为最直观的默认选项提供——用户明确知道要用哪个模型时直接指定，系统不做多余调度；未指定时回退到 <code>free-first</code>（薅羊毛）。管理界面中"调度策略"下拉框第一个就是"指定模型"。</p>
+</blockquote>
+<p><strong>PinSelector 配置：</strong></p>
+<pre class="codehilite"><code class="language-python">@dataclass
+class PinSelectorConfig:
+    pin_model: str = &quot;&quot;          # 全局默认指定的真实模型名（如 &quot;kimi-k2.6&quot;），空=不全局指定
+    pin_account_id: int = 0      # 全局默认指定的账号 ID（0=不指定账号，只指定模型）
+    allow_override: bool = True  # 允许请求级 header 覆盖全局配置
+</code></pre>
+
+<p>请求级指定方式（客户端无需改代码，通过 header 传递）：</p>
+<pre class="codehilite"><code>X-WoolGate-Pin-Model: kimi-k2.6        # 指定模型
+X-WoolGate-Pin-Account: 4              # 指定账号（可选，优先级高于模型）
+</code></pre>
+
+<p><strong>账号池筛选（管线统一，不属于策略）：</strong></p>
+<pre class="codehilite"><code class="language-python">async def filter_available_accounts(
+    session: AsyncSession,
+    ctx: PipelineContext,
+) -&gt; list[ModelAccount]:
+    &quot;&quot;&quot;统一账号池筛选：启用 + 匹配虚拟模型/目标模型 + 冷却 + 额度&quot;&quot;&quot;
+    # 1. 启用 + 匹配 virtual_model（或 target_model 如果路由层指定了）
+    # 2. 不在冷却中
+    # 3. 额度充足（统一余额逻辑）
+    # 4. 排除 ctx.tried_account_ids（已失败的）
+    ...
+</code></pre>
+
+<h3 id="43-contextmanager">4.3 ContextManager（上下文管理层）</h3>
+<pre class="codehilite"><code class="language-python">class ContextManager(ABC):
+    &quot;&quot;&quot;上下文管理策略接口——组装发给上游的 messages&quot;&quot;&quot;
+
+    name: str  # passthrough / window / summary
+
+    @abstractmethod
+    async def assemble(
+        self,
+        ctx: PipelineContext,
+        session: Optional[SessionState],
+    ) -&gt; list[dict]:
+        &quot;&quot;&quot;
+        组装实际发给上游的 messages，写入 ctx.assembled_messages。
+
+        passthrough: 直接返回 ctx.original_messages
+        window: 保留最近 N 轮原文，超出部分丢弃
+        summary: 早期对话摘要 + 最近 N 轮原文 + 当前请求
+        &quot;&quot;&quot;
+        ...
+
+    @abstractmethod
+    async def update_summary(
+        self,
+        session: SessionState,
+        messages: list[dict],
+        response: str,
+    ) -&gt; None:
+        &quot;&quot;&quot;
+        异步更新会话摘要（请求完成后后台调用，不阻塞响应）。
+        仅 summary 策略有实际实现，其他策略为空操作。
+        &quot;&quot;&quot;
+        ...
+</code></pre>
+
+<p><strong>ContextConfig：</strong></p>
+<pre class="codehilite"><code class="language-python">@dataclass
+class ContextConfig:
+    strategy: str = &quot;passthrough&quot;       # passthrough / window / summary
+    window_turns: int = 10              # 滑动窗口保留最近 N 轮
+    summary_model_account_id: int = 0   # 摘要用的模型账号（0=用当前账号）
+    summary_trigger_tokens: int = 4000  # 超过这个 token 数触发摘要更新
+    summary_trigger_turns: int = 5      # 每 N 轮触发一次摘要更新
+</code></pre>
+
+<h3 id="44-executor-llm_client">4.4 Executor（执行层，现有 llm_client 封装）</h3>
+<pre class="codehilite"><code class="language-python">class Executor:
+    &quot;&quot;&quot;执行层——统一流式/非流式，封装失败切换与记账&quot;&quot;&quot;
+
+    async def execute(
+        self,
+        ctx: PipelineContext,
+        db: AsyncSession,
+    ) -&gt; AsyncGenerator[dict, None] | dict:
+        &quot;&quot;&quot;
+        统一执行入口。
+
+        - 流式: 返回 AsyncGenerator，内部管理账号切换
+        - 非流式: 返回完整响应 dict
+        - 失败切换逻辑统一在这里（不再分两套）
+        - 记账和日志统一在这里（不再分两套）
+        &quot;&quot;&quot;
+        ...
+</code></pre>
+
+<p><strong>关键改进：流式/非流式共用同一套重试循环</strong>，通过 <code>ctx.stream</code> 区分输出方式。</p>
+<hr />
+<h2 id="schema">五、配置 Schema</h2>
+<h3 id="51-systemconfig">5.1 SystemConfig 扩展（数据库单行配置）</h3>
+<p>在现有 <code>SystemConfig</code> 表基础上新增字段（<code>_ensure_columns</code> 幂等补列）：</p>
+<pre class="codehilite"><code class="language-python"># ── 模型路由（选羊）──
+router_strategy = Column(String(20), default=&quot;off&quot;,
+    comment=&quot;off/rules/vector/llm&quot;)
+router_config_json = Column(JSON, nullable=True,
+    comment=&quot;RouterConfig 序列化（领域原型、阈值、关键词表等）&quot;)
+
+# ── 账号调度（薅羊毛）──
+selector_strategy = Column(String(20), default=&quot;pin&quot;,
+    comment=&quot;pin/free-first/cost-first/sticky/failover（默认 pin=指定模型）&quot;)
+selector_config_json = Column(JSON, nullable=True,
+    comment=&quot;SelectorConfig 序列化（pin_model/pin_account_id 等）&quot;)
+
+# ── 上下文管理 ──
+context_strategy = Column(String(20), default=&quot;passthrough&quot;,
+    comment=&quot;passthrough/window/summary&quot;)
+context_config_json = Column(JSON, nullable=True,
+    comment=&quot;ContextConfig 序列化&quot;)
+
+# ── 治理层（企业版）──
+tenant_enabled = Column(Boolean, default=False,
+    comment=&quot;多租户开关（企业版）&quot;)
+budget_enabled = Column(Boolean, default=False,
+    comment=&quot;配额预算开关（企业版）&quot;)
+
+# ── 版本标识 ──
+edition = Column(String(20), default=&quot;opensource&quot;,
+    comment=&quot;opensource/enterprise（决定哪些策略可用）&quot;)
+</code></pre>
+
+<h3 id="52">5.2 配置加载</h3>
+<pre class="codehilite"><code class="language-python">@dataclass
+class PipelineConfig:
+    &quot;&quot;&quot;从 SystemConfig 反序列化的管线配置&quot;&quot;&quot;
+    router_strategy: str
+    router_config: RouterConfig
+    selector_strategy: str
+    context_strategy: str
+    context_config: ContextConfig
+    edition: str  # opensource / enterprise
+
+    @classmethod
+    async def load(cls, session: AsyncSession) -&gt; &quot;PipelineConfig&quot;:
+        &quot;&quot;&quot;从数据库加载，缓存 60 秒（配置变更不频繁）&quot;&quot;&quot;
+        ...
+</code></pre>
+
+<h3 id="53">5.3 开源/企业功能边界</h3>
+<table>
+<thead>
+<tr>
+<th>能力</th>
+<th>开源版 (opensource)</th>
+<th>企业版 (enterprise)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ModelRouter</td>
+<td>off / rules</td>
+<td>off / rules / vector / llm</td>
+</tr>
+<tr>
+<td>AccountSelector</td>
+<td>free-first / sticky</td>
+<td>全部</td>
+</tr>
+<tr>
+<td>ContextManager</td>
+<td>passthrough</td>
+<td>全部</td>
+</tr>
+<tr>
+<td>治理层</td>
+<td>关闭</td>
+<td>多租户/预算/审计/账单</td>
+</tr>
+<tr>
+<td>配置方式</td>
+<td>管理界面手动</td>
+<td>管理界面 + API</td>
+</tr>
+</tbody>
+</table>
+<p><strong>版本切换</strong>：修改 <code>SystemConfig.edition</code> 即可，无需改代码或重启。企业版策略在开源版下自动降级为最接近的开源策略（如 vector→rules，summary→passthrough）。</p>
+<hr />
+<h2 id="_5">六、请求流程（统一管线）</h2>
+<h3 id="61">6.1 流式请求</h3>
+<pre class="codehilite"><code>api.py chat_completions(stream=True)
+  │
+  ├─ 1. 构建 PipelineContext（request_id, messages, kwargs...）
+  ├─ 2. 异步触发每日余额同步（现有逻辑不变）
+  ├─ 3. 获取/创建 SessionState（按 session_id 或 messages 哈希）
+  │
+  ├─ 4. ModelRouter.route(ctx)         ← 新增
+  │     └─ 写入 ctx.domain_tag, ctx.target_model
+  │
+  ├─ 5. AccountSelector 循环（最多 max_retry_count 次）:
+  │     ├─ filter_available_accounts(ctx)
+  │     ├─ selector.select(ctx, pool, session)
+  │     ├─ ContextManager.assemble(ctx, session)   ← 新增
+  │     ├─ Executor 流式消费
+  │     │     ├─ 成功 → yield chunks → 记账+日志 → return
+  │     │     └─ 输出前失败 → 标记冷却 → ctx.tried_account_ids.add → continue
+  │     └─ 输出后失败 → 错误事件结束（不能切换）
+  │
+  ├─ 6. 异步触发 ContextManager.update_summary()  ← 新增（summary 策略）
+  └─ 7. StreamingResponse 返回
+</code></pre>
+
+<h3 id="62">6.2 非流式请求</h3>
+<p>同 6.1，区别仅在 Executor 内部返回完整 dict 而非 generator。</p>
+<h3 id="63">6.3 关键变化对照</h3>
+<table>
+<thead>
+<tr>
+<th>环节</th>
+<th>现有</th>
+<th>重构后</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>账号选择</td>
+<td><code>AccountRouter.select_account()</code> 内部含粘性+筛选+策略</td>
+<td>粘性→Selector 策略，筛选→管线统一，策略→Selector 接口</td>
+</tr>
+<tr>
+<td>重试循环</td>
+<td>流式 <code>stream_with_failover</code> + 非流式 <code>chat_completions</code> 循环</td>
+<td>统一在 <code>Executor.execute()</code></td>
+</tr>
+<tr>
+<td>记账+日志</td>
+<td><code>stream_account</code> / <code>non_stream_handler</code> 各一套</td>
+<td>统一在 <code>Executor</code> 的 finally</td>
+</tr>
+<tr>
+<td>模型路由</td>
+<td>无</td>
+<td><code>ModelRouter</code> 层</td>
+</tr>
+<tr>
+<td>上下文管理</td>
+<td>直传</td>
+<td><code>ContextManager</code> 层</td>
+</tr>
+<tr>
+<td>会话状态</td>
+<td>查 RequestLog 推断（10分钟窗口）</td>
+<td><code>SessionState</code> 显式管理（内存/Redis）</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_6">七、数据模型变更</h2>
+<h3 id="71-requestlog">7.1 RequestLog 扩展（观测埋点）</h3>
+<pre class="codehilite"><code class="language-python"># 新增字段（_ensure_columns 幂等补列，旧数据为 NULL）
+request_id = Column(String(64), nullable=True, comment=&quot;请求唯一ID，关联管线上下文&quot;)
+domain_tag = Column(String(50), nullable=True, comment=&quot;路由领域标签&quot;)
+router_strategy = Column(String(20), nullable=True, comment=&quot;实际路由策略&quot;)
+selector_strategy = Column(String(20), nullable=True, comment=&quot;实际调度策略&quot;)
+context_strategy = Column(String(20), nullable=True, comment=&quot;实际上下文策略&quot;)
+switch_count = Column(Integer, default=0, comment=&quot;本次请求切换账号次数&quot;)
+summary_used = Column(Boolean, default=False, comment=&quot;是否使用了摘要压缩&quot;)
+tenant_id = Column(String(64), nullable=True, comment=&quot;租户ID（企业版）&quot;)
+</code></pre>
+
+<h3 id="72-sessionstate">7.2 新增表：SessionState（会话状态）</h3>
+<pre class="codehilite"><code class="language-python">class SessionState(Base):
+    &quot;&quot;&quot;会话状态表（也可改用 Redis，初期用 SQLite）&quot;&quot;&quot;
+    __tablename__ = &quot;session_state&quot;
+    session_id = Column(String(64), primary_key=True)
+    current_domain = Column(String(50), nullable=True)
+    current_account_id = Column(Integer, nullable=True)
+    summary = Column(Text, nullable=True)
+    summary_version = Column(Integer, default=0)
+    turn_count = Column(Integer, default=0)
+    last_activity = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+</code></pre>
+
+<blockquote>
+<p>初期用 SQLite，会话量大后可换 Redis（接口不变）。</p>
+</blockquote>
+<h3 id="73-modelcatalog">7.3 新增表：ModelCatalog（供应目录 · 平台化预留）</h3>
+<pre class="codehilite"><code class="language-python">class ModelCatalog(Base):
+    &quot;&quot;&quot;模型供应目录——账号/模型抽象为供应项（平台化地基）&quot;&quot;&quot;
+    __tablename__ = &quot;model_catalog&quot;
+    id = Column(Integer, primary_key=True)
+    vendor = Column(String(50), nullable=False)
+    model_name = Column(String(100), nullable=False)
+    display_name = Column(String(100), nullable=True, comment=&quot;展示名&quot;)
+    capability_tags = Column(JSON, nullable=True, comment=&quot;能力标签: ['code','chat','vision']&quot;)
+    domain_tags = Column(JSON, nullable=True, comment=&quot;适用领域: ['general','code']&quot;)
+    input_price = Column(Float, nullable=True, comment=&quot;输入单价 元/1M token&quot;)
+    output_price = Column(Float, nullable=True, comment=&quot;输出单价 元/1M token&quot;)
+    context_window = Column(Integer, nullable=True, comment=&quot;上下文窗口&quot;)
+    is_active = Column(Boolean, default=True)
+    description = Column(Text, nullable=True)
+</code></pre>
+
+<blockquote>
+<p>M1 阶段建表但不强制使用，M4/M5 阶段启用。账号表通过 <code>model_name</code> 关联目录。</p>
+</blockquote>
+<h3 id="74-routerrule-rules">7.4 新增表：RouterRule（路由规则表 · rules 策略用）</h3>
+<pre class="codehilite"><code class="language-python">class RouterRule(Base):
+    &quot;&quot;&quot;路由规则表——rules 策略的关键词/正则映射，管理界面可维护&quot;&quot;&quot;
+    __tablename__ = &quot;router_rule&quot;
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    domain_tag = Column(String(50), nullable=False, comment=&quot;目标领域标签，如 code/general/creative&quot;)
+    keywords = Column(JSON, nullable=False, comment=&quot;关键词列表，如 ['python','代码','调试']&quot;)
+    pattern = Column(String(500), nullable=True, comment=&quot;正则表达式（可选，优先级高于关键词）&quot;)
+    priority = Column(Integer, default=50, comment=&quot;优先级（数值越大越先匹配）&quot;)
+    is_active = Column(Boolean, default=True, comment=&quot;是否启用&quot;)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+</code></pre>
+
+<p><strong>匹配逻辑</strong>：
+1. 加载所有 <code>is_active=True</code> 的规则，按 <code>priority</code> 降序
+2. 对每条规则：先检查 <code>pattern</code>（正则匹配用户当前请求文本），命中即返回该 <code>domain_tag</code>
+3. 无正则或未命中：检查 <code>keywords</code>，按 <code>rules_match_mode</code>（any/all）判断
+4. 全部未命中：返回 <code>fallback_domain</code></p>
+<p><strong>批量导入</strong>：支持从 JSON 文件导入（格式 <code>[{"domain_tag":"code","keywords":["python"]}, ...]</code>），用于初始化或备份恢复。</p>
+<h3 id="75-tenant_id">7.5 tenant_id 字段（企业版地基）</h3>
+<p>所有业务表（<code>ModelAccount</code>, <code>RequestLog</code>, <code>SessionState</code>）预留 <code>tenant_id</code> 列，M1 阶段允许 NULL（单租户模式），M4 阶段启用。</p>
+<hr />
+<h2 id="_7">八、目录结构调整</h2>
+<pre class="codehilite"><code>app/
+├── pipeline/                    ← 新增：管线核心
+│   ├── __init__.py
+│   ├── context.py               # PipelineContext, SessionState
+│   ├── config.py                # PipelineConfig, RouterConfig, ContextConfig
+│   ├── router/                  # 模型路由策略（选羊）
+│   │   ├── __init__.py
+│   │   ├── base.py              # ModelRouter ABC
+│   │   ├── off.py
+│   │   ├── rules.py
+│   │   ├── vector.py            # 企业版
+│   │   └── llm.py               # 企业版
+│   ├── selector/                # 账号调度策略（薅羊毛）
+│   │   ├── __init__.py
+│   │   ├── base.py              # AccountSelector ABC
+│   │   ├── free_first.py
+│   │   ├── cost_first.py        # 企业版
+│   │   ├── sticky.py
+│   │   └── failover.py          # 企业版
+│   ├── context_manager/         # 上下文管理策略
+│   │   ├── __init__.py
+│   │   ├── base.py              # ContextManager ABC
+│   │   ├── passthrough.py
+│   │   ├── window.py
+│   │   └── summary.py           # 企业版
+│   └── executor.py              # 统一执行层（流式/非流式/重试/记账/日志）
+├── services/                    ← 现有，逐步迁移
+│   ├── router.py                # 保留 AccountRouter，内部委托给 pipeline
+│   ├── llm_client.py            # 不变
+│   ├── balance.py               # 不变
+│   └── scheduler.py             # 不变
+├── models/
+│   └── database.py              # 扩展字段 + 新表
+└── routes/
+    └── api.py                   # 简化为：构建 ctx → 调用 pipeline → 返回
+</code></pre>
+
+<hr />
+<h2 id="6">九、迁移路径（增量重构，6 步）</h2>
+<blockquote>
+<p>每步独立可验证，不破坏现有功能。测试通过后再进行下一步。</p>
+</blockquote>
+<h3 id="1">步骤 1：建地基（数据模型 + 配置扩展）</h3>
+<ul>
+<li><code>SystemConfig</code> 新增字段（<code>_ensure_columns</code> 补列）</li>
+<li><code>RequestLog</code> 新增观测字段</li>
+<li>新建 <code>SessionState</code>、<code>ModelCatalog</code> 表</li>
+<li><strong>验证</strong>：现有 11 个测试全部通过，管理界面正常</li>
+</ul>
+<h3 id="2-pipelinecontext">步骤 2：抽 PipelineContext + 配置加载</h3>
+<ul>
+<li>新建 <code>app/pipeline/context.py</code>、<code>app/pipeline/config.py</code></li>
+<li><code>PipelineConfig.load()</code> 从 SystemConfig 读取（默认值=现有行为）</li>
+<li><strong>验证</strong>：纯新增，不影响现有逻辑</li>
+</ul>
+<h3 id="3-accountselector">步骤 3：抽 AccountSelector 策略接口</h3>
+<ul>
+<li>新建 <code>app/pipeline/selector/</code>，把现有 <code>AccountRouter</code> 中的 sequential/round_robin/粘性逻辑迁移为策略类</li>
+<li><code>AccountRouter</code> 保留为薄封装，内部委托给 Selector</li>
+<li><strong>验证</strong>：行为与现有完全一致（sequential=free-first, round_robin=sticky 兼容）</li>
+</ul>
+<h3 id="4-executor">步骤 4：统一 Executor（流式/非流式合并）</h3>
+<ul>
+<li>新建 <code>app/pipeline/executor.py</code>，把 <code>stream_with_failover</code> + <code>stream_account</code> + <code>non_stream_handler</code> 合并</li>
+<li><code>api.py</code> 改为调用 <code>Executor.execute()</code></li>
+<li><strong>验证</strong>：流式/非流式行为一致，失败切换正常，记账日志正常</li>
+</ul>
+<h3 id="5-modelrouter-contextmanager-offpassthrough">步骤 5：接入 ModelRouter + ContextManager（默认 off/passthrough）</h3>
+<ul>
+<li>新建 <code>app/pipeline/router/</code>、<code>app/pipeline/context_manager/</code></li>
+<li>管线串起来：api → ModelRouter(off) → AccountSelector → ContextManager(passthrough) → Executor</li>
+<li>默认策略=现有行为，功能不变</li>
+<li><strong>验证</strong>：全量回归测试，性能无退化</li>
+</ul>
+<h3 id="6vectorsummary">步骤 6：启用高级策略（vector/summary）+ 管理界面</h3>
+<ul>
+<li>管理界面增加路由/上下文策略配置项</li>
+<li>向量路由接入阿里百炼 embedding</li>
+<li>摘要功能启用</li>
+<li><strong>验证</strong>：端到端测试，观测日志可追溯</li>
+</ul>
+<hr />
+<h2 id="_8">十、观测指标</h2>
+<p>每次请求必须记录（写入 RequestLog + 结构化日志）：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>字段</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>请求 ID</td>
+<td><code>request_id</code></td>
+<td>全链路追踪</td>
+</tr>
+<tr>
+<td>领域标签</td>
+<td><code>domain_tag</code></td>
+<td>路由效果分析</td>
+</tr>
+<tr>
+<td>路由策略</td>
+<td><code>router_strategy</code></td>
+<td>策略使用率统计</td>
+</tr>
+<tr>
+<td>调度策略</td>
+<td><code>selector_strategy</code></td>
+<td>策略使用率统计</td>
+</tr>
+<tr>
+<td>上下文策略</td>
+<td><code>context_strategy</code></td>
+<td>策略使用率统计</td>
+</tr>
+<tr>
+<td>切换次数</td>
+<td><code>switch_count</code></td>
+<td>账号稳定性/容灾效果</td>
+</tr>
+<tr>
+<td>摘要使用</td>
+<td><code>summary_used</code></td>
+<td>上下文压缩率</td>
+</tr>
+<tr>
+<td>账号 ID</td>
+<td><code>account_id</code></td>
+<td>账号维度统计</td>
+</tr>
+<tr>
+<td>Token 消耗</td>
+<td><code>prompt_tokens/completion_tokens</code></td>
+<td>成本核算</td>
+</tr>
+<tr>
+<td>响应时间</td>
+<td><code>response_time_ms</code></td>
+<td>性能监控</td>
+</tr>
+<tr>
+<td>状态</td>
+<td><code>status/error_message</code></td>
+<td>错误分析</td>
+</tr>
+<tr>
+<td>租户 ID</td>
+<td><code>tenant_id</code></td>
+<td>企业版多租户隔离</td>
+</tr>
+</tbody>
+</table>
+<p><strong>日志格式</strong>（结构化 JSON）：</p>
+<pre class="codehilite"><code class="language-json">{
+  &quot;request_id&quot;: &quot;uuid&quot;,
+  &quot;tenant_id&quot;: null,
+  &quot;pipeline&quot;: {
+    &quot;router&quot;: {&quot;strategy&quot;: &quot;vector&quot;, &quot;domain&quot;: &quot;code&quot;, &quot;latency_ms&quot;: 45},
+    &quot;selector&quot;: {&quot;strategy&quot;: &quot;free-first&quot;, &quot;account_id&quot;: 4, &quot;decision&quot;: &quot;额度充足&quot;},
+    &quot;context&quot;: {&quot;strategy&quot;: &quot;summary&quot;, &quot;summary_used&quot;: true, &quot;latency_ms&quot;: 0}
+  },
+  &quot;executor&quot;: {&quot;switch_count&quot;: 0, &quot;tokens&quot;: {&quot;prompt&quot;: 1200, &quot;completion&quot;: 350}, &quot;latency_ms&quot;: 2300, &quot;status&quot;: &quot;success&quot;}
+}
+</code></pre>
+
+<hr />
+<h2 id="_9">十一、风险与决策记录</h2>
+<table>
+<thead>
+<tr>
+<th>决策</th>
+<th>选择</th>
+<th>理由</th>
+<th>备选</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>路由策略默认</td>
+<td><code>off</code></td>
+<td>不改变现有行为，增量上线</td>
+<td><code>rules</code></td>
+</tr>
+<tr>
+<td>embedding 方案</td>
+<td>云端阿里百炼</td>
+<td>免费额度 50 万 token、本机零内存、已有账号</td>
+<td>本地 bge-small-zh（选装插件）</td>
+</tr>
+<tr>
+<td>会话状态存储</td>
+<td>SQLite（初期）</td>
+<td>零依赖，接口可换 Redis</td>
+<td>直接 Redis</td>
+</tr>
+<tr>
+<td>摘要模型</td>
+<td>复用当前账号</td>
+<td>不额外消耗，summary 策略企业版才启用</td>
+<td>独立便宜模型</td>
+</tr>
+<tr>
+<td>版本切换</td>
+<td>数据库配置 <code>edition</code></td>
+<td>无需改代码/重启，热切换</td>
+<td>编译期分支</td>
+</tr>
+<tr>
+<td>供应目录</td>
+<td>M1 建表不启用</td>
+<td>为平台化预留，不增加当前复杂度</td>
+<td>不建表</td>
+</tr>
+<tr>
+<td>流式/非流式</td>
+<td>统一 Executor</td>
+<td>消除重复代码，行为一致</td>
+<td>保持两套</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_10">十二、与现有代码的映射关系</h2>
+<table>
+<thead>
+<tr>
+<th>现有代码</th>
+<th>重构后位置</th>
+<th>处理方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AccountRouter.select_account()</code></td>
+<td><code>pipeline/selector/</code> + 管线统一筛选</td>
+<td>拆分迁移</td>
+</tr>
+<tr>
+<td><code>AccountRouter._infer_previous_account()</code></td>
+<td><code>pipeline/selector/sticky.py</code></td>
+<td>迁移，改用 SessionState</td>
+</tr>
+<tr>
+<td><code>AccountRouter._filter_available_accounts()</code></td>
+<td><code>pipeline/executor.py</code>（管线统一）</td>
+<td>迁移</td>
+</tr>
+<tr>
+<td><code>AccountRouter._check_quota_sufficient()</code></td>
+<td><code>pipeline/executor.py</code></td>
+<td>迁移</td>
+</tr>
+<tr>
+<td><code>AccountRouter.mark_account_failed()</code></td>
+<td><code>pipeline/executor.py</code></td>
+<td>迁移</td>
+</tr>
+<tr>
+<td><code>AccountRouter.deduct_quota()</code></td>
+<td><code>pipeline/executor.py</code></td>
+<td>迁移</td>
+</tr>
+<tr>
+<td><code>stream_with_failover()</code></td>
+<td><code>pipeline/executor.py</code></td>
+<td>合并</td>
+</tr>
+<tr>
+<td><code>stream_account()</code></td>
+<td><code>pipeline/executor.py</code></td>
+<td>合并</td>
+</tr>
+<tr>
+<td><code>non_stream_handler()</code></td>
+<td><code>pipeline/executor.py</code></td>
+<td>合并</td>
+</tr>
+<tr>
+<td><code>llm_client.py</code></td>
+<td>不变</td>
+<td>Executor 调用</td>
+</tr>
+<tr>
+<td><code>balance.py</code></td>
+<td>不变</td>
+<td>api 层调用</td>
+</tr>
+<tr>
+<td><code>scheduler.py</code></td>
+<td>不变</td>
+<td>增加 SessionState 清理任务</td>
+</tr>
+<tr>
+<td><code>api.py</code></td>
+<td>简化为入口</td>
+<td>构建 ctx → 调用管线 → 返回</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<p><em>文档结束。实施时按第九节迁移路径逐步推进，每步完成后更新本文档状态。</em></p>
+</body>
+</html>

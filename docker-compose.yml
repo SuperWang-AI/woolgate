@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  woolgate:
+    build: .
+    container_name: woolgate
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    env_file:
+      - .env
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - woolgate-network
+
+networks:
+  woolgate-network:
+    driver: bridge

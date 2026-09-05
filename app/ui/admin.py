@@ -461,7 +461,34 @@ def create_ui():
                 
                 ui.label('日志配置').classes('text-xl font-bold text-gray-700 mb-3')
                 log_retention = ui.number('日志保留天数', value=config.log_retention_days, min=1).classes('w-full')
-                
+
+                ui.separator().classes('my-6')
+
+                # ── M1 管线策略配置 ──
+                ui.label('🧠 管线策略配置').classes('text-xl font-bold text-gray-700 mb-3')
+                ui.label('三层策略：模型路由（选羊）→ 账号调度（薅羊毛）→ 上下文管理').classes('text-xs text-gray-500 -mt-2 mb-3')
+
+                router_strategy = ui.select(
+                    ['off', 'rules', 'vector', 'llm'],
+                    label='① 模型路由策略（选羊）',
+                    value=getattr(config, 'router_strategy', 'off')
+                ).classes('w-full')
+                ui.label('off=不路由 / rules=关键词匹配 / vector=向量相似度(企业) / llm=小模型分类(企业)').classes('text-xs text-gray-400 -mt-2 mb-2')
+
+                selector_strategy = ui.select(
+                    ['pin', 'free-first', 'round-robin', 'sticky', 'failover', 'cost-first'],
+                    label='② 账号调度策略（薅羊毛）',
+                    value=getattr(config, 'selector_strategy', 'pin')
+                ).classes('w-full')
+                ui.label('pin=指定模型 / free-first=免费优先 / round-robin=轮询 / sticky=会话粘性 / failover=主备 / cost-first=成本最低').classes('text-xs text-gray-400 -mt-2 mb-2')
+
+                context_strategy = ui.select(
+                    ['passthrough', 'window', 'summary'],
+                    label='③ 上下文管理策略',
+                    value=getattr(config, 'context_strategy', 'passthrough')
+                ).classes('w-full')
+                ui.label('passthrough=直传 / window=滑动窗口 / summary=摘要压缩(企业)').classes('text-xs text-gray-400 -mt-2 mb-2')
+
                 # 保存按钮
                 async def save():
                     config_data = {
@@ -471,13 +498,19 @@ def create_ui():
                         'ollama_enabled': ollama_enabled.value,
                         'ollama_base_url': ollama_url.value,
                         'log_retention_days': int(log_retention.value),
+                        'router_strategy': router_strategy.value,
+                        'selector_strategy': selector_strategy.value,
+                        'context_strategy': context_strategy.value,
                     }
                     success = await save_system_config(config_data)
                     if success:
-                        ui.notify('配置已保存', type='positive')
+                        # 使 PipelineConfig 缓存失效，下次请求加载新配置
+                        from app.pipeline.config import PipelineConfig
+                        PipelineConfig.invalidate_cache()
+                        ui.notify('配置已保存，策略切换立即生效', type='positive')
                     else:
                         ui.notify('保存失败', type='negative')
-                
+
                 ui.button('💾 保存配置', on_click=save).props('color=primary size=lg').classes('mt-6')
     
     

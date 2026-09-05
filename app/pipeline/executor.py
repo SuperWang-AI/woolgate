@@ -34,6 +34,10 @@ from app.pipeline.router.llm import LLMRouter
 from app.pipeline.context_manager import PassthroughManager
 from app.pipeline.context_manager.window import WindowManager
 from app.pipeline.context_manager.summary import SummaryManager
+from app.pipeline.selector import (
+    AccountSelector, FreeFirstSelector, RoundRobinSelector,
+    PinSelector, StickySelector, FailoverSelector, CostFirstSelector,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +52,7 @@ class Executor:
         self._router = AccountRouter(db)
         self._model_router = None  # 延迟初始化（M1 默认 OffRouter）
         self._context_manager = None  # 延迟初始化（M1 默认 PassthroughManager）
+        self._account_selector = None  # 延迟初始化（M1 默认 PinSelector）
 
     async def _init_strategies(self, ctx: PipelineContext) -> None:
         """根据 PipelineConfig 初始化 ModelRouter 和 ContextManager（带缓存）"""
@@ -70,6 +75,24 @@ class Executor:
             self._context_manager = SummaryManager(config.context_config)
         else:
             self._context_manager = PassthroughManager()
+
+        # ② AccountSelector（薅羊毛）
+        if config.selector_strategy == "free-first":
+            self._account_selector = FreeFirstSelector()
+        elif config.selector_strategy == "round-robin":
+            self._account_selector = RoundRobinSelector()
+        elif config.selector_strategy == "sticky":
+            self._account_selector = StickySelector()
+        elif config.selector_strategy == "failover":
+            self._account_selector = FailoverSelector()
+        elif config.selector_strategy == "cost-first":
+            self._account_selector = CostFirstSelector()
+        else:
+            # pin（默认）：从 PinSelectorConfig 读取指定模型/账号
+            self._account_selector = PinSelector(
+                pin_model=config.pin_config.pin_model,
+                pin_account_id=config.pin_config.pin_account_id,
+            )
 
     async def execute(self, ctx: PipelineContext) -> Union[AsyncGenerator, JSONResponse]:
         """
@@ -97,6 +120,48 @@ class Executor:
         return await self._execute_non_stream(ctx)
 
     # ══════════════════════════════════════════════════════════
+    # 账号选择（粘性推断 + 过滤 + Selector）
+    # ══════════════════════════════════════════════════════════
+
+    async def _select_account(self, ctx: PipelineContext):
+        """
+        统一账号选择：粘性推断 → 过滤可用账号 → AccountSelector 选择。
+
+        行为与现有 AccountRouter.select_account 完全一致：
+        1. 有 messages 时先做粘性推断，推断到可用账号直接返回
+        2. 否则过滤可用账号（启用、匹配模型、未冷却、额度充足）
+        3. 用 AccountSelector 策略从可用账号中选一个
+        """
+        # 1. 粘性推断（与现有逻辑一致）
+        if ctx.original_messages:
+            prev_account = await self._router._infer_previous_account(
+                ctx.original_messages, ctx.requested_model, ctx.estimated_tokens
+            )
+            if prev_account:
+                ctx.selector_strategy = self._account_selector.name
+                ctx.selector_decision = f"sticky: 继续使用账号 {prev_account.id}"
+                logger.info(f"会话粘性：继续使用账号 {prev_account.id} ({prev_account.vendor})")
+                return prev_account
+
+        # 2. 过滤可用账号
+        available = await self._router._filter_available_accounts(
+            ctx.requested_model, ctx.estimated_tokens
+        )
+
+        if not available:
+            return None
+
+        # 3. AccountSelector 选择
+        account = self._account_selector.select(
+            available,
+            model_name=ctx.requested_model,
+        )
+        ctx.selector_strategy = self._account_selector.name
+        if account:
+            ctx.selector_decision = f"{self._account_selector.name}: 选中账号 {account.id}"
+        return account
+
+    # ══════════════════════════════════════════════════════════
     # 流式
     # ══════════════════════════════════════════════════════════
 
@@ -113,11 +178,7 @@ class Executor:
         tried_accounts: set[int] = set()
 
         for attempt in range(MAX_RETRIES):
-            account = await self._router.select_account(
-                model_name=ctx.requested_model,
-                estimated_tokens=ctx.estimated_tokens,
-                messages=ctx.original_messages,
-            )
+            account = await self._select_account(ctx)
 
             if not account:
                 msg = self._no_account_msg(tried_accounts, last_error, ctx.requested_model)
@@ -216,11 +277,7 @@ class Executor:
         tried_accounts: set[int] = set()
 
         for attempt in range(MAX_RETRIES):
-            account = await self._router.select_account(
-                model_name=ctx.requested_model,
-                estimated_tokens=ctx.estimated_tokens,
-                messages=ctx.original_messages,
-            )
+            account = await self._select_account(ctx)
 
             if not account:
                 if tried_accounts:

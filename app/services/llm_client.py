@@ -26,6 +26,24 @@ def _normalize_extra_json(extra_json):
     return {}
 
 
+# 模型参数约束——部分模型对参数有硬性限制，自动修正避免 400 错误
+MODEL_PARAM_CONSTRAINTS: Dict[str, Dict[str, Any]] = {
+    # kimi-k2.6 是推理模型，只允许 temperature=1
+    "kimi-k2.6": {"temperature": 1},
+}
+
+
+def _apply_model_param_constraints(model_name: str, payload: Dict[str, Any]) -> None:
+    """根据模型名应用参数约束，原地修改 payload"""
+    constraints = MODEL_PARAM_CONSTRAINTS.get(model_name)
+    if not constraints:
+        return
+    for key, value in constraints.items():
+        if key in payload and payload[key] != value:
+            logger.info(f"模型参数兼容: {model_name} {key}={payload[key]} → {value}")
+            payload[key] = value
+
+
 class LLMClient:
     """LLM客户端（基于LiteLLM协议）"""
     
@@ -64,13 +82,20 @@ class LLMClient:
         if account.extra_json:
             payload.update(_normalize_extra_json(account.extra_json))
         
+        # 应用模型参数约束（如 kimi-k2.6 强制 temperature=1）
+        _apply_model_param_constraints(account.model_name, payload)
+        
         # 确定API地址
         url = self._get_api_url(account)
         
         logger.info(f"请求上游API: {url} model={account.model_name}")
+        logger.debug(f"请求payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
         
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             async with client.stream("POST", url, headers=headers, json=payload) as response:
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    logger.error(f"上游API错误 {response.status_code}: {body.decode('utf-8', errors='replace')[:500]}")
                 response.raise_for_status()
                 
                 async for line in response.aiter_lines():
@@ -121,6 +146,9 @@ class LLMClient:
         # 合并账号默认参数
         if account.extra_json:
             payload.update(_normalize_extra_json(account.extra_json))
+        
+        # 应用模型参数约束（如 kimi-k2.6 强制 temperature=1）
+        _apply_model_param_constraints(account.model_name, payload)
         
         # 确定API地址
         url = self._get_api_url(account)

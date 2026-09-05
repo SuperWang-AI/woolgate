@@ -191,6 +191,7 @@ class Executor:
                 continue
 
             tried_accounts.add(account.id)
+            ctx.switch_count = attempt  # M1 观测：第几次尝试（0=首次，1+=切换次数）
             logger.info(f"尝试账号 {account.id} (第 {attempt + 1} 次尝试)")
 
             produced_any = False
@@ -295,6 +296,7 @@ class Executor:
                 continue
 
             tried_accounts.add(account.id)
+            ctx.switch_count = attempt  # M1 观测：第几次尝试（0=首次，1+=切换次数）
             logger.info(f"尝试账号 {account.id} (第 {attempt + 1} 次尝试)")
 
             try:
@@ -360,7 +362,7 @@ class Executor:
         prompt_tokens: int, completion_tokens: int,
         status: str, error_message, response_time: int,
     ):
-        """统一记账（deduct_quota）+ 请求日志（RequestLog）"""
+        """统一记账（deduct_quota）+ 请求日志（RequestLog，含 M1 观测埋点）"""
         try:
             await self._router.deduct_quota(account.id, prompt_tokens, completion_tokens)
 
@@ -376,6 +378,15 @@ class Executor:
                 response_time_ms=response_time,
                 client_ip=ctx.client_ip,
                 endpoint="/v1/chat/completions",
+                # ── M1 观测埋点 ──
+                request_id=ctx.request_id,
+                domain_tag=ctx.domain_tag,
+                router_strategy=ctx.router_strategy,
+                selector_strategy=ctx.selector_strategy,
+                context_strategy=ctx.context_strategy,
+                switch_count=ctx.switch_count,
+                summary_used=ctx.summary_used,
+                tenant_id=ctx.tenant_id,
             )
             self.db.add(log)
             await self.db.commit()

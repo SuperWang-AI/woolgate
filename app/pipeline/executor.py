@@ -62,7 +62,7 @@ class Executor:
         if config.router_strategy == "rules":
             self._model_router = RulesRouter(self.db, config.router_config.rules_match_mode)
         elif config.router_strategy == "vector":
-            self._model_router = VectorRouter(config.router_config)
+            self._model_router = VectorRouter(config.router_config, db=self.db)
         elif config.router_strategy == "llm":
             self._model_router = LLMRouter(config.router_config)
         else:
@@ -72,7 +72,7 @@ class Executor:
         if config.context_strategy == "window":
             self._context_manager = WindowManager(config.context_config.window_turns)
         elif config.context_strategy == "summary":
-            self._context_manager = SummaryManager(config.context_config)
+            self._context_manager = SummaryManager(config.context_config, db=self.db)
         else:
             self._context_manager = PassthroughManager()
 
@@ -108,11 +108,29 @@ class Executor:
         # ① 初始化策略（带缓存，60秒内不重复查库）
         await self._init_strategies(ctx)
 
+        # ①.5 加载会话状态（滞回判定 + 摘要复用）
+        session = None
+        if ctx.session_id:
+            from app.services.session_service import SessionStateService
+            session_svc = SessionStateService(self.db)
+            session = await session_svc.get_or_create(ctx.session_id)
+            ctx.current_domain = session.current_domain  # 供 VectorRouter 滞回判定
+
         # ② ModelRouter 路由决策（写入 ctx.domain_tag / ctx.target_model）
         await self._model_router.route(ctx)
 
+        # ②.5 检测跨语义切换，路由后更新会话领域
+        if session:
+            old_domain = session.current_domain
+            if old_domain and ctx.domain_tag and old_domain != ctx.domain_tag:
+                ctx.domain_switched = True
+                logger.info(f"[executor] 跨语义切换: {old_domain} → {ctx.domain_tag}")
+            if ctx.domain_tag:
+                from app.services.session_service import SessionStateService
+                await SessionStateService(self.db).set_domain(ctx.session_id, ctx.domain_tag)
+
         # ③ ContextManager 组装消息（写入 ctx.assembled_messages）
-        await self._context_manager.assemble(ctx)
+        await self._context_manager.assemble(ctx, session=session)
 
         # ④ 账号选择 + 上游调用（原有逻辑）
         if ctx.stream:
@@ -151,10 +169,11 @@ class Executor:
         if not available:
             return None
 
-        # 3. AccountSelector 选择
+        # 3. AccountSelector 选择（优先用路由决策后的 target_model，回退到 requested_model）
+        target = ctx.target_model or ctx.requested_model
         account = self._account_selector.select(
             available,
-            model_name=ctx.requested_model,
+            model_name=target,
         )
         ctx.selector_strategy = self._account_selector.name
         if account:

@@ -39,7 +39,18 @@ async def lifespan(app: FastAPI):
     
     # 初始化数据库
     await init_database()
-    
+
+    # 初始化预置领域（M2 向量路由用，向量延迟计算）
+    try:
+        from app.models import AsyncSessionLocal
+        from app.services.domain_service import DomainService
+        async with AsyncSessionLocal() as session:
+            domain_svc = DomainService(session)
+            await domain_svc.ensure_default_domains(embedding_service=None)
+        logger.info("预置领域初始化完成")
+    except Exception as e:
+        logger.warning(f"预置领域初始化失败（不影响启动）: {e}")
+
     # 启动定时任务
     start_scheduler()
     

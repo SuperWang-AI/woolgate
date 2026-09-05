@@ -75,9 +75,14 @@ class ContextConfig:
 
     strategy: str = "passthrough"  # passthrough / window / summary
     window_turns: int = 10
-    summary_model_account_id: int = 0  # 0=用当前账号
+
+    # ── summary 策略：摘要模型配置 ──
+    summary_provider: str = "cloud"  # cloud / local
+    summary_model: str = ""  # cloud 时为模型名（从账号池选）；local 时为 Ollama 模型名
+    summary_model_account_id: int = 0  # 0=自动选该模型的启用账号
     summary_trigger_tokens: int = 4000
-    summary_trigger_turns: int = 5
+    summary_trigger_turns: int = 20
+    summary_window_turns: int = 5  # 摘要后保留最近 N 轮原文
 
 
 @dataclass

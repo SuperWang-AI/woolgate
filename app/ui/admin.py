@@ -143,8 +143,8 @@ def create_ui():
     NAV_PAGES = [
         ('🏠 首页', '/', 'home'),
         ('👥 账号管理', '/accounts', 'accounts'),
-        ('🧠 管线策略', '/pipeline', 'pipeline'),
         ('⚙️ 系统配置', '/config', 'config'),
+        ('🧠 管线策略', '/pipeline', 'pipeline'),
         ('📋 请求日志', '/logs', 'logs'),
     ]
 
@@ -454,12 +454,6 @@ def create_ui():
                 
                 ui.separator().classes('my-6')
                 
-                ui.label('Ollama配置').classes('text-xl font-bold text-gray-700 mb-3')
-                ollama_enabled = ui.checkbox('启用Ollama调度', value=config.ollama_enabled)
-                ollama_url = ui.input('Ollama地址', value=config.ollama_base_url).classes('w-full')
-                
-                ui.separator().classes('my-6')
-                
                 ui.label('日志配置').classes('text-xl font-bold text-gray-700 mb-3')
                 log_retention = ui.number('日志保留天数', value=config.log_retention_days, min=1).classes('w-full')
 
@@ -469,8 +463,6 @@ def create_ui():
                         'quota_exhaust_strategy': quota_strategy.value,
                         'max_retry_count': int(max_retry.value),
                         'cool_down_seconds': int(cool_down.value),
-                        'ollama_enabled': ollama_enabled.value,
-                        'ollama_base_url': ollama_url.value,
                         'log_retention_days': int(log_retention.value),
                     }
                     success = await save_system_config(config_data)
@@ -533,12 +525,23 @@ def create_ui():
                 ).classes('w-full')
                 ui.label('passthrough=直传（默认） / window=滑动窗口 / summary=摘要压缩(企业)').classes('text-xs text-gray-400 -mt-2')
 
+            # ── ④ 本地模型运行时 ──
+            with ui.card().classes('w-full shadow-lg'):
+                ui.label('④ 本地模型运行时').classes('text-xl font-bold text-gray-700 mb-1')
+                ui.label('Ollama 本地大模型运行时配置，用于本地分类、摘要、Embedding 等场景').classes('text-xs text-gray-500 mb-3')
+
+                ollama_enabled = ui.checkbox('启用 Ollama 调度', value=config.ollama_enabled)
+                ollama_url = ui.input('Ollama 地址', value=config.ollama_base_url).classes('w-full')
+                ui.label('启用后，vendor=ollama 的账号可参与调度；关闭则全部跳过').classes('text-xs text-gray-400 -mt-2')
+
             # 保存按钮
             async def save_pipeline():
                 config_data = {
                     'router_strategy': router_strategy.value,
                     'selector_strategy': selector_strategy.value,
                     'context_strategy': context_strategy.value,
+                    'ollama_enabled': ollama_enabled.value,
+                    'ollama_base_url': ollama_url.value,
                 }
                 success = await save_system_config(config_data)
                 if success:

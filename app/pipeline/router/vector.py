@@ -37,6 +37,7 @@ class VectorRouter(ModelRouter):
         self.config = config
         self.db = db
         self._embedding_service: Optional[EmbeddingService] = None
+        self._last_user_vector: Optional[List[float]] = None
 
     def _get_embedding_service(self) -> EmbeddingService:
         """懒加载 EmbeddingService"""
@@ -66,6 +67,7 @@ class VectorRouter(ModelRouter):
             # 2. 计算用户消息向量
             embed_svc = self._get_embedding_service()
             user_vector = await embed_svc.embed(user_text)
+            self._last_user_vector = user_vector
             if not user_vector:
                 ctx.domain_tag = self.config.fallback_domain
                 ctx.router_decision = "vector: embedding 失败，使用 fallback"

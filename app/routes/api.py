@@ -123,6 +123,7 @@ async def chat_completions(
         kwargs["top_p"] = req.top_p
 
     # 构建管线上下文，统一交给 Executor 执行
+    session_id = request.headers.get("X-Session-Id", "").strip() or request.client.host
     ctx = PipelineContext(
         request_id=str(uuid.uuid4()),
         client_ip=request.client.host,
@@ -131,6 +132,7 @@ async def chat_completions(
         requested_model=req.model,
         kwargs=kwargs,
         estimated_tokens=estimated_tokens,
+        session_id=session_id,
     )
 
     executor = Executor(db)

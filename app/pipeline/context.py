@@ -33,6 +33,7 @@ class PipelineContext:
     requested_model: str
     kwargs: Dict[str, Any]
     estimated_tokens: int
+    session_id: str = ""  # 会话标识（从 X-Session-Id 头读取，缺省用 client_ip）
 
     # ── ① ModelRouter 输出 ──
     domain_tag: Optional[str] = None

@@ -123,7 +123,16 @@ async def chat_completions(
         kwargs["top_p"] = req.top_p
 
     # 构建管线上下文，统一交给 Executor 执行
-    session_id = request.headers.get("X-Session-Id", "").strip() or request.client.host
+    import hashlib
+    x_session = request.headers.get("X-Session-Id", "").strip()
+    if x_session:
+        session_id = x_session
+    else:
+        # 无 X-Session-Id 时（如 Dify 等网关），基于 client_ip + 第一条用户消息 hash 生成会话标识
+        # 使同一对话（同一起始消息）共享会话状态，不同对话独立路由/滞回
+        first_user_msg = next((m["content"] for m in messages if m.get("role") == "user"), "")
+        msg_hash = hashlib.md5(first_user_msg.encode("utf-8")).hexdigest()[:8]
+        session_id = f"{request.client.host}:{msg_hash}"
     ctx = PipelineContext(
         request_id=str(uuid.uuid4()),
         client_ip=request.client.host,

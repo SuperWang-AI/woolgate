@@ -303,6 +303,9 @@ def create_ui():
             for acc in accounts:
                 vendor_groups[acc.vendor].append(acc)
             
+            # 建立 model_name -> account 的映射
+            model_to_account = {a.model_name: a for a in accounts}
+            
             # 查询每个厂商的模型能力（从ModelCatalog）
             vendor_models = {}
             async with AsyncSessionLocal() as session:
@@ -334,171 +337,66 @@ def create_ui():
                         with ui.column().classes('w-full px-4 pb-4 gap-3') as content_area:
                             content_area.visible = False
                             
-                            # 模型能力列表（只显示启用的模型）
+                            # 模型能力列表（只显示启用的模型，整合账号信息）
                             active_models = [m for m in models if m.is_active]
                             if active_models:
-                                ui.label('📋 模型能力清单').classes('text-sm font-bold text-gray-600 mt-2')
+                                ui.label('📋 模型清单').classes('text-sm font-bold text-gray-600 mt-2')
                                 for model in active_models:
+                                    # 获取该模型对应的账号信息
+                                    acc = model_to_account.get(model.model_name)
+                                    acc_id = acc.id if acc else None
+                                    acc_is_enable = acc.is_enable if acc else False
+                                    acc_priority = acc.priority if acc else 0
+                                    acc_total_prompt = acc.total_prompt_tokens or 0 if acc else 0
+                                    acc_total_completion = acc.total_completion_tokens or 0 if acc else 0
+                                    acc_balance = acc.balance_remaining if acc else None
+                                    acc_balance_unit = acc.balance_unit if acc else None
+                                    acc_daily_tokens = acc.daily_used_tokens or 0 if acc else 0
+                                    acc_base_url = acc.base_url if acc else ''
+                                    
                                     with ui.card().classes('w-full shadow-sm'):
+                                        # 标题行
                                         with ui.row().classes('items-center gap-2 w-full'):
                                             ui.icon('smart_toy', size='sm').classes('text-blue-500')
                                             ui.label(model.display_name or model.model_name).classes('text-sm font-bold text-gray-700')
                                             ui.badge(model.model_type or 'chat', color='blue').classes('text-xs')
-                                            if model.is_active:
-                                                ui.badge('启用', color='positive').classes('text-xs')
+                                            ui.badge(f'优先级 {acc_priority}', color='grey').classes('text-xs')
+                                            if acc_is_enable:
+                                                ui.badge('✅ 启用', color='positive').classes('text-xs')
                                             else:
-                                                ui.badge('停用', color='negative').classes('text-xs')
+                                                ui.badge('❌ 停用', color='negative').classes('text-xs')
                                             ui.space()
-                                            # 查看/编辑能力描述按钮
-                                            ui.button('能力详情', icon='info', on_click=lambda m=model: show_model_capability_dialog(m.id)).props('outline size=sm color=primary').classes('text-xs')
+                                            # 操作按钮
+                                            if acc_id:
+                                                if acc_is_enable:
+                                                    ui.button('⏸ 停用', on_click=lambda aid=acc_id: toggle_account_enable(aid, False)).props('outline size=xs color=warning').classes('text-xs')
+                                                else:
+                                                    ui.button('▶️ 启用', on_click=lambda aid=acc_id: toggle_account_enable(aid, True)).props('outline size=xs color=positive').classes('text-xs')
+                                                ui.button('✏️ 编辑', on_click=lambda aid=acc_id: show_account_dialog(account_id=aid)).props('outline size=xs color=primary').classes('text-xs')
+                                                ui.button('🧠 能力', on_click=lambda m=model: show_model_capability_dialog(m.id)).props('outline size=xs color=purple').classes('text-xs')
                                         
                                         # 能力描述（截断显示）
                                         if model.capability_description:
-                                            desc = model.capability_description[:100] + '...' if len(model.capability_description) > 100 else model.capability_description
+                                            desc = model.capability_description[:80] + '...' if len(model.capability_description) > 80 else model.capability_description
                                             ui.label(desc).classes('text-xs text-gray-500 mt-1')
                                         
-                                        # 示例数
-                                        if model.examples:
-                                            ui.label(f'示例数: {len(model.examples)} 条').classes('text-xs text-gray-400')
-                            
-                            ui.separator()
-                            
-                            # 账号详细信息（原有内容）
-                            ui.label('⚙️ 账号配置').classes('text-sm font-bold text-gray-600')
+                                        # 用量统计
+                                        with ui.row().classes('items-center gap-4 mt-2 flex-wrap'):
+                                            ui.label(f'📊 累计: 输入{acc_total_prompt/1_000_000:.2f}M / 输出{acc_total_completion/1_000_000:.2f}M tokens').classes('text-xs text-gray-500')
+                                            ui.label(f'📈 当日: {acc_daily_tokens:,} tokens').classes('text-xs text-gray-500')
+                                            if acc_balance is not None and acc_balance_unit:
+                                                if acc_balance_unit == 'token':
+                                                    ui.label(f'💰 余额: {acc_balance:,.0f} tokens').classes('text-xs font-bold text-blue-600')
+                                                else:
+                                                    ui.label(f'💰 余额: ¥{acc_balance:.2f}').classes('text-xs font-bold text-blue-600')
+                                            if acc_base_url:
+                                                ui.label(f'🔗 {acc_base_url[:40]}...').classes('text-xs font-mono text-gray-400')
                     
                     # 点击标题行切换展开/折叠
                     async def toggle_content(area=content_area, icon=expand_icon):
                         area.visible = not area.visible
                         icon.props(f'name={"expand_more" if not area.visible else "expand_less"}')
                     header_row.on('click', toggle_content)
-                    
-                    # 该厂商下的所有账号详细信息
-                    for acc in vendor_accounts:
-                        # 提前提取所有需要的数据（避免在 UI 构建时访问 ORM 对象）
-                        acc_id = acc.id
-                        acc_vendor = acc.vendor
-                        acc_model_name = acc.model_name
-                        acc_model_display = model_display_map.get(acc.model_name, acc.model_name)
-                        acc_priority = acc.priority
-                        acc_is_enable = acc.is_enable
-                        acc_total_prompt_tokens = acc.total_prompt_tokens or 0
-                        acc_total_completion_tokens = acc.total_completion_tokens or 0
-                        acc_base_url = acc.base_url
-                        acc_extra_json = acc.extra_json
-                        acc_balance_remaining = acc.balance_remaining
-                        acc_balance_unit = acc.balance_unit
-                        acc_balance_sync_date = acc.balance_sync_date
-                        acc_daily_used_tokens = acc.daily_used_tokens or 0
-                        acc_daily_used_currency = acc.daily_used_currency or 0
-                        acc_total_used_currency = acc.total_used_currency or 0
-                        acc_total_tokens = (acc.total_prompt_tokens or 0) + (acc.total_completion_tokens or 0)
-
-                        # 统一余额口径：预计余额 = 初始额度 - 当日本地用量
-                        if acc_balance_remaining is not None and acc_balance_unit:
-                            if acc_balance_unit == 'token':
-                                acc_daily_used = float(acc_daily_used_tokens)
-                                acc_est_balance = acc_balance_remaining - acc_daily_used
-                                init_text = f"{acc_balance_remaining:,.0f} tokens"
-                                daily_text = f"{acc_daily_used:,.0f} tokens"
-                                est_text = f"{acc_est_balance:,.0f} tokens"
-                                quota_percent = (acc_est_balance / acc_balance_remaining * 100) if acc_balance_remaining > 0 else 0
-                            else:
-                                acc_daily_used = acc_daily_used_currency
-                                acc_est_balance = acc_balance_remaining - acc_daily_used
-                                init_text = f"¥{acc_balance_remaining:.2f}"
-                                daily_text = f"¥{acc_daily_used:.2f}"
-                                est_text = f"¥{max(acc_est_balance, 0):.2f}"
-                                quota_percent = (acc_est_balance / acc_balance_remaining * 100) if acc_balance_remaining > 0 else 0
-                        else:
-                            quota_percent = 0
-                    
-                        # 解析 extra_json
-                        actual_model = '未配置'
-                        actual_model_class = 'text-xs text-orange-500'
-                        if acc_extra_json:
-                            try:
-                                # SQLAlchemy 可能已经反序列化为 dict，不需要再 json.loads
-                                if isinstance(acc_extra_json, dict):
-                                    extra_data = acc_extra_json
-                                else:
-                                    extra_data = json.loads(str(acc_extra_json))
-                            
-                                if isinstance(extra_data, dict) and 'model' in extra_data:
-                                    actual_model = str(extra_data['model'])
-                                    actual_model_class = 'text-xs font-mono text-green-600 font-semibold'
-                                else:
-                                    actual_model = 'JSON格式错误'
-                                    actual_model_class = 'text-xs text-red-500'
-                            except Exception as e:
-                                actual_model = f'解析错误: {type(e).__name__}'
-                                actual_model_class = 'text-xs text-red-500'
-                    
-                        # 账号卡片
-                        with ui.card().classes('w-full account-card shadow-md'):
-                            with ui.row().classes('w-full items-start justify-between gap-4'):
-                                # 左侧信息
-                                with ui.column().classes('flex-1 gap-3'):
-                                    # 标题行
-                                    with ui.row().classes('items-center gap-3 flex-wrap'):
-                                        ui.icon('business', size='sm').classes('text-purple-600')
-                                        ui.label(f"{acc_vendor}").classes('text-xl font-bold text-gray-800')
-                                        ui.label(f"模型: {acc_model_display}").classes('text-sm text-gray-600 bg-gray-100 px-2 py-1 rounded')
-                                        ui.badge(f"优先级 {acc_priority}", color='blue')
-                                        if acc_is_enable:
-                                            ui.badge('✅ 启用', color='positive')
-                                        else:
-                                            ui.badge('❌ 停用', color='negative')
-                                
-                                    # 统一余额展示：初始额度 + 当日用量 + 预计余额（或有初始额度）
-                                    if acc_balance_remaining is not None and acc_balance_unit:
-                                        with ui.column().classes('w-full gap-1'):
-                                            with ui.row().classes('items-center justify-between w-full'):
-                                                ui.label(f"📊 初始额度: {init_text}").classes('text-sm text-gray-600')
-                                                sync_info = f'（{acc_balance_sync_date} 同步）' if acc_balance_sync_date else ''
-                                                ui.label(sync_info).classes('text-xs text-gray-400')
-                                            with ui.row().classes('items-center justify-between w-full'):
-                                                ui.label(f"📈 当日用量: {daily_text}").classes('text-sm text-gray-600')
-                                                ui.label(f"预计余额: {est_text}").classes('text-sm font-bold text-blue-600')
-                                            ui.linear_progress(quota_percent / 100).props('color=primary size=8px rounded')
-                                    else:
-                                        # 无接口厂商：直接显示累计用量 + 当日用量
-                                        with ui.column().classes('w-full gap-1'):
-                                            with ui.row().classes('items-center justify-between w-full'):
-                                                ui.label(f"📊 累计用量: {acc_total_tokens:,} tokens").classes('text-sm text-gray-600')
-                                                ui.label(f"¥{acc_total_used_currency:.2f}").classes('text-sm font-mono text-gray-500')
-                                            ui.label(f"📈 当日用量: {acc_daily_used_tokens:,} tokens / ¥{acc_daily_used_currency:.2f}").classes('text-sm text-gray-600')
-                                
-                                    # 累计薅羊毛（token 计数，不计算金额）
-                                    with ui.row().classes('items-center gap-2 flex-wrap'):
-                                        ui.icon('savings', size='sm').classes('text-red-500')
-                                        ui.label(f"累计薅羊毛：输入token {acc_total_prompt_tokens / 1_000_000:.4f}百万；输出token {acc_total_completion_tokens / 1_000_000:.4f}百万").classes('text-sm font-semibold text-red-600')
-                                
-                                    ui.separator()
-                                
-                                    # Base URL
-                                    with ui.row().classes('items-center gap-2'):
-                                        ui.label('🔗 API:').classes('text-xs font-bold text-gray-500')
-                                        if acc_base_url:
-                                            ui.label(str(acc_base_url)).classes('text-xs font-mono text-blue-600')
-                                        else:
-                                            ui.label('未配置').classes('text-xs text-orange-500 font-semibold')
-                                
-                                    # 实际模型
-                                    with ui.row().classes('items-center gap-2'):
-                                        ui.label('🤖 实际模型:').classes('text-xs font-bold text-gray-500')
-                                        ui.label(actual_model).classes(actual_model_class)
-                            
-                                # 右侧操作按钮
-                                with ui.column().classes('gap-2'):
-                                    # 启用/停用切换按钮
-                                    if acc_is_enable:
-                                        ui.button('⏸ 停用', on_click=lambda aid=acc_id: toggle_account_enable(aid, False)).props('outline color=warning').classes('w-32')
-                                    else:
-                                        ui.button('▶️ 启用', on_click=lambda aid=acc_id: toggle_account_enable(aid, True)).props('outline color=positive').classes('w-32')
-                                    # 自动获取：补 base_url/模型 + 拉取厂商真实余额
-                                    ui.button('🔄 自动获取', on_click=lambda aid=acc_id: auto_config_account(aid, fetch_balance=True)).props('color=orange').classes('w-32')
-                                    ui.button('✏️ 编辑', on_click=lambda aid=acc_id: show_account_dialog(account_id=aid)).props('outline color=primary').classes('w-32')
-                                    ui.button('🗑️ 删除', on_click=lambda aid=acc_id: show_delete_dialog(aid)).props('outline color=negative').classes('w-32')
             else:
                 with ui.card().classes('w-full text-center p-12'):
                     ui.icon('info', size='4rem').classes('text-gray-400')

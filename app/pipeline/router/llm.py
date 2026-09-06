@@ -186,16 +186,16 @@ class LLMRouter(ModelRouter):
         result = await self.db.execute(
             select(ModelAccount).where(
                 ModelAccount.model_name == model,
-                ModelAccount.is_active == True,  # noqa: E712
+                ModelAccount.is_enable == True,  # noqa: E712
             )
         )
         account = result.scalars().first()
         if not account:
             raise Exception(f"路由模型 {model} 无可用账号")
 
-        client = LLMClient(account)
-        response = await client.chat(
-            model=model,
+        client = LLMClient()
+        response = await client.chat_completion(
+            account=account,
             messages=[{"role": "user", "content": prompt}],
             stream=False,
             max_tokens=200,

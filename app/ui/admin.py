@@ -518,15 +518,21 @@ def create_ui():
                 ui.label('Embedding 配置（vector/hybrid 策略用）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
                 
                 # 查询所有启用的账号（各厂商都可能有Embedding模型）
-                from app.models.database import ModelAccount
+                from app.models.database import ModelAccount, ModelCatalog
                 async with AsyncSessionLocal() as _s:
                     _acc_result = await _s.execute(
                         select(ModelAccount).where(ModelAccount.is_enable == True).order_by(ModelAccount.vendor)
                     )
                     _accounts = _acc_result.scalars().all()
+                    # 查询model_catalog获取display_name
+                    _cat_result = await _s.execute(select(ModelCatalog))
+                    _catalogs = {c.model_name: c for c in _cat_result.scalars().all()}
                 _account_options = {0: '自动（优先阿里百炼）'}
                 for _acc in _accounts:
-                    _account_options[_acc.id] = f"{_acc.vendor} - {_acc.model_name}"
+                    # 优先用display_name，没有则用model_name
+                    _cat = _catalogs.get(_acc.model_name)
+                    _display = _cat.display_name if _cat and _cat.display_name else _acc.model_name
+                    _account_options[_acc.id] = f"{_acc.vendor} - {_display}"
                 
                 with ui.row().classes('gap-2 w-full'):
                     embedding_account_id = ui.select(

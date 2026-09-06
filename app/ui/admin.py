@@ -518,10 +518,21 @@ def create_ui():
                 ui.label('Embedding 配置（vector/hybrid 策略用）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
                 with ui.row().classes('gap-2 w-full'):
                     embedding_backend = ui.select(
-                        ['cloud', 'local'], label='后端', value=_router_cfg.embedding_backend
+                        {'cloud': '云端', 'local': '本地'}, label='运行方式', value=_router_cfg.embedding_backend
                     ).classes('flex-1')
-                    embedding_model = ui.input(
-                        '模型名', value=_router_cfg.embedding_cloud_model
+                    # 常见的Embedding模型选项
+                    _embedding_models = [
+                        'text-embedding-v3',  # 阿里百炼
+                        'text-embedding-v2',
+                        'bge-large-zh-v1.5',
+                        'bge-m3',
+                        'nomic-embed-text',  # Ollama本地
+                    ]
+                    embedding_model = ui.select(
+                        options=_embedding_models,
+                        label='Embedding 模型',
+                        value=_router_cfg.embedding_cloud_model,
+                        with_input=True,  # 允许手动输入其他模型名
                     ).classes('flex-1')
                 
                 # 查询启用的账号列表，用于选择Embedding用的API Key
@@ -536,15 +547,11 @@ def create_ui():
                     _account_options[_acc.id] = f"{_acc.vendor} - {_acc.model_name}"
                 
                 embedding_account_id = ui.select(
-                    options=list(_account_options.keys()),
+                    options=_account_options,  # 传dict，显示label而不是ID
                     label='使用账号的 API Key',
                     value=getattr(_router_cfg, 'embedding_account_id', 0) or 0,
                 ).classes('w-full')
-                # 显示选中账号的说明
-                _selected_acc_id = getattr(_router_cfg, 'embedding_account_id', 0) or 0
-                _selected_text = _account_options.get(_selected_acc_id, '自动（优先阿里百炼）')
-                ui.label(f'当前使用：{_selected_text}').classes('text-xs text-gray-400 -mt-2 mb-1')
-                ui.label('云端默认阿里百炼 text-embedding-v3，免费额度 50 万 token').classes('text-xs text-gray-400 -mt-1 mb-3')
+                ui.label('云端默认阿里百炼 text-embedding-v3，免费额度 50 万 token').classes('text-xs text-gray-400 -mt-2 mb-3')
 
                 ui.label('滞回阈值（防频繁切换）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
                 with ui.row().classes('gap-2 w-full'):

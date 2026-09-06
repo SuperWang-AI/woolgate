@@ -821,7 +821,7 @@ def create_ui():
                                 ui.label(line).classes('text-xs text-gray-500 text-center').style('line-height:1.4')
             
             with ui.row().classes('w-full gap-3'):
-                stat_card('📊', 'text-blue-600', '总请求数', str(len(logs)))
+                stat_card('📊', 'text-blue-600', '总请求数', str(total_count))
                 stat_card('✅', 'text-green-600', '成功', str(success_count))
                 stat_card('❌', 'text-red-600', '失败', str(failed_count))
                 stat_card('🐑', 'text-orange-600', '累计Token',

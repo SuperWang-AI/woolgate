@@ -41,7 +41,8 @@ class RouterConfig:
     # cloud 配置
     embedding_cloud_provider: str = "aliyun"  # aliyun / openai / custom
     embedding_cloud_base_url: str = ""
-    embedding_cloud_api_key: str = ""  # 加密存储
+    embedding_cloud_api_key: str = ""  # 加密存储（已废弃，保留兼容）
+    embedding_account_id: int = 0  # 使用哪个账号的API Key，0=自动选阿里百炼
     embedding_cloud_model: str = "text-embedding-v3"
     embedding_cloud_input_field: str = "input"
     embedding_cloud_output_path: str = "output.embeddings[0].embedding"

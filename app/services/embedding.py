@@ -48,13 +48,17 @@ class EmbeddingService:
         base_url = self.config.embedding_cloud_base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         model = self.config.embedding_cloud_model or "text-embedding-v3"
 
-        # 配置中没填 key 时，从账号池找阿里百炼/通义千问账号借用
+        # 优先使用指定账号的Key，其次用配置中的Key，最后自动找阿里百炼账号
         if not api_key and self.db is not None:
-            api_key = await self._find_aliyun_api_key()
+            account_id = getattr(self.config, 'embedding_account_id', 0)
+            if account_id and account_id > 0:
+                api_key = await self._find_api_key_by_account(account_id)
+            if not api_key:
+                api_key = await self._find_aliyun_api_key()
 
         if not api_key:
             raise RuntimeError(
-                "云端 embedding 未配置 API Key。请在管线策略页填写 embedding API Key，"
+                "云端 embedding 未配置 API Key。请在管线策略页选择 embedding 账号，"
                 "或启用一个阿里百炼账号（会自动借用其 Key）。"
             )
 
@@ -111,6 +115,21 @@ class EmbeddingService:
         except (KeyError, TypeError) as e:
             logger.error(f"本地 embedding 响应解析失败: {data}, 错误: {e}")
             raise RuntimeError(f"本地 embedding 响应格式异常: {e}")
+
+    async def _find_api_key_by_account(self, account_id: int) -> str:
+        """根据账号ID获取API Key"""
+        if self.db is None or not account_id:
+            return ""
+        result = await self.db.execute(
+            select(ModelAccount).where(ModelAccount.id == account_id)
+        )
+        account = result.scalar_one_or_none()
+        if account and account.is_enable:
+            try:
+                return encryption_service.decrypt(account.api_key_encrypted)
+            except Exception:
+                return ""
+        return ""
 
     async def _find_aliyun_api_key(self) -> str:
         """从账号池找阿里百炼/通义千问的启用账号，借用其 API Key"""

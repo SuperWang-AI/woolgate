@@ -523,11 +523,28 @@ def create_ui():
                     embedding_model = ui.input(
                         '模型名', value=_router_cfg.embedding_cloud_model
                     ).classes('flex-1')
-                embedding_api_key = ui.input(
-                    'API Key（留空则自动借用阿里百炼账号的 Key）',
-                    value=_router_cfg.embedding_cloud_api_key, password=True
+                
+                # 查询启用的账号列表，用于选择Embedding用的API Key
+                from app.models.database import ModelAccount
+                async with AsyncSessionLocal() as _s:
+                    _acc_result = await _s.execute(
+                        select(ModelAccount).where(ModelAccount.is_enable == True).order_by(ModelAccount.vendor)
+                    )
+                    _accounts = _acc_result.scalars().all()
+                _account_options = {0: '自动（优先阿里百炼）'}
+                for _acc in _accounts:
+                    _account_options[_acc.id] = f"{_acc.vendor} - {_acc.model_name}"
+                
+                embedding_account_id = ui.select(
+                    options=list(_account_options.keys()),
+                    label='使用账号的 API Key',
+                    value=getattr(_router_cfg, 'embedding_account_id', 0) or 0,
                 ).classes('w-full')
-                ui.label('云端默认阿里百炼 text-embedding-v3，免费额度 50 万 token').classes('text-xs text-gray-400 -mt-2 mb-3')
+                # 显示选中账号的说明
+                _selected_acc_id = getattr(_router_cfg, 'embedding_account_id', 0) or 0
+                _selected_text = _account_options.get(_selected_acc_id, '自动（优先阿里百炼）')
+                ui.label(f'当前使用：{_selected_text}').classes('text-xs text-gray-400 -mt-2 mb-1')
+                ui.label('云端默认阿里百炼 text-embedding-v3，免费额度 50 万 token').classes('text-xs text-gray-400 -mt-1 mb-3')
 
                 ui.label('滞回阈值（防频繁切换）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
                 with ui.row().classes('gap-2 w-full'):
@@ -606,7 +623,7 @@ def create_ui():
                 router_config_json = {
                     'embedding_backend': embedding_backend.value,
                     'embedding_cloud_model': embedding_model.value,
-                    'embedding_cloud_api_key': embedding_api_key.value,
+                    'embedding_account_id': int(embedding_account_id.value),
                     'threshold_high': float(threshold_high.value),
                     'threshold_low': float(threshold_low.value),
                 }

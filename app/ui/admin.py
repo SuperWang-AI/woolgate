@@ -535,23 +535,29 @@ def create_ui():
                         with_input=True,  # 允许手动输入其他模型名
                     ).classes('flex-1')
                 
-                # 查询启用的账号列表，用于选择Embedding用的API Key
+                # 查询阿里百炼的启用账号（只有阿里百炼支持Embedding接口）
                 from app.models.database import ModelAccount
                 async with AsyncSessionLocal() as _s:
                     _acc_result = await _s.execute(
-                        select(ModelAccount).where(ModelAccount.is_enable == True).order_by(ModelAccount.vendor)
+                        select(ModelAccount).where(
+                            ModelAccount.is_enable == True,
+                            ModelAccount.vendor.like("%百炼%"),
+                        ).order_by(ModelAccount.model_name)
                     )
                     _accounts = _acc_result.scalars().all()
-                _account_options = {0: '自动（优先阿里百炼）'}
+                _account_options = {0: '自动（选第一个阿里百炼账号）'}
                 for _acc in _accounts:
                     _account_options[_acc.id] = f"{_acc.vendor} - {_acc.model_name}"
                 
                 embedding_account_id = ui.select(
-                    options=_account_options,  # 传dict，显示label而不是ID
+                    options=_account_options,
                     label='使用账号的 API Key',
                     value=getattr(_router_cfg, 'embedding_account_id', 0) or 0,
                 ).classes('w-full')
-                ui.label('云端默认阿里百炼 text-embedding-v3，免费额度 50 万 token').classes('text-xs text-gray-400 -mt-2 mb-3')
+                if not _accounts:
+                    ui.label('⚠️ 未找到启用的阿里百炼账号，Embedding将无法工作').classes('text-xs text-red-500 -mt-2 mb-1')
+                else:
+                    ui.label('仅显示阿里百炼账号（text-embedding-v3 仅支持阿里百炼）').classes('text-xs text-gray-400 -mt-2 mb-3')
 
                 ui.label('滞回阈值（防频繁切换）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
                 with ui.row().classes('gap-2 w-full'):

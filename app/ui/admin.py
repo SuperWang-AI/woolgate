@@ -485,37 +485,37 @@ def create_ui():
 
     @ui.page('/pipeline')
     async def pipeline_page():
-        """管线策略配置页面（M1 三层策略管线）"""
+        """管线策略配置页面"""
         ui.page_title('管线策略 - WoolGate')
 
         # 顶部导航栏
         nav_header('pipeline')
 
         with ui.column().classes('w-full max-w-4xl mx-auto p-6 gap-6'):
-            ui.label('🧠 管线策略配置').classes('text-3xl font-bold text-gray-800')
-            ui.label('三层策略串行：模型路由（选羊）→ 账号调度（薅羊毛）→ 上下文管理，保存后立即生效').classes('text-sm text-gray-500 -mt-4')
+            ui.label('🧩 管线策略配置').classes('text-3xl font-bold text-gray-800')
+            ui.label('三层策略串行：模型路由 → 账号调度 → 上下文管理，保存后立即生效').classes('text-sm text-gray-500 -mt-4')
 
             # 获取当前配置
             config = await get_system_config()
 
-            # ── ① 模型路由（选羊）──
+            # ── ① 模型路由 ──
             with ui.card().classes('w-full shadow-lg'):
-                ui.label('① 模型路由策略（选羊）').classes('text-xl font-bold text-gray-700 mb-1')
-                ui.label('根据用户请求语义，智能选择最适合的模型领域').classes('text-xs text-gray-500 mb-3')
+                ui.label('① 模型路由策略').classes('text-xl font-bold text-gray-700 mb-1')
+                ui.label('根据用户请求语义，智能选择最适合的模型').classes('text-xs text-gray-500 mb-3')
 
                 router_strategy = ui.select(
-                    ['off', 'rules', 'vector', 'llm', 'hybrid'],
+                    ['off', 'vector', 'llm', 'hybrid'],
                     label='路由策略',
                     value=getattr(config, 'router_strategy', 'off')
                 ).classes('w-full')
-                ui.label('off=不路由 / rules=关键词匹配 / vector=向量相似度 / llm=小模型分类 / hybrid=混合（向量高置信直接用，低置信升级LLM）').classes('text-xs text-gray-400 -mt-2 mb-3')
+                ui.label('off=不路由 / vector=向量相似度 / llm=小模型分类 / hybrid=混合（向量高置信直接用，低置信升级LLM）').classes('text-xs text-gray-400 -mt-2 mb-3')
 
                 # 加载当前 router_config
                 from app.pipeline.config import PipelineConfig
                 _pipeline_cfg = await PipelineConfig.load(AsyncSessionLocal())
                 _router_cfg = _pipeline_cfg.router_config
 
-                ui.label('Embedding 配置（vector 策略用）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
+                ui.label('Embedding 配置（vector/hybrid 策略用）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
                 with ui.row().classes('gap-2 w-full'):
                     embedding_backend = ui.select(
                         ['cloud', 'local'], label='后端', value=_router_cfg.embedding_backend
@@ -540,9 +540,9 @@ def create_ui():
                         min=0.0, max=1.0, step=0.05
                     ).classes('flex-1')
 
-            # ── ② 账号调度（薅羊毛）──
+            # ── ② 账号调度 ──
             with ui.card().classes('w-full shadow-lg'):
-                ui.label('② 账号调度策略（薅羊毛）').classes('text-xl font-bold text-gray-700 mb-1')
+                ui.label('② 账号调度策略').classes('text-xl font-bold text-gray-700 mb-1')
                 ui.label('从可用账号池中选择具体账号，管理免费额度消耗顺序').classes('text-xs text-gray-500 mb-3')
 
                 selector_strategy = ui.select(
@@ -550,7 +550,7 @@ def create_ui():
                     label='调度策略',
                     value=getattr(config, 'selector_strategy', 'pin')
                 ).classes('w-full')
-                ui.label('pin=指定模型（默认） / free-first=免费额度优先 / round-robin=轮询 / sticky=会话粘性 / failover=主备(企业) / cost-first=成本最低(企业)').classes('text-xs text-gray-400 -mt-2')
+                ui.label('pin=指定模型（默认） / free-first=免费额度优先 / round-robin=轮询 / sticky=会话粘性 / failover=主备 / cost-first=成本最低').classes('text-xs text-gray-400 -mt-2')
 
             # ── ③ 上下文管理 ──
             with ui.card().classes('w-full shadow-lg'):
@@ -589,14 +589,14 @@ def create_ui():
                 summary_window_turns = ui.number(
                     '摘要后保留最近 N 轮原文', value=_context_cfg.summary_window_turns, min=0, max=20
                 ).classes('w-full')
-                ui.label('cloud=从账号池选该模型的启用账号 / local=调用 Ollama；跨语义切换时强制摘要').classes('text-xs text-gray-400 -mt-2')
+                ui.label('cloud=从账号池选该模型的启用账号 / local=调用 Ollama；跨模型切换时强制摘要').classes('text-xs text-gray-400 -mt-2')
 
             # ── ④ 本地模型运行时 ──
             with ui.card().classes('w-full shadow-lg'):
-                ui.label('④ 本地模型运行时').classes('text-xl font-bold text-gray-700 mb-1')
-                ui.label('Ollama 本地大模型运行时配置，用于本地分类、摘要、Embedding 等场景').classes('text-xs text-gray-500 mb-3')
+                ui.label('④ 本地模型运行时（Ollama）').classes('text-xl font-bold text-gray-700 mb-1')
+                ui.label('用于本地 Embedding、摘要等轻量任务，不参与主模型调度').classes('text-xs text-gray-500 mb-3')
 
-                ollama_enabled = ui.checkbox('启用 Ollama 调度', value=config.ollama_enabled)
+                ollama_enabled = ui.checkbox('启用 Ollama', value=config.ollama_enabled)
                 ollama_url = ui.input('Ollama 地址', value=config.ollama_base_url).classes('w-full')
                 ui.label('启用后，vendor=ollama 的账号可参与调度；关闭则全部跳过').classes('text-xs text-gray-400 -mt-2')
 

@@ -516,24 +516,6 @@ def create_ui():
                 _router_cfg = _pipeline_cfg.router_config
 
                 ui.label('Embedding 配置（vector/hybrid 策略用）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
-                with ui.row().classes('gap-2 w-full'):
-                    embedding_backend = ui.select(
-                        {'cloud': '云端', 'local': '本地'}, label='运行方式', value=_router_cfg.embedding_backend
-                    ).classes('flex-1')
-                    # 常见的Embedding模型选项
-                    _embedding_models = [
-                        'text-embedding-v3',  # 阿里百炼
-                        'text-embedding-v2',
-                        'bge-large-zh-v1.5',
-                        'bge-m3',
-                        'nomic-embed-text',  # Ollama本地
-                    ]
-                    embedding_model = ui.select(
-                        options=_embedding_models,
-                        label='Embedding 模型',
-                        value=_router_cfg.embedding_cloud_model,
-                        with_input=True,  # 允许手动输入其他模型名
-                    ).classes('flex-1')
                 
                 # 查询阿里百炼的启用账号（只有阿里百炼支持Embedding接口）
                 from app.models.database import ModelAccount
@@ -551,13 +533,13 @@ def create_ui():
                 
                 embedding_account_id = ui.select(
                     options=_account_options,
-                    label='使用账号的 API Key',
+                    label='使用哪个账号的 API Key',
                     value=getattr(_router_cfg, 'embedding_account_id', 0) or 0,
                 ).classes('w-full')
                 if not _accounts:
                     ui.label('⚠️ 未找到启用的阿里百炼账号，Embedding将无法工作').classes('text-xs text-red-500 -mt-2 mb-1')
                 else:
-                    ui.label('仅显示阿里百炼账号（text-embedding-v3 仅支持阿里百炼）').classes('text-xs text-gray-400 -mt-2 mb-3')
+                    ui.label('Embedding模型固定为 text-embedding-v3（阿里百炼），API Key自动使用选中账号').classes('text-xs text-gray-400 -mt-2 mb-3')
 
                 ui.label('滞回阈值（防频繁切换）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
                 with ui.row().classes('gap-2 w-full'):
@@ -634,8 +616,8 @@ def create_ui():
             async def save_pipeline():
                 # 组装 router_config_json
                 router_config_json = {
-                    'embedding_backend': embedding_backend.value,
-                    'embedding_cloud_model': embedding_model.value,
+                    'embedding_backend': 'cloud',  # 固定云端
+                    'embedding_cloud_model': 'text-embedding-v3',  # 固定阿里百炼Embedding模型
                     'embedding_account_id': int(embedding_account_id.value),
                     'threshold_high': float(threshold_high.value),
                     'threshold_low': float(threshold_low.value),

@@ -671,7 +671,7 @@ def create_ui():
                                 ui.label((m.capability_description or '')[:60] + ('...' if len(m.capability_description or '') > 60 else '')).classes('text-sm text-gray-600 flex-1')
                                 ui.label(f'示例: {examples_count}条').classes('text-xs text-gray-500')
                                 ui.label(vector_status).classes('text-xs')
-                                edit_btn = ui.button('✏️ 编辑', icon='edit').props('outline size=sm')
+                                edit_btn = ui.button('编辑', icon='edit').props('outline size=sm')
 
                             # 编辑对话框
                             def make_edit_dialog(model_id, model_name, vendor, cap_desc, examples_json):
@@ -936,7 +936,29 @@ def toggle_account_enable(account_id: int, enable: bool):
                 except Exception as e:
                     ui.notify(f'已启用 {account.vendor}，但模型同步失败: {e}', type='warning')
             else:
-                ui.notify(f'已停用 {account.vendor}', type='warning')
+                # 停用账号时，检查该模型是否还有其他启用账号
+                from app.services.model_catalog_service import ModelCatalogService
+                result = await session.execute(
+                    select(ModelAccount).where(
+                        ModelAccount.model_name == account.model_name,
+                        ModelAccount.is_enable == True  # noqa: E712
+                    )
+                )
+                remaining = result.scalars().all()
+                if not remaining:
+                    # 没有其他启用账号，标记模型为不可用
+                    catalog_result = await session.execute(
+                        select(ModelCatalog).where(ModelCatalog.model_name == account.model_name)
+                    )
+                    catalog = catalog_result.scalar_one_or_none()
+                    if catalog and catalog.is_active:
+                        catalog.is_active = False
+                        await session.commit()
+                        ui.notify(f'已停用 {account.vendor}，模型 {account.model_name} 无其他启用账号，已从路由池移除', type='warning')
+                    else:
+                        ui.notify(f'已停用 {account.vendor}', type='warning')
+                else:
+                    ui.notify(f'已停用 {account.vendor}（模型 {account.model_name} 仍有 {len(remaining)} 个启用账号）', type='warning')
             # 刷新页面
             ui.run_javascript('setTimeout(() => window.location.reload(), 600)')
     ui.timer(0.01, toggle, once=True)

@@ -57,7 +57,7 @@ class RulesRouter(ModelRouter):
 
         for rule in rules:
             if self._match_rule(rule, text):
-                ctx.domain_tag = rule.domain_tag
+                ctx.target_model = rule.domain_tag  # M4: domain_tag 字段语义改为目标模型名
                 ctx.router_decision = f"rules: 命中规则 {rule.id} → {rule.domain_tag}"
                 logger.info(f"[rules-router] 命中规则 {rule.id}: {rule.domain_tag}")
                 return

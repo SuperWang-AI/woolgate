@@ -64,9 +64,14 @@ class Executor:
         elif config.router_strategy == "vector":
             self._model_router = VectorRouter(config.router_config, db=self.db)
         elif config.router_strategy == "llm":
-            self._model_router = LLMRouter(config.router_config)
+            self._model_router = LLMRouter(config.router_config, db=self.db)
+        elif config.router_strategy == "hybrid":
+            # 混合路由：先向量，低置信度升级到 LLM（在 execute 中处理）
+            self._model_router = VectorRouter(config.router_config, db=self.db)
+            self._llm_router = LLMRouter(config.router_config, db=self.db)
         else:
             self._model_router = OffRouter()
+            self._llm_router = None
 
         # ③ ContextManager（上下文）
         if config.context_strategy == "window":
@@ -114,20 +119,29 @@ class Executor:
             from app.services.session_service import SessionStateService
             session_svc = SessionStateService(self.db)
             session = await session_svc.get_or_create(ctx.session_id)
-            ctx.current_domain = session.current_domain  # 供 VectorRouter 滞回判定
+            ctx.current_model = session.current_model  # 供 VectorRouter 滞回判定
 
-        # ② ModelRouter 路由决策（写入 ctx.domain_tag / ctx.target_model）
+        # ② ModelRouter 路由决策（写入 ctx.target_model）
         await self._model_router.route(ctx)
 
-        # ②.5 检测跨语义切换，路由后更新会话领域
+        # ②.5 hybrid 混合路由：向量低置信度时升级到 LLM 路由
+        config = await PipelineConfig.load(self.db)
+        if config.router_strategy == "hybrid" and self._llm_router:
+            confidence = getattr(ctx, "router_confidence", 0)
+            threshold = config.router_config.threshold_high
+            if confidence < threshold and not ctx.forced_model:
+                logger.info(f"[executor] 向量置信度 {confidence:.3f} < {threshold}，升级到 LLM 路由")
+                await self._llm_router.route(ctx)
+
+        # ②.6 检测模型切换，路由后更新会话模型
         if session:
-            old_domain = session.current_domain
-            if old_domain and ctx.domain_tag and old_domain != ctx.domain_tag:
-                ctx.domain_switched = True
-                logger.info(f"[executor] 跨语义切换: {old_domain} → {ctx.domain_tag}")
-            if ctx.domain_tag:
+            old_model = session.current_model
+            if old_model and ctx.target_model and old_model != ctx.target_model:
+                ctx.model_switched = True
+                logger.info(f"[executor] 模型切换: {old_model} → {ctx.target_model}")
+            if ctx.target_model:
                 from app.services.session_service import SessionStateService
-                await SessionStateService(self.db).set_domain(ctx.session_id, ctx.domain_tag)
+                await SessionStateService(self.db).set_model(ctx.session_id, ctx.target_model)
 
         # ③ ContextManager 组装消息（写入 ctx.assembled_messages）
         await self._context_manager.assemble(ctx, session=session)
@@ -399,7 +413,7 @@ class Executor:
                 endpoint="/v1/chat/completions",
                 # ── M1 观测埋点 ──
                 request_id=ctx.request_id,
-                domain_tag=ctx.domain_tag,
+                domain_tag=ctx.target_model,  # M4 后存目标模型名
                 router_strategy=ctx.router_strategy,
                 selector_strategy=ctx.selector_strategy,
                 context_strategy=ctx.context_strategy,

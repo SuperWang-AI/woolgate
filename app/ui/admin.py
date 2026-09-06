@@ -11,7 +11,7 @@ import asyncio
 import json
 
 from app.models import AsyncSessionLocal
-from app.models.database import ModelAccount, SystemConfig, RequestLog, DomainPrototype, DomainModelMapping
+from app.models.database import ModelAccount, SystemConfig, RequestLog, ModelCatalog
 from app.utils.encryption import encryption_service
 from app.config import settings
 
@@ -591,99 +591,77 @@ def create_ui():
                 ollama_url = ui.input('Ollama 地址', value=config.ollama_base_url).classes('w-full')
                 ui.label('启用后，vendor=ollama 的账号可参与调度；关闭则全部跳过').classes('text-xs text-gray-400 -mt-2')
 
-            # ── ⑤ 领域原型管理（向量路由用）──
+            # ── ⑤ 模型能力清单（LLM 智能路由用，M4）──
             with ui.card().classes('w-full shadow-lg'):
-                ui.label('⑤ 领域原型管理').classes('text-xl font-bold text-gray-700 mb-1')
-                ui.label('向量路由的领域定义，每个领域有描述文本和预计算向量，路由时与用户消息算相似度').classes('text-xs text-gray-500 mb-3')
+                ui.label('⑤ 模型能力清单').classes('text-xl font-bold text-gray-700 mb-1')
+                ui.label('LLM 智能路由的核心配置：每个模型的能力描述、成本、延迟和能力向量。新增账号后自动同步，可手动微调能力描述').classes('text-xs text-gray-500 mb-3')
 
                 # 操作按钮行
                 with ui.row().classes('gap-2 mb-3'):
-                    add_domain_btn = ui.button('+ 添加领域', icon='add').props('outline')
-                    recompute_btn = ui.button('🔄 重算所有向量', icon='refresh').props('outline')
+                    sync_btn = ui.button('🔄 同步账号模型', icon='refresh').props('outline')
+                    recompute_btn = ui.button('🔄 重算所有能力向量', icon='refresh').props('outline')
 
-                # 领域列表容器（动态刷新）
-                domain_list_container = ui.column().classes('w-full gap-2')
+                # 模型列表容器（动态刷新）
+                model_list_container = ui.column().classes('w-full gap-2')
 
-                async def refresh_domain_list():
-                    """刷新领域列表"""
-                    domain_list_container.clear()
+                async def refresh_model_list():
+                    """刷新模型能力清单"""
+                    model_list_container.clear()
                     async with AsyncSessionLocal() as session:
-                        from app.services.domain_service import DomainService
-                        svc = DomainService(session)
-                        domains = await svc.list_domains()
-                        if not domains:
-                            ui.label('暂无领域，点击"添加领域"创建').classes('text-sm text-gray-400')
+                        from app.services.model_catalog_service import ModelCatalogService
+                        svc = ModelCatalogService(session)
+                        models = await svc.list_active_models()
+                        if not models:
+                            ui.label('暂无模型，点击"同步账号模型"从启用账号同步').classes('text-sm text-gray-400')
                             return
-                        for d in domains:
-                            mappings = await svc.list_mappings(d.id)
-                            mapping_text = ', '.join([f"{m.model_name}(P{m.priority})" for m in mappings]) or '无模型映射'
-                            vector_status = '✅ 已计算' if d.embedding_vector else '❌ 未计算'
+                        for m in models:
+                            vector_status = '✅ 已计算' if m.embedding_vector else '❌ 未计算'
+                            cost_text = f'¥{m.input_price}/¥{m.output_price}' if m.input_price else '未设置'
                             with ui.row().classes('items-center w-full p-2 bg-gray-50 rounded gap-2'):
-                                ui.label(f'**{d.name}**').classes('text-sm font-bold w-24')
-                                ui.label(d.description[:40] + ('...' if len(d.description) > 40 else '')).classes('text-xs text-gray-600 flex-1')
+                                ui.label(f'**{m.model_name}**').classes('text-sm font-bold w-32')
+                                ui.label(f'[{m.vendor}]').classes('text-xs text-gray-500 w-20')
+                                ui.label((m.capability_description or '')[:50] + ('...' if len(m.capability_description or '') > 50 else '')).classes('text-xs text-gray-600 flex-1')
                                 ui.label(vector_status).classes('text-xs')
-                                ui.label(f'模型: {mapping_text}').classes('text-xs text-gray-500')
-                                ui.button(icon='delete', on_click=lambda did=d.id: delete_domain(did)).props('flat color=red size=sm')
+                                ui.label(f'成本: {cost_text}').classes('text-xs text-gray-500')
 
-                async def delete_domain(domain_id: int):
+                async def sync_models():
+                    """从启用账号同步模型到目录"""
                     async with AsyncSessionLocal() as session:
-                        from app.services.domain_service import DomainService
-                        svc = DomainService(session)
-                        await svc.delete_domain(domain_id)
-                    ui.notify('领域已删除', type='positive')
-                    await refresh_domain_list()
-
-                async def add_domain_dialog():
-                    """添加领域对话框"""
-                    with ui.dialog() as dialog, ui.card():
-                        ui.label('添加领域').classes('text-lg font-bold')
-                        name_input = ui.input('领域名称（英文标识，如 code/creative）').classes('w-full')
-                        desc_input = ui.textarea('领域描述（用于计算向量，越详细越好）').classes('w-full')
-                        with ui.row().classes('justify-end gap-2'):
-                            ui.button('取消', on_click=dialog.close).props('flat')
-                            async def confirm():
-                                if not name_input.value or not desc_input.value:
-                                    ui.notify('请填写名称和描述', type='warning')
-                                    return
-                                async with AsyncSessionLocal() as session:
-                                    from app.services.domain_service import DomainService
-                                    from app.services.embedding import EmbeddingService
-                                    from app.pipeline.config import PipelineConfig
-                                    svc = DomainService(session)
-                                    # 尝试计算向量（失败也保存）
-                                    cfg = await PipelineConfig.load(session)
-                                    embed_svc = EmbeddingService(cfg.router_config, db=session)
-                                    await svc.create_domain(name_input.value.strip(), desc_input.value.strip(), embed_svc)
-                                dialog.close()
-                                ui.notify('领域已添加', type='positive')
-                                await refresh_domain_list()
-                            ui.button('确定', on_click=confirm).props('color=primary')
-                    dialog.open()
+                        from app.services.model_catalog_service import ModelCatalogService
+                        svc = ModelCatalogService(session)
+                        result = await session.execute(
+                            select(ModelAccount).where(ModelAccount.is_enable == True)  # noqa: E712
+                        )
+                        accounts = result.scalars().all()
+                        for account in accounts:
+                            await svc.ensure_model(account.model_name, account.vendor)
+                    ui.notify(f'已同步 {len(accounts)} 个模型', type='positive')
+                    await refresh_model_list()
 
                 async def recompute_all():
-                    """重算所有领域向量"""
+                    """重算所有模型能力向量"""
                     recompute_btn.props('loading')
                     try:
                         async with AsyncSessionLocal() as session:
-                            from app.services.domain_service import DomainService
+                            from app.services.model_catalog_service import ModelCatalogService
                             from app.services.embedding import EmbeddingService
                             from app.pipeline.config import PipelineConfig
                             cfg = await PipelineConfig.load(session)
                             embed_svc = EmbeddingService(cfg.router_config, db=session)
-                            svc = DomainService(session)
+                            svc = ModelCatalogService(session)
                             count = await svc.recompute_all_embeddings(embed_svc)
-                        ui.notify(f'已重算 {count} 个领域向量', type='positive')
-                        await refresh_domain_list()
+                        ui.notify(f'已重算 {count} 个模型能力向量', type='positive')
+                        await refresh_model_list()
                     except Exception as e:
                         ui.notify(f'重算失败: {e}', type='negative')
                     finally:
                         recompute_btn.props(remove='loading')
 
-                add_domain_btn.on('click', add_domain_dialog)
+                sync_btn.on('click', sync_models)
                 recompute_btn.on('click', recompute_all)
 
                 # 初始加载
-                await refresh_domain_list()
+                await refresh_model_list()
 
             # 保存按钮
             async def save_pipeline():

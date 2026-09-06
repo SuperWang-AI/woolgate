@@ -37,17 +37,17 @@ class PipelineContext:
 
     # ── API Key 信息（企业化部署）──
     api_key_id: Optional[int] = None  # 匹配到的 ApiKey ID
-    default_domain: Optional[str] = None  # API Key 默认领域，None=向量路由自动判断
-    forced_domain: Optional[str] = None  # 斜杠命令强制指定的领域（/code 等）
+    default_model: Optional[str] = None  # API Key 默认模型，None=向量/LLM 路由自动选择
+    forced_model: Optional[str] = None  # 斜杠命令强制指定的模型（/qwen-plus 等）
 
     # ── ① ModelRouter 输出 ──
-    domain_tag: Optional[str] = None
     target_model: Optional[str] = None
     router_strategy: str = "off"
     router_decision: str = ""
     router_latency_ms: int = 0
-    domain_switched: bool = False  # 本次请求是否发生了领域切换（跨语义切换时强制摘要）
-    current_domain: Optional[str] = None  # 会话当前领域（从 SessionState 读取，供滞回判定）
+    router_confidence: float = 0.0  # 路由置信度（向量相似度或 LLM 置信度）
+    model_switched: bool = False  # 本次请求是否发生了模型切换（跨模型切换时强制摘要）
+    current_model: Optional[str] = None  # 会话当前模型（从 SessionState 读取，供滞回判定）
 
     # ── ② AccountSelector 输出 ──
     account: Optional["ModelAccount"] = None
@@ -77,7 +77,7 @@ class PipelineContext:
         return {
             "request_id": self.request_id,
             "tenant_id": self.tenant_id,
-            "domain_tag": self.domain_tag,
+            "target_model": self.target_model,
             "router_strategy": self.router_strategy,
             "router_decision": self.router_decision,
             "router_latency_ms": self.router_latency_ms,
@@ -104,7 +104,7 @@ class SessionState:
     """
 
     session_id: str
-    current_domain: Optional[str] = None
+    current_model: Optional[str] = None
     current_account_id: Optional[int] = None
     summary: Optional[str] = None
     summary_version: int = 0

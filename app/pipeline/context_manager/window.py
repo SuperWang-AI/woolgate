@@ -33,10 +33,10 @@ class WindowManager(ContextManager):
         ctx.context_strategy = self.name
         messages = ctx.original_messages
 
-        # 跨语义切换时 window 策略无法压缩上下文，记录 warning
-        if getattr(ctx, "domain_switched", False):
+        # 模型切换时 window 策略无法压缩上下文，记录 warning
+        if getattr(ctx, "model_switched", False):
             logger.warning(
-                "[window] 检测到跨语义切换，但 window 策略不做摘要。"
+                "[window] 检测到模型切换，但 window 策略不做摘要。"
                 "建议改用 summary 策略以获得更好的切换效果。"
             )
 

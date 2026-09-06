@@ -1,13 +1,15 @@
 """
-向量路由策略（vector）
+向量路由策略（vector）—— M4 重构后
 
-通过 embedding 余弦相似度 + 领域原型向量 + 滞回阈值决定领域标签。
-M2 实现完整路由逻辑：云端 embedding + 领域原型表 + 领域→模型映射。
+通过 embedding 余弦相似度匹配模型能力向量，高置信度直接选模型。
+低置信度时返回 None，由上层升级到 LLM 智能路由。
 
-滞回说明：
-- threshold_high (默认 0.75)：最高相似度超过此值才切换到新领域
-- threshold_low (默认 0.60)：当前领域相似度低于此值才允许切走
-- 当前领域从 SessionState 读取（M2 第4步启用），本步先用 None（无滞回，每次选最高）
+核心变化（M4）：
+- 不再匹配领域向量，直接匹配模型能力向量
+- 不再有"领域"概念，路由结果直接是模型名
+- 斜杠命令从指定领域改为指定模型（/qwen-plus）
+- 滞回逻辑从领域滞回改为模型滞回
+- 高置信度（>= threshold_high）直接用，低置信度返回 None 升级到 LLM
 """
 import logging
 import time
@@ -18,8 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.pipeline.router.base import ModelRouter
 from app.services.embedding import EmbeddingService, cosine_similarity
-from app.services.domain_service import DomainService
-from app.models.database import DomainPrototype
+from app.services.model_catalog_service import ModelCatalogService
+from app.models.database import ModelCatalog
 
 if TYPE_CHECKING:
     from app.pipeline.context import PipelineContext
@@ -29,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 class VectorRouter(ModelRouter):
-    """向量路由：embedding 相似度匹配领域原型"""
+    """向量路由：embedding 相似度匹配模型能力向量"""
 
     name = "vector"
 
@@ -51,31 +53,28 @@ class VectorRouter(ModelRouter):
         ctx.router_strategy = self.name
 
         if self.db is None:
-            ctx.domain_tag = self.config.fallback_domain
+            ctx.target_model = self.config.fallback_model
             ctx.router_decision = "vector: 无数据库会话，使用 fallback"
-            logger.warning("[vector-router] 无 db 会话，回退 fallback_domain")
+            logger.warning("[vector-router] 无 db 会话，回退 fallback_model")
+            ctx.router_latency_ms = int((time.time() - start) * 1000)
             return
 
         try:
-            # 0. 斜杠命令强制指定领域（最高优先级）
-            if ctx.forced_domain:
-                target_model = await self._select_model_for_domain(ctx.forced_domain)
-                ctx.domain_tag = ctx.forced_domain
-                ctx.target_model = target_model
-                ctx.router_decision = f"vector: 斜杠命令强制领域={ctx.forced_domain}, 模型={target_model or '无映射'}"
-                logger.info(f"[vector-router] 斜杠命令强制: 领域={ctx.forced_domain}, 模型={target_model}")
+            # 0. 斜杠命令强制指定模型（最高优先级）
+            if ctx.forced_model:
+                ctx.target_model = ctx.forced_model
+                ctx.router_decision = f"vector: 斜杠命令强制模型={ctx.forced_model}"
+                logger.info(f"[vector-router] 斜杠命令强制: 模型={ctx.forced_model}")
                 ctx.router_latency_ms = int((time.time() - start) * 1000)
                 return
 
             # 1. 提取最新用户消息
             user_text = self._extract_latest_user_message(ctx.original_messages)
             if not user_text:
-                # 无用户消息时，使用 API Key 默认领域或 fallback
-                target_domain = ctx.default_domain or self.config.fallback_domain
-                target_model = await self._select_model_for_domain(target_domain)
-                ctx.domain_tag = target_domain
+                # 无用户消息时，使用默认模型或 fallback
+                target_model = ctx.default_model or self.config.fallback_model
                 ctx.target_model = target_model
-                ctx.router_decision = f"vector: 无用户消息，使用默认领域={target_domain}"
+                ctx.router_decision = f"vector: 无用户消息，使用默认模型={target_model}"
                 ctx.router_latency_ms = int((time.time() - start) * 1000)
                 return
 
@@ -84,55 +83,54 @@ class VectorRouter(ModelRouter):
             user_vector = await embed_svc.embed(user_text)
             self._last_user_vector = user_vector
             if not user_vector:
-                target_domain = ctx.default_domain or self.config.fallback_domain
-                target_model = await self._select_model_for_domain(target_domain)
-                ctx.domain_tag = target_domain
+                target_model = ctx.default_model or self.config.fallback_model
                 ctx.target_model = target_model
-                ctx.router_decision = f"vector: embedding 失败，使用默认领域={target_domain}"
+                ctx.router_decision = f"vector: embedding 失败，使用默认模型={target_model}"
                 logger.warning("[vector-router] embedding 返回空向量")
                 ctx.router_latency_ms = int((time.time() - start) * 1000)
                 return
 
-            # 3. 读取启用的领域原型
-            domains = await self._load_active_domains()
-            if not domains:
-                target_domain = ctx.default_domain or self.config.fallback_domain
-                target_model = await self._select_model_for_domain(target_domain)
-                ctx.domain_tag = target_domain
+            # 3. 读取启用且有能力向量的模型
+            models = await self._load_active_models()
+            if not models:
+                target_model = ctx.default_model or self.config.fallback_model
                 ctx.target_model = target_model
-                ctx.router_decision = f"vector: 无可用领域，使用默认领域={target_domain}"
+                ctx.router_decision = f"vector: 无可用模型，使用默认模型={target_model}"
                 ctx.router_latency_ms = int((time.time() - start) * 1000)
                 return
 
             # 4. 计算相似度，选最高
-            best_domain, best_score = self._find_best_domain(user_vector, domains)
+            best_model, best_score = self._find_best_model(user_vector, models)
 
-            # 5. 滞回阈值判定（当前领域从 ctx 读取）
-            current_domain = getattr(ctx, "current_domain", None)
-            # 如果有 API Key 默认领域且无当前领域，用默认领域作为滞回基准
-            if not current_domain and ctx.default_domain:
-                current_domain = ctx.default_domain
-            target_domain = self._hysteresis_decision(
-                best_domain, best_score, current_domain, domains
+            # 5. 滞回阈值判定（当前模型从 ctx 读取）
+            current_model = getattr(ctx, "current_model", None)
+            if not current_model and ctx.default_model:
+                current_model = ctx.default_model
+
+            target_model = self._hysteresis_decision(
+                best_model, best_score, current_model, models
             )
 
-            # 6. 从领域→模型映射选目标模型（按优先级，支持降级）
-            target_model = await self._select_model_for_domain(target_domain)
+            # 6. 低置信度判定：如果最终模型相似度 < threshold_high，标记为低置信度
+            #    上层（Executor）会根据此标记决定是否升级到 LLM 路由
+            target_vec = next(
+                (m.embedding_vector for m in models if m.model_name == target_model), None
+            )
+            target_score = cosine_similarity(user_vector, target_vec) if target_vec else 0
 
-            ctx.domain_tag = target_domain
             ctx.target_model = target_model
             ctx.router_decision = (
-                f"vector: 领域={target_domain}(相似度={best_score:.3f}), "
-                f"模型={target_model or '无映射'}"
+                f"vector: 模型={target_model}(相似度={target_score:.3f})"
             )
-            logger.info(f"[vector-router] 路由决策: 领域={target_domain}, 相似度={best_score:.3f}, 模型={target_model}")
+            # 存储置信度供上层判断
+            ctx.router_confidence = target_score
+            logger.info(f"[vector-router] 路由决策: 模型={target_model}, 相似度={target_score:.3f}")
 
         except Exception as e:
-            # 路由失败不阻塞请求，回退默认领域或 fallback
             logger.error(f"[vector-router] 路由异常: {e}", exc_info=True)
-            target_domain = getattr(ctx, "default_domain", None) or self.config.fallback_domain
-            ctx.domain_tag = target_domain
-            ctx.router_decision = f"vector: 路由异常({e})，使用默认领域={target_domain}"
+            target_model = getattr(ctx, "default_model", None) or self.config.fallback_model
+            ctx.target_model = target_model
+            ctx.router_decision = f"vector: 路由异常({e})，使用默认模型={target_model}"
         finally:
             ctx.router_latency_ms = int((time.time() - start) * 1000)
 
@@ -144,86 +142,73 @@ class VectorRouter(ModelRouter):
                 if isinstance(content, str):
                     return content.strip()
                 if isinstance(content, list):
-                    # 多模态消息，提取文本部分
                     texts = [c.get("text", "") for c in content if c.get("type") == "text"]
                     return " ".join(texts).strip()
         return ""
 
-    async def _load_active_domains(self) -> List[DomainPrototype]:
-        """加载所有启用且有向量的领域原型"""
-        stmt = select(DomainPrototype).where(
-            DomainPrototype.is_active == True,  # noqa: E712
-            DomainPrototype.embedding_vector.isnot(None),
+    async def _load_active_models(self) -> List[ModelCatalog]:
+        """加载所有启用且有能力向量的模型"""
+        stmt = select(ModelCatalog).where(
+            ModelCatalog.is_active == True,  # noqa: E712
+            ModelCatalog.embedding_vector.isnot(None),
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    def _find_best_domain(
-        self, user_vector: List[float], domains: List[DomainPrototype]
+    def _find_best_model(
+        self, user_vector: List[float], models: List[ModelCatalog]
     ) -> Tuple[Optional[str], float]:
-        """找相似度最高的领域"""
-        best_domain = None
+        """找相似度最高的模型"""
+        best_model = None
         best_score = 0.0
-        for d in domains:
-            if not d.embedding_vector:
+        for m in models:
+            if not m.embedding_vector:
                 continue
-            score = cosine_similarity(user_vector, d.embedding_vector)
+            score = cosine_similarity(user_vector, m.embedding_vector)
             if score > best_score:
                 best_score = score
-                best_domain = d.name
-        return best_domain, best_score
+                best_model = m.model_name
+        return best_model, best_score
 
     def _hysteresis_decision(
         self,
-        best_domain: Optional[str],
+        best_model: Optional[str],
         best_score: float,
-        current_domain: Optional[str],
-        domains: List[DomainPrototype],
+        current_model: Optional[str],
+        models: List[ModelCatalog],
     ) -> str:
         """
-        滞回阈值决策：
-        - 有当前领域且当前领域相似度 > threshold_low → 保持当前领域（防抖动）
-        - 最高相似度 > threshold_high → 切换到最高领域
-        - 否则 → 保持当前领域（或 fallback）
+        滞回阈值决策（模型级滞回）：
+        - 无当前模型 → 直接返回 best_model（首次请求不做滞回）
+        - 有当前模型且当前模型相似度 >= threshold_low 且 best_score < threshold_high → 保持当前模型
+        - best_score >= threshold_high → 切换到最优模型
+        - 否则 → 保持当前模型（或 fallback）
         """
         threshold_high = self.config.threshold_high
         threshold_low = self.config.threshold_low
 
-        # 没有候选领域，用 fallback
-        if best_domain is None:
-            return current_domain or self.config.fallback_domain
+        if best_model is None:
+            return current_model or self.config.fallback_model
 
-        # 有当前领域，检查是否还在安全区内
-        if current_domain:
-            current_vec = next(
-                (d.embedding_vector for d in domains if d.name == current_domain), None
-            )
-            if current_vec:
-                current_score = cosine_similarity(
-                    self._last_user_vector or [], current_vec
-                ) if hasattr(self, '_last_user_vector') else 0
-                # 当前领域相似度还够高，且没有更优领域超过切入阈值，保持（防抖动）
-                if current_score >= threshold_low and best_score < threshold_high:
-                    return current_domain
+        # 无当前模型（首次请求），直接返回最优模型
+        if not current_model:
+            return best_model
+
+        # 有当前模型，检查滞回
+        current_vec = next(
+            (m.embedding_vector for m in models if m.model_name == current_model), None
+        )
+        if current_vec:
+            current_score = cosine_similarity(
+                self._last_user_vector or [], current_vec
+            ) if hasattr(self, '_last_user_vector') else 0
+            # 当前模型相似度还够高，且没有更优模型超过切入阈值，保持（防抖动）
+            if current_score >= threshold_low and best_score < threshold_high:
+                return current_model
 
         # 最高相似度超过切入阈值，切换
         if best_score >= threshold_high:
-            return best_domain
+            return best_model
 
         # 都不满足，保持当前或 fallback
-        return current_domain or self.config.fallback_domain
-
-    async def _select_model_for_domain(self, domain_name: str) -> Optional[str]:
-        """从领域→模型映射中选优先级最高的启用模型，无则返回 None"""
-        domain_svc = DomainService(self.db)
-        models = await domain_svc.list_active_models_for_domain(domain_name)
-        if models:
-            return models[0]  # 已按优先级降序排列
-        # 该领域无模型映射，尝试 fallback_domain 的模型
-        if domain_name != self.config.fallback_domain:
-            fallback_models = await domain_svc.list_active_models_for_domain(
-                self.config.fallback_domain
-            )
-            if fallback_models:
-                return fallback_models[0]
-        return None
+        return current_model or self.config.fallback_model

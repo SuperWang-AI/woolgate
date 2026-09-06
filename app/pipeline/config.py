@@ -29,8 +29,8 @@ _CACHE_TTL = 60  # 秒
 class RouterConfig:
     """ModelRouter 路由配置"""
 
-    strategy: str = "off"  # off / rules / vector / llm
-    fallback_domain: str = "general"
+    strategy: str = "off"  # off / rules / vector / llm / hybrid
+    fallback_model: str = ""  # 兜底模型名，空=自动选第一个启用账号的模型
 
     # ── rules 策略 ──
     rules_match_mode: str = "any"  # any=命中任一 / all=全部命中
@@ -52,21 +52,13 @@ class RouterConfig:
     embedding_local_model_path: str = ""
     embedding_local_installed: bool = False
 
-    # 领域原型与阈值
-    domain_prototypes: Dict[str, str] = field(default_factory=dict)
-    domain_prototype_vectors: Dict[str, List[float]] = field(default_factory=dict)
-    threshold_high: float = 0.75  # 切入新领域阈值
-    threshold_low: float = 0.60   # 切走当前领域阈值（滞回）
+    # 向量匹配阈值（M4 适配模型能力向量的相似度分布）
+    threshold_high: float = 0.65  # 高置信度阈值，超过则向量路由直接用
+    threshold_low: float = 0.55   # 滞回低阈值，当前模型相似度低于此值才允许切走
 
-    # ── llm 策略：分类模型 ──
-    classifier_deploy: str = "cloud"  # cloud / local
-    classifier_account_id: int = 0
-    classifier_local_model: str = ""
-    classifier_prompt: str = (
-        "你是一个对话分类器。请将以下用户请求分类到以下领域之一：{domains}。"
-        "只输出领域名称，不要解释。\n\n用户请求：{text}"
-    )
-    classifier_max_tokens: int = 50
+    # ── llm 策略：路由模型 ──
+    router_model: str = ""  # 空=自动选最便宜最快的启用模型
+    classifier_max_tokens: int = 200
 
 
 @dataclass

@@ -53,8 +53,8 @@ class SummaryManager(ContextManager):
         turn_count = self._count_turns(messages)
         est_tokens = self._estimate_tokens(messages)
 
-        # 跨语义切换时强制摘要（即使未达阈值），确保新模型获得压缩后的上下文
-        force_summary = getattr(ctx, "domain_switched", False)
+        # 模型切换时强制摘要（即使未达阈值），确保新模型获得压缩后的上下文
+        force_summary = getattr(ctx, "model_switched", False)
 
         # 未达阈值且非跨语义切换，直传
         if not force_summary and (turn_count < self.config.summary_trigger_turns and

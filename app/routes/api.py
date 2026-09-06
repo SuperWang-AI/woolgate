@@ -75,25 +75,25 @@ async def verify_bearer_token(request: Request, db: AsyncSession = Depends(get_d
 
 
 async def _parse_slash_command(
-    messages: List[dict], valid_domains: List[str]
+    messages: List[dict], valid_models: List[str]
 ) -> tuple[Optional[str], List[dict]]:
     """
-    从最新一条 user 消息中解析斜杠命令。
+    从最新一条 user 消息中解析斜杠命令（指定模型）。
 
     Args:
         messages: 消息列表
-        valid_domains: 有效领域列表（从数据库动态读取）
+        valid_models: 有效模型列表（从 model_catalog 动态读取）
 
-    返回：(forced_domain, cleaned_messages)
-    - forced_domain: 斜杠命令指定的领域；无命令或命令无效则为 None
+    返回：(forced_model, cleaned_messages)
+    - forced_model: 斜杠命令指定的模型；无命令或命令无效则为 None
     - cleaned_messages: 移除斜杠前缀后的消息列表
     """
-    if not messages or not valid_domains:
+    if not messages or not valid_models:
         return None, messages
 
-    # 构建动态正则：/(domain1|domain2|...)，后面跟空格或结束
-    domain_pattern = "|".join(re.escape(d) for d in valid_domains)
-    pattern = re.compile(rf'^/({domain_pattern})(?:\s+|$)', re.IGNORECASE)
+    # 构建动态正则：/(model1|model2|...)，后面跟空格或结束
+    model_pattern = "|".join(re.escape(m) for m in valid_models)
+    pattern = re.compile(rf'^/({model_pattern})(?:\s+|$)', re.IGNORECASE)
 
     # 找到最后一条 user 消息
     for i in range(len(messages) - 1, -1, -1):
@@ -101,13 +101,13 @@ async def _parse_slash_command(
             content = messages[i].get("content", "")
             match = pattern.match(content)
             if match:
-                domain = match.group(1).lower()
+                model = match.group(1)
                 # 移除斜杠前缀，保留后面的内容
                 cleaned_content = content[match.end():].strip()
                 cleaned_messages = list(messages)
                 cleaned_messages[i] = {**messages[i], "content": cleaned_content}
-                logger.info(f"斜杠命令: /{domain} → 强制指定领域")
-                return domain, cleaned_messages
+                logger.info(f"斜杠命令: /{model} → 强制指定模型")
+                return model, cleaned_messages
             break  # 只检查最新一条 user 消息
 
     return None, messages
@@ -163,24 +163,24 @@ async def chat_completions(
     # 构建消息
     messages = [{"role": msg.role, "content": msg.content} for msg in req.messages]
 
-    # 动态读取有效领域列表（用于斜杠命令解析）
-    from app.models.database import DomainPrototype
+    # 动态读取有效模型列表（用于斜杠命令解析）
+    from app.models.database import ModelCatalog
     result = await db.execute(
-        select(DomainPrototype).where(DomainPrototype.is_active == True)  # noqa: E712
+        select(ModelCatalog).where(ModelCatalog.is_active == True)  # noqa: E712
     )
-    valid_domains = [d.name for d in result.scalars().all()]
+    valid_models = [m.model_name for m in result.scalars().all()]
 
-    # 解析斜杠命令（/code /creative 等），有效领域列表动态校验
-    forced_domain, messages = await _parse_slash_command(messages, valid_domains)
+    # 解析斜杠命令（/qwen-plus /kimi-k2.6 等），有效模型列表动态校验
+    forced_model, messages = await _parse_slash_command(messages, valid_models)
 
-    # API Key 默认领域（可选，为空则向量路由自动判断）
-    default_domain = None
+    # API Key 默认模型（可选，为空则向量/LLM 路由自动选择）
+    default_model = None
     api_key_id = None
     if api_key:
         api_key_id = api_key.id
-        default_domain = api_key.default_domain
-        if default_domain:
-            logger.info(f"API Key: id={api_key.id} name={api_key.name} default_domain={default_domain}")
+        default_model = api_key.default_model
+        if default_model:
+            logger.info(f"API Key: id={api_key.id} name={api_key.name} default_model={default_model}")
 
     # 预估Token数
     estimated_tokens = sum(len(msg.get("content", "")) for msg in messages) * 0.5
@@ -215,8 +215,8 @@ async def chat_completions(
         estimated_tokens=estimated_tokens,
         session_id=session_id,
         api_key_id=api_key_id,
-        default_domain=default_domain,
-        forced_domain=forced_domain,
+        default_model=default_model,
+        forced_model=forced_model,
     )
 
     executor = Executor(db)

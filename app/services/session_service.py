@@ -36,7 +36,7 @@ class SessionStateService:
         if model:
             return SessionState(
                 session_id=model.session_id,
-                current_domain=model.current_domain,
+                current_model=model.current_model,
                 current_account_id=model.current_account_id,
                 summary=model.summary,
                 summary_version=model.summary_version,
@@ -55,7 +55,7 @@ class SessionStateService:
     async def update(
         self,
         session_id: str,
-        current_domain: Optional[str] = None,
+        current_model: Optional[str] = None,
         current_account_id: Optional[int] = None,
         summary: Optional[str] = None,
         increment_turn: bool = False,
@@ -71,8 +71,8 @@ class SessionStateService:
         if not model:
             return
 
-        if current_domain is not None:
-            model.current_domain = current_domain
+        if current_model is not None:
+            model.current_model = current_model
         if current_account_id is not None:
             model.current_account_id = current_account_id
         if summary is not None:
@@ -82,15 +82,15 @@ class SessionStateService:
             model.turn_count += 1
 
         await self.db.commit()
-        logger.debug(f"更新会话状态: {session_id}, domain={current_domain}, turn={model.turn_count}")
+        logger.debug(f"更新会话状态: {session_id}, model={current_model}, turn={model.turn_count}")
 
     async def increment_turn(self, session_id: str) -> None:
         """增加会话轮次"""
         await self.update(session_id, increment_turn=True)
 
-    async def set_domain(self, session_id: str, domain: str) -> None:
-        """设置当前领域"""
-        await self.update(session_id, current_domain=domain)
+    async def set_model(self, session_id: str, model: str) -> None:
+        """设置当前模型"""
+        await self.update(session_id, current_model=model)
 
     async def set_account(self, session_id: str, account_id: int) -> None:
         """设置当前账号（会话粘性用）"""

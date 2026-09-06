@@ -176,7 +176,7 @@ class SessionState(Base):
     __tablename__ = "session_state"
 
     session_id = Column(String(64), primary_key=True, comment="会话ID")
-    current_domain = Column(String(50), nullable=True, comment="当前领域标签（滞回判定用）")
+    current_model = Column(String(100), nullable=True, comment="当前模型（滞回判定用）")
     current_account_id = Column(Integer, nullable=True, comment="当前账号（会话粘性）")
     summary = Column(Text, nullable=True, comment="异步维护的对话摘要")
     summary_version = Column(Integer, default=0, comment="摘要版本号，每次更新+1")
@@ -186,20 +186,21 @@ class SessionState(Base):
 
 
 class ModelCatalog(Base):
-    """模型供应目录——账号/模型抽象为供应项（平台化地基，M1 建表不启用）"""
+    """模型供应目录——模型能力清单，LLM 智能路由的核心配置（M4 重构后启用）"""
     __tablename__ = "model_catalog"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     vendor = Column(String(50), nullable=False, comment="厂商名称")
-    model_name = Column(String(100), nullable=False, comment="真实模型ID")
+    model_name = Column(String(100), nullable=False, unique=True, comment="真实模型ID")
     display_name = Column(String(100), nullable=True, comment="展示名")
+    capability_description = Column(Text, nullable=True, comment="能力描述（给 LLM 路由和 embedding 用）")
     capability_tags = Column(JSON, nullable=True, comment="能力标签: ['code','chat','vision']")
-    domain_tags = Column(JSON, nullable=True, comment="适用领域: ['general','code']")
     input_price = Column(Float, nullable=True, comment="输入单价 元/1M token")
     output_price = Column(Float, nullable=True, comment="输出单价 元/1M token")
+    avg_latency = Column(Float, nullable=True, comment="平均延迟（秒），LLM 路由做延迟优化参考")
     context_window = Column(Integer, nullable=True, comment="上下文窗口")
+    embedding_vector = Column(JSON, nullable=True, comment="能力描述的向量（List[float]，自动计算）")
     is_active = Column(Boolean, default=True, comment="是否启用")
-    description = Column(Text, nullable=True, comment="描述")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -218,45 +219,17 @@ class RouterRule(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-# M2 智能路由：新增表
+# M3 企业化能力：API Key 表
 # ══════════════════════════════════════════════════════════════
 
-class DomainPrototype(Base):
-    """领域原型表——向量路由的领域定义，每个领域有多条示例文本和平均向量"""
-    __tablename__ = "domain_prototype"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(50), nullable=False, unique=True, comment="领域名称，如 general/code/creative/data")
-    description = Column(Text, nullable=True, comment="领域描述文本（兼容旧版，多示例模式下可空）")
-    examples = Column(JSON, nullable=True, comment="领域示例文本列表（List[str]，用于计算平均向量）")
-    embedding_vector = Column(JSON, nullable=True, comment="示例文本的平均向量（List[float]，JSON 存储）")
-    is_active = Column(Boolean, default=True, comment="是否启用")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
 class ApiKey(Base):
-    """API Key 表——绑定可用领域和默认领域，企业化部署的权限控制"""
+    """API Key 表——绑定默认模型，企业化部署的权限控制"""
     __tablename__ = "api_key"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     api_key = Column(String(128), nullable=False, unique=True, index=True, comment="API Key 字符串")
     name = Column(String(100), nullable=True, comment="Key 名称，便于管理")
-    allowed_domains = Column(JSON, nullable=True, comment="允许的领域列表，如 ['general','code']；NULL=全部领域")
-    default_domain = Column(String(50), nullable=True, comment="默认领域；NULL=向量路由自动选择")
-    is_active = Column(Boolean, default=True, comment="是否启用")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class DomainModelMapping(Base):
-    """领域→模型映射表——每个领域下可配置多个模型，按优先级排序"""
-    __tablename__ = "domain_model_mapping"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    domain_id = Column(Integer, nullable=False, index=True, comment="关联 domain_prototype.id")
-    model_name = Column(String(100), nullable=False, comment="真实模型名，如 kimi-k2.6/qwen-plus")
-    priority = Column(Integer, default=50, comment="优先级（数值越大越优先，同优先级按 id 排序）")
+    default_model = Column(String(100), nullable=True, comment="默认模型；NULL=向量/LLM 路由自动选择")
     is_active = Column(Boolean, default=True, comment="是否启用")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

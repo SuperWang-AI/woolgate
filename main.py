@@ -40,38 +40,45 @@ async def lifespan(app: FastAPI):
     # 初始化数据库
     await init_database()
 
-    # 初始化预置领域（M2 向量路由用，M3 多示例平均向量）
+    # 初始化模型能力清单（M4 LLM 智能路由用）
     try:
         from app.models import AsyncSessionLocal
-        from app.services.domain_service import DomainService
+        from app.services.model_catalog_service import ModelCatalogService
         from app.services.embedding import EmbeddingService
-        from app.pipeline.config import RouterConfig
+        from app.pipeline.config import PipelineConfig
+        from app.models.database import ModelAccount
+        from sqlalchemy import select
         async with AsyncSessionLocal() as session:
-            domain_svc = DomainService(session)
-            # 先确保领域存在（补充 examples）
-            await domain_svc.ensure_default_domains(embedding_service=None)
-            # 异步触发向量重算（多示例平均，不阻塞启动，使用独立会话）
+            catalog_svc = ModelCatalogService(session)
+            # 确保所有启用账号的模型都在目录中
+            result = await session.execute(
+                select(ModelAccount).where(ModelAccount.is_enable == True)  # noqa: E712
+            )
+            accounts = result.scalars().all()
+            for account in accounts:
+                await catalog_svc.ensure_model(account.model_name, account.vendor)
+            logger.info(f"模型能力清单初始化完成: {len(accounts)} 个模型")
+
+            # 异步触发模型能力向量重算（不阻塞启动）
             try:
-                from app.pipeline.config import PipelineConfig
                 import asyncio
 
-                async def _recompute_embeddings_async():
+                async def _recompute_model_embeddings_async():
                     try:
                         async with AsyncSessionLocal() as s:
                             cfg = await PipelineConfig.load(s)
                             embed_svc = EmbeddingService(cfg.router_config, db=s)
-                            ds = DomainService(s)
-                            await ds.recompute_all_embeddings(embed_svc)
+                            cs = ModelCatalogService(s)
+                            await cs.recompute_all_embeddings(embed_svc)
                     except Exception as e:
-                        logger.warning(f"领域向量重算失败: {e}")
+                        logger.warning(f"模型能力向量重算失败: {e}")
 
-                asyncio.create_task(_recompute_embeddings_async())
-                logger.info("领域向量重算任务已启动（多示例平均）")
+                asyncio.create_task(_recompute_model_embeddings_async())
+                logger.info("模型能力向量重算任务已启动")
             except Exception as e:
-                logger.warning(f"领域向量重算启动失败（不影响启动）: {e}")
-        logger.info("预置领域初始化完成")
+                logger.warning(f"模型能力向量重算启动失败（不影响启动）: {e}")
     except Exception as e:
-        logger.warning(f"预置领域初始化失败（不影响启动）: {e}")
+        logger.warning(f"模型能力清单初始化失败（不影响启动）: {e}")
 
     # 初始化默认 API Key（M3 企业化部署）
     try:
@@ -87,7 +94,7 @@ async def lifespan(app: FastAPI):
                 default_key = ApiKey(
                     api_key=settings.GATEWAY_BEARER_TOKEN,
                     name="默认全局Key（兼容旧版，自动路由）",
-                    default_domain=None,   # None=向量路由自动判断
+                    default_model=None,   # None=向量/LLM 路由自动选择
                     is_active=True,
                 )
                 session.add(default_key)

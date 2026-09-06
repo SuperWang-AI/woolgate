@@ -86,16 +86,44 @@ async def _ensure_columns(conn):
             await conn.execute(text(f"ALTER TABLE request_log ADD COLUMN {col} {coltype}"))
             logger.info(f"迁移: request_log 增加列 {col}")
 
-    # ── domain_prototype 补列（M3 多示例平均向量）──
-    result = await conn.execute(text("PRAGMA table_info(domain_prototype)"))
+    # ── model_catalog 补列（M4 LLM 智能路由）──
+    result = await conn.execute(text("PRAGMA table_info(model_catalog)"))
     cols = {row[1] for row in result.fetchall()}
-    domain_migrations = [
-        ("examples", "JSON"),
+    catalog_migrations = [
+        ("capability_description", "TEXT"),
+        ("avg_latency", "FLOAT"),
+        ("embedding_vector", "JSON"),
     ]
-    for col, coltype in domain_migrations:
+    for col, coltype in catalog_migrations:
         if col not in cols:
-            await conn.execute(text(f"ALTER TABLE domain_prototype ADD COLUMN {col} {coltype}"))
-            logger.info(f"迁移: domain_prototype 增加列 {col}")
+            await conn.execute(text(f"ALTER TABLE model_catalog ADD COLUMN {col} {coltype}"))
+            logger.info(f"迁移: model_catalog 增加列 {col}")
+
+    # ── api_key 补列（M4 default_domain → default_model）──
+    result = await conn.execute(text("PRAGMA table_info(api_key)"))
+    cols = {row[1] for row in result.fetchall()}
+    if "default_model" not in cols:
+        await conn.execute(text("ALTER TABLE api_key ADD COLUMN default_model VARCHAR(100)"))
+        logger.info("迁移: api_key 增加列 default_model")
+
+    # ── M4 清理：删除废弃的领域表（如果存在）──
+    for table in ["domain_prototype", "domain_model_mapping"]:
+        result = await conn.execute(text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'"))
+        if result.fetchone():
+            await conn.execute(text(f"DROP TABLE {table}"))
+            logger.info(f"M4 清理: 删除废弃表 {table}")
+
+    # ── session_state 迁移：current_domain → current_model ──
+    result = await conn.execute(text("PRAGMA table_info(session_state)"))
+    cols = {row[1] for row in result.fetchall()}
+    if "current_domain" in cols and "current_model" not in cols:
+        # SQLite 不支持直接删列，用重建表方式
+        await conn.execute(text("ALTER TABLE session_state ADD COLUMN current_model VARCHAR(100)"))
+        await conn.execute(text("UPDATE session_state SET current_model = current_domain"))
+        logger.info("迁移: session_state current_domain → current_model")
+    elif "current_model" not in cols:
+        await conn.execute(text("ALTER TABLE session_state ADD COLUMN current_model VARCHAR(100)"))
+        logger.info("迁移: session_state 增加列 current_model")
 
 
 async def init_database():

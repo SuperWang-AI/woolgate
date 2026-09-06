@@ -287,7 +287,7 @@ def create_ui():
                 ui.label('🎯 模型账号管理').classes('text-3xl font-bold text-gray-800')
                 ui.button('➕ 新增账号', on_click=lambda: show_account_dialog()).props('color=primary size=lg')
             
-            # 获取账号列表
+            # 获取账号列表，按厂商分组
             accounts = await get_accounts()
             
             # 查询所有模型的 display_name 映射
@@ -297,9 +297,29 @@ def create_ui():
                 for catalog in catalog_result.scalars().all():
                     model_display_map[catalog.model_name] = catalog.display_name or catalog.model_name
             
-            # 账号列表
+            # 按厂商分组
+            from collections import defaultdict
+            vendor_groups = defaultdict(list)
+            for acc in accounts:
+                vendor_groups[acc.vendor].append(acc)
+            
+            # 账号列表（按厂商分组显示）
             if accounts:
-                for acc in accounts:
+                for vendor, vendor_accounts in vendor_groups.items():
+                    # 厂商分组标题
+                    with ui.card().classes('w-full shadow-md bg-gradient-to-r from-purple-50 to-blue-50'):
+                        with ui.row().classes('items-center gap-3 px-4 py-2'):
+                            ui.icon('business', size='md').classes('text-purple-600')
+                            ui.label(f'{vendor}').classes('text-lg font-bold text-gray-700')
+                            ui.badge(f'{len(vendor_accounts)} 个模型', color='purple')
+                            # 显示该厂商的API Key状态（取第一个账号的Key是否配置）
+                            if vendor_accounts:
+                                first_acc = vendor_accounts[0]
+                                key_status = '✅ 已配置' if first_acc.api_key_encrypted else '❌ 未配置'
+                                ui.label(f'API Key: {key_status}').classes('text-xs text-gray-500')
+                    
+                    # 该厂商下的所有模型
+                    for acc in vendor_accounts:
                     # 提前提取所有需要的数据（避免在 UI 构建时访问 ORM 对象）
                     acc_id = acc.id
                     acc_vendor = acc.vendor

@@ -665,7 +665,8 @@ def create_ui():
                         examples_count = len(m.examples) if m.examples else 0
                         with ui.card().classes('w-full shadow-md'):
                             with ui.row().classes('items-center w-full gap-3'):
-                                ui.label(f'**{m.model_name}**').classes('text-lg font-bold w-40')
+                                display_name = m.display_name or m.model_name
+                                ui.label(f'**{display_name}**').classes('text-lg font-bold w-40')
                                 ui.label(f'[{m.vendor}]').classes('text-xs text-gray-500 w-24')
                                 ui.label((m.capability_description or '')[:60] + ('...' if len(m.capability_description or '') > 60 else '')).classes('text-sm text-gray-600 flex-1')
                                 ui.label(f'示例: {examples_count}条').classes('text-xs text-gray-500')
@@ -718,7 +719,7 @@ def create_ui():
                                         ui.button('💾 保存并重算向量', on_click=save_model).props('color=primary')
                                 return dialog
 
-                            edit_dialog = make_edit_dialog(m.id, m.model_name, m.vendor, m.capability_description, m.examples)
+                            edit_dialog = make_edit_dialog(m.id, m.display_name or m.model_name, m.vendor, m.capability_description, m.examples)
                             edit_btn.on('click', edit_dialog.open)
 
             async def sync_models():

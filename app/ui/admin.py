@@ -644,8 +644,8 @@ def create_ui():
 
             # 操作按钮行
             with ui.row().classes('gap-2'):
-                sync_btn = ui.button('🔄 同步账号模型', icon='refresh').props('outline')
-                recompute_btn = ui.button('🔄 重算所有能力向量', icon='refresh').props('outline')
+                sync_btn = ui.button('同步账号模型', icon='refresh').props('outline')
+                recompute_btn = ui.button('重算所有能力向量', icon='refresh').props('outline')
 
             # 模型列表容器
             model_list_container = ui.column().classes('w-full gap-3')

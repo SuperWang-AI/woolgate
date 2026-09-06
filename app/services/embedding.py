@@ -43,12 +43,37 @@ class EmbeddingService:
             raise ValueError(f"未知的 embedding 后端: {backend}")
 
     async def _embed_cloud(self, text: str) -> List[float]:
-        """云端 embedding（阿里百炼，OpenAI 兼容接口）"""
+        """云端 embedding（根据ModelCatalog中的embedding模型配置）"""
+        from app.models.database import ModelCatalog, ModelAccount
+        
         api_key = self.config.embedding_cloud_api_key
         base_url = self.config.embedding_cloud_base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         model = self.config.embedding_cloud_model or "text-embedding-v3"
 
-        # 优先使用指定账号的Key，其次用配置中的Key，最后自动找阿里百炼账号
+        # 优先使用embedding_model_id指定的模型
+        model_id = getattr(self.config, 'embedding_model_id', 0)
+        if model_id and model_id > 0 and self.db is not None:
+            result = await self.db.execute(
+                select(ModelCatalog).where(ModelCatalog.id == model_id)
+            )
+            cat = result.scalar_one_or_none()
+            if cat:
+                model = cat.model_name
+                # 获取关联账号的API Key
+                if cat.account_id:
+                    acc_result = await self.db.execute(
+                        select(ModelAccount).where(ModelAccount.id == cat.account_id)
+                    )
+                    acc = acc_result.scalar_one_or_none()
+                    if acc and acc.is_enable:
+                        try:
+                            api_key = encryption_service.decrypt(acc.api_key_encrypted)
+                            # 注意：不要用账号的base_url（那是对话接口地址）
+                            # Embedding用标准地址，从配置或默认值获取
+                        except Exception:
+                            pass
+
+        # 兼容旧配置：用embedding_account_id
         if not api_key and self.db is not None:
             account_id = getattr(self.config, 'embedding_account_id', 0)
             if account_id and account_id > 0:
@@ -58,8 +83,8 @@ class EmbeddingService:
 
         if not api_key:
             raise RuntimeError(
-                "云端 embedding 未配置 API Key。请在管线策略页选择 embedding 账号，"
-                "或启用一个阿里百炼账号（会自动借用其 Key）。"
+                "云端 embedding 未配置。请在管线策略页选择 embedding 模型，"
+                "或启用一个阿里百炼账号。"
             )
 
         url = f"{base_url.rstrip('/')}/embeddings"

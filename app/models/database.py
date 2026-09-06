@@ -190,8 +190,10 @@ class ModelCatalog(Base):
     __tablename__ = "model_catalog"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, nullable=True, comment="关联账号ID（一个账号下多个模型）")
     vendor = Column(String(50), nullable=False, comment="厂商名称")
     model_name = Column(String(100), nullable=False, unique=True, comment="真实模型ID")
+    model_type = Column(String(20), default="chat", comment="模型类型: chat/embedding/image/audio")
     display_name = Column(String(100), nullable=True, comment="展示名")
     capability_description = Column(Text, nullable=True, comment="能力描述（给 LLM 路由和 embedding 用）")
     capability_tags = Column(JSON, nullable=True, comment="能力标签: ['code','chat','vision']")

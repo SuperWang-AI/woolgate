@@ -517,47 +517,32 @@ def create_ui():
 
                 ui.label('Embedding 配置（vector/hybrid 策略用）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
                 
-                # 查询所有启用的账号（各厂商都可能有Embedding模型）
-                from app.models.database import ModelAccount, ModelCatalog
+                # 查询ModelCatalog中所有embedding类型的模型
+                from app.models.database import ModelCatalog, ModelAccount
                 async with AsyncSessionLocal() as _s:
-                    _acc_result = await _s.execute(
-                        select(ModelAccount).where(ModelAccount.is_enable == True).order_by(ModelAccount.vendor)
+                    _cat_result = await _s.execute(
+                        select(ModelCatalog).where(ModelCatalog.model_type == 'embedding')
                     )
-                    _accounts = _acc_result.scalars().all()
-                    # 查询model_catalog获取display_name
-                    _cat_result = await _s.execute(select(ModelCatalog))
-                    _catalogs = {c.model_name: c for c in _cat_result.scalars().all()}
-                _account_options = {0: '自动（优先阿里百炼）'}
-                for _acc in _accounts:
-                    # 优先用display_name，没有则用model_name
-                    _cat = _catalogs.get(_acc.model_name)
-                    _display = _cat.display_name if _cat and _cat.display_name else _acc.model_name
-                    _account_options[_acc.id] = f"{_acc.vendor} - {_display}"
+                    _embed_models = _cat_result.scalars().all()
+                    # 查询所有账号用于显示
+                    _acc_result = await _s.execute(select(ModelAccount))
+                    _accounts = {a.id: a for a in _acc_result.scalars().all()}
                 
-                with ui.row().classes('gap-2 w-full'):
-                    embedding_account_id = ui.select(
-                        options=_account_options,
-                        label='使用哪个账号的 API Key',
-                        value=getattr(_router_cfg, 'embedding_account_id', 0) or 0,
-                    ).classes('flex-1')
-                    # 常见的Embedding模型（各厂商都有，支持手动输入）
-                    _embedding_models = [
-                        'text-embedding-v3',      # 阿里百炼
-                        'text-embedding-v2',
-                        'doubao-embedding',        # 字节豆包
-                        'doubao-embedding-large',
-                        'embedding-3',             # 智谱
-                        'bge-large-zh-v1.5',
-                        'bge-m3',
-                    ]
-                    embedding_model = ui.select(
-                        options=_embedding_models,
-                        label='Embedding 模型',
-                        value=_router_cfg.embedding_cloud_model,
-                        with_input=True,
-                    ).classes('flex-1')
+                _embed_options = {0: '自动（选第一个embedding模型）'}
+                for _m in _embed_models:
+                    _acc = _accounts.get(_m.account_id)
+                    _acc_name = _acc.vendor if _acc else '未知'
+                    _embed_options[_m.id] = f"{_m.display_name or _m.model_name}（{_acc_name}）"
                 
-                ui.label('选账号后自动使用其API Key；模型名需与账号厂商匹配（如阿里百炼用text-embedding-v3）').classes('text-xs text-gray-400 -mt-2 mb-3')
+                embedding_model_id = ui.select(
+                    options=_embed_options,
+                    label='选择 Embedding 模型',
+                    value=getattr(_router_cfg, 'embedding_model_id', 0) or 0,
+                ).classes('w-full')
+                if not _embed_models:
+                    ui.label('⚠️ 暂无embedding模型，请先在账号管理中添加').classes('text-xs text-red-500 -mt-2 mb-3')
+                else:
+                    ui.label('选模型后自动使用其关联账号的API Key，无需单独配置').classes('text-xs text-gray-400 -mt-2 mb-3')
 
                 ui.label('滞回阈值（防频繁切换）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
                 with ui.row().classes('gap-2 w-full'):
@@ -635,8 +620,7 @@ def create_ui():
                 # 组装 router_config_json
                 router_config_json = {
                     'embedding_backend': 'cloud',
-                    'embedding_cloud_model': embedding_model.value,
-                    'embedding_account_id': int(embedding_account_id.value),
+                    'embedding_model_id': int(embedding_model_id.value),
                     'threshold_high': float(threshold_high.value),
                     'threshold_low': float(threshold_low.value),
                 }

@@ -78,10 +78,10 @@ async def get_stats():
 
 
 async def get_accounts():
-    """获取所有账号列表"""
+    """获取所有账号列表（启用的排在前面）"""
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(ModelAccount).order_by(desc(ModelAccount.priority))
+            select(ModelAccount).order_by(desc(ModelAccount.is_enable), desc(ModelAccount.priority))
         )
         return result.scalars().all()
 
@@ -334,10 +334,11 @@ def create_ui():
                         with ui.column().classes('w-full px-4 pb-4 gap-3') as content_area:
                             content_area.visible = False
                             
-                            # 模型能力列表
-                            if models:
+                            # 模型能力列表（只显示启用的模型）
+                            active_models = [m for m in models if m.is_active]
+                            if active_models:
                                 ui.label('📋 模型能力清单').classes('text-sm font-bold text-gray-600 mt-2')
-                                for model in models:
+                                for model in active_models:
                                     with ui.card().classes('w-full shadow-sm'):
                                         with ui.row().classes('items-center gap-2 w-full'):
                                             ui.icon('smart_toy', size='sm').classes('text-blue-500')

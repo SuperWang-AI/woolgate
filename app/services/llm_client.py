@@ -71,8 +71,11 @@ class LLMClient:
             "Content-Type": "application/json",
         }
         
+        # 确定调用时使用的模型名：优先使用endpoint_id（如豆包/火山引擎），否则用model_name
+        api_model = account.endpoint_id if account.endpoint_id else account.model_name
+        
         payload = {
-            "model": account.model_name,
+            "model": api_model,
             "messages": messages,
             "stream": True,
             **kwargs
@@ -88,7 +91,7 @@ class LLMClient:
         # 确定API地址
         url = self._get_api_url(account)
         
-        logger.info(f"请求上游API: {url} model={account.model_name}")
+        logger.info(f"请求上游API: {url} model={api_model}")
         logger.debug(f"请求payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
         
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -136,8 +139,11 @@ class LLMClient:
             "Content-Type": "application/json",
         }
         
+        # 确定调用时使用的模型名：优先使用endpoint_id（如豆包/火山引擎），否则用model_name
+        api_model = account.endpoint_id if account.endpoint_id else account.model_name
+        
         payload = {
-            "model": account.model_name,
+            "model": api_model,
             "messages": messages,
             "stream": False,
             **kwargs
@@ -153,7 +159,7 @@ class LLMClient:
         # 确定API地址
         url = self._get_api_url(account)
         
-        logger.info(f"请求上游API: {url} model={account.model_name}")
+        logger.info(f"请求上游API: {url} model={api_model}")
         
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(url, headers=headers, json=payload)

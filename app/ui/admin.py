@@ -978,6 +978,7 @@ def show_account_dialog(account_id: Optional[int] = None):
             'vendor': '',
             'api_key': '',
             'model_name': 'chat',
+            'endpoint_id': '',
             'base_url': '',
             'extra_model': '',
             'priority': 50,
@@ -1012,6 +1013,7 @@ def show_account_dialog(account_id: Optional[int] = None):
                         'vendor': account.vendor or '',
                         'api_key': api_key_plain,
                         'model_name': account.model_name or 'chat',
+                        'endpoint_id': account.endpoint_id or '',
                         'base_url': account.base_url or '',
                         'extra_model': extra_model,
                         'priority': account.priority if account.priority is not None else 50,
@@ -1026,7 +1028,8 @@ def show_account_dialog(account_id: Optional[int] = None):
 
             vendor = ui.input('厂商名称', value=initial['vendor']).classes('w-full')
             api_key = ui.input('API Key', value=initial['api_key'], password=True, password_toggle_button=True).classes('w-full')
-            model_name = ui.input('模型名称（路由匹配）', value=initial['model_name']).classes('w-full')
+            model_name = ui.input('模型名称（用于显示和路由匹配）', value=initial['model_name']).classes('w-full')
+            endpoint_id = ui.input('Endpoint ID（如豆包/火山引擎需要，调用时优先使用；不需要可留空）', value=initial['endpoint_id']).classes('w-full')
             base_url = ui.input('API Base URL', value=initial['base_url']).classes('w-full')
 
             # 实际模型名：可下拉选择（自动获取填充）也可手动输入，无需手写 JSON
@@ -1114,6 +1117,7 @@ def show_account_dialog(account_id: Optional[int] = None):
                             if api_key.value:
                                 account.api_key_encrypted = encryption_service.encrypt(api_key.value)
                             account.model_name = model_name.value
+                            account.endpoint_id = endpoint_id.value if endpoint_id.value else None
                             account.base_url = base_url.value
                             if parsed_extra:
                                 account.extra_json = parsed_extra
@@ -1129,6 +1133,7 @@ def show_account_dialog(account_id: Optional[int] = None):
                                 vendor=vendor.value,
                                 api_key_encrypted=encryption_service.encrypt(api_key.value) if api_key.value else '',
                                 model_name=model_name.value,
+                                endpoint_id=endpoint_id.value if endpoint_id.value else None,
                                 base_url=base_url.value,
                                 extra_json=parsed_extra,
                                 priority=int(priority.value),

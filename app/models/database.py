@@ -77,7 +77,8 @@ class ModelAccount(Base):
     # 基础信息
     vendor = Column(String(50), nullable=False, comment="厂商名称")
     virtual_model = Column(String(100), default="chat", comment="虚拟模型名(客户端请求)")
-    model_name = Column(String(100), nullable=False, comment="真实模型ID(上游API)")
+    model_name = Column(String(100), nullable=False, comment="真实模型名(用于显示和路由)")
+    endpoint_id = Column(String(100), nullable=True, comment="Endpoint ID(如豆包/火山引擎需要,调用时优先使用)")
     api_key_encrypted = Column(Text, nullable=False, comment="加密后的API Key")
     base_url = Column(String(255), nullable=True, comment="接口地址")
     

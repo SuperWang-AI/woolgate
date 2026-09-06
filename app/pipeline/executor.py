@@ -273,6 +273,7 @@ class Executor:
         completion_tokens = 0
         error_occurred = False
         error_message = None
+        full_content = ""  # 累加输出内容，用于估算 token
 
         try:
             async for chunk in llm_client.chat_completion_stream(
@@ -284,6 +285,18 @@ class Executor:
                     if usage:
                         prompt_tokens = usage.get("prompt_tokens", 0)
                         completion_tokens = usage.get("completion_tokens", 0)
+                
+                # 累加输出内容（用于 usage 为空时估算 token）
+                try:
+                    choices = chunk.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            full_content += content
+                except Exception:
+                    pass
+                
                 yield chunk
 
         except Exception as e:
@@ -294,6 +307,26 @@ class Executor:
 
         finally:
             response_time = int((time.time() - start_time) * 1000)
+            
+            # 如果模型没有返回 usage，用字符数估算 token
+            if prompt_tokens == 0 and ctx.original_messages:
+                # 估算输入 token：中文约1.5字符/token，英文约4字符/token
+                input_text = ""
+                for msg in ctx.original_messages:
+                    content = msg.get("content", "")
+                    if isinstance(content, str):
+                        input_text += content
+                if input_text:
+                    # 简单估算：中文字符数 + 英文单词数*1.3
+                    chinese_chars = sum(1 for c in input_text if '\u4e00' <= c <= '\u9fff')
+                    other_chars = len(input_text) - chinese_chars
+                    prompt_tokens = int(chinese_chars / 1.5 + other_chars / 4)
+            
+            if completion_tokens == 0 and full_content:
+                chinese_chars = sum(1 for c in full_content if '\u4e00' <= c <= '\u9fff')
+                other_chars = len(full_content) - chinese_chars
+                completion_tokens = int(chinese_chars / 1.5 + other_chars / 4)
+            
             await self._record(
                 account, ctx, prompt_tokens, completion_tokens,
                 "success" if not error_occurred else "failed",

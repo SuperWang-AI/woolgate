@@ -290,6 +290,13 @@ def create_ui():
             # 获取账号列表
             accounts = await get_accounts()
             
+            # 查询所有模型的 display_name 映射
+            model_display_map = {}
+            async with AsyncSessionLocal() as session:
+                catalog_result = await session.execute(select(ModelCatalog))
+                for catalog in catalog_result.scalars().all():
+                    model_display_map[catalog.model_name] = catalog.display_name or catalog.model_name
+            
             # 账号列表
             if accounts:
                 for acc in accounts:
@@ -297,6 +304,7 @@ def create_ui():
                     acc_id = acc.id
                     acc_vendor = acc.vendor
                     acc_model_name = acc.model_name
+                    acc_model_display = model_display_map.get(acc.model_name, acc.model_name)
                     acc_priority = acc.priority
                     acc_is_enable = acc.is_enable
                     acc_total_prompt_tokens = acc.total_prompt_tokens or 0
@@ -360,7 +368,7 @@ def create_ui():
                                 with ui.row().classes('items-center gap-3 flex-wrap'):
                                     ui.icon('business', size='sm').classes('text-purple-600')
                                     ui.label(f"{acc_vendor}").classes('text-xl font-bold text-gray-800')
-                                    ui.label(f"模型: {acc_model_name}").classes('text-sm text-gray-600 bg-gray-100 px-2 py-1 rounded')
+                                    ui.label(f"模型: {acc_model_display}").classes('text-sm text-gray-600 bg-gray-100 px-2 py-1 rounded')
                                     ui.badge(f"优先级 {acc_priority}", color='blue')
                                     if acc_is_enable:
                                         ui.badge('✅ 启用', color='positive')
@@ -777,18 +785,30 @@ def create_ui():
             
             # 获取最近 50 条日志
             async with AsyncSessionLocal() as session:
+                # 查询统计数据（全部）
+                from sqlalchemy import func
+                total_result = await session.execute(select(func.count(RequestLog.id)))
+                total_count = total_result.scalar() or 0
+                
+                success_result = await session.execute(select(func.count(RequestLog.id)).where(RequestLog.status == 'success'))
+                success_count = success_result.scalar() or 0
+                
+                failed_result = await session.execute(select(func.count(RequestLog.id)).where(RequestLog.status == 'failed'))
+                failed_count = failed_result.scalar() or 0
+                
+                token_result = await session.execute(
+                    select(func.coalesce(func.sum(RequestLog.prompt_tokens), 0), 
+                           func.coalesce(func.sum(RequestLog.completion_tokens), 0))
+                )
+                total_prompt, total_completion = token_result.first()
+                
+                # 查询最近50条用于显示
                 result = await session.execute(
                     select(RequestLog)
                     .order_by(desc(RequestLog.created_at))
                     .limit(50)
                 )
                 logs = result.scalars().all()
-            
-            # 统计信息（统一卡片模板：标题 + 大数字主值 + 小字副行，等高对齐）
-            success_count = sum(1 for log in logs if log.status == 'success')
-            failed_count = sum(1 for log in logs if log.status == 'failed')
-            total_prompt = sum(log.prompt_tokens or 0 for log in logs)
-            total_completion = sum(log.completion_tokens or 0 for log in logs)
             
             def stat_card(icon, icon_color, title, value, sub=None):
                 with ui.card().classes('flex-1').style('height:120px'):

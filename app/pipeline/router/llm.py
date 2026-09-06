@@ -88,8 +88,9 @@ class LLMRouter(ModelRouter):
                 ctx.router_latency_ms = int((time.time() - start) * 1000)
                 return
 
-            # 1. 提取用户消息
+            # 1. 提取用户消息和对话上下文
             user_text = self._extract_latest_user_message(ctx.original_messages)
+            context_summary = self._extract_context_summary(ctx.original_messages)
             if not user_text:
                 target_model = ctx.default_model or self.config.fallback_model
                 ctx.target_model = target_model
@@ -107,8 +108,8 @@ class LLMRouter(ModelRouter):
                 ctx.router_latency_ms = int((time.time() - start) * 1000)
                 return
 
-            # 3. 构建 LLM 路由 prompt
-            prompt = self._build_routing_prompt(user_text, models)
+            # 3. 构建 LLM 路由 prompt（包含上下文）
+            prompt = self._build_routing_prompt(user_text, models, context_summary)
 
             # 4. 调用路由模型
             router_model = await self._get_router_model()
@@ -144,8 +145,39 @@ class LLMRouter(ModelRouter):
                     return " ".join(texts).strip()
         return ""
 
-    def _build_routing_prompt(self, user_text: str, models: list) -> str:
-        """构建路由决策 prompt"""
+    def _extract_context_summary(self, messages: List[dict], max_rounds: int = 3) -> str:
+        """提取最近几轮对话的上下文摘要，用于路由决策"""
+        if not messages or len(messages) <= 1:
+            return ""
+        
+        # 取最近 max_rounds 轮对话（排除最后一条用户消息）
+        context_messages = messages[:-1] if messages[-1].get("role") == "user" else messages
+        context_messages = context_messages[-(max_rounds * 2):]  # 每轮2条消息
+        
+        if not context_messages:
+            return ""
+        
+        parts = []
+        for msg in context_messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                text = content.strip()
+            elif isinstance(content, list):
+                text = " ".join([c.get("text", "") for c in content if c.get("type") == "text"]).strip()
+            else:
+                continue
+            if text:
+                # 截断长文本
+                if len(text) > 100:
+                    text = text[:100] + "..."
+                role_label = "用户" if role == "user" else "助手"
+                parts.append(f"{role_label}: {text}")
+        
+        return "\n".join(parts) if parts else ""
+
+    def _build_routing_prompt(self, user_text: str, models: list, context_summary: str = "") -> str:
+        """构建路由决策 prompt（包含对话上下文）"""
         model_list = []
         for m in models:
             cost_info = ""
@@ -157,13 +189,20 @@ class LLMRouter(ModelRouter):
             )
 
         models_text = "\n".join(model_list)
+        
+        context_section = ""
+        if context_summary:
+            context_section = f"""
+对话上下文（最近几轮）：
+{context_summary}
+"""
 
-        prompt = f"""你是一个 AI 模型路由专家。根据用户请求，从以下模型中选择最合适的一个。
+        prompt = f"""你是一个 AI 模型路由专家。根据用户当前请求和对话上下文，从以下模型中选择最合适的一个。
 
 可用模型：
 {models_text}
-
-用户请求：{user_text}
+{context_section}
+用户当前请求：{user_text}
 
 请输出 JSON 格式：
 {{"model": "推荐的模型名", "reason": "推荐理由（一句话）", "confidence": 0.0-1.0}}
@@ -171,8 +210,9 @@ class LLMRouter(ModelRouter):
 要求：
 1. 只从上面列出的模型中选择
 2. 考虑用户请求的意图、复杂度、成本和延迟
-3. 简单请求选便宜快的模型，复杂请求选能力强的模型
-4. 只输出 JSON，不要其他内容"""
+3. 考虑对话上下文：如果上下文是编程/技术讨论，即使当前问题简单，也优先选择编程能力强的模型
+4. 简单请求选便宜快的模型，复杂请求选能力强的模型
+5. 只输出 JSON，不要其他内容"""
 
         return prompt
 

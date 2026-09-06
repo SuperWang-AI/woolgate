@@ -297,23 +297,81 @@ def create_ui():
                 for catalog in catalog_result.scalars().all():
                     model_display_map[catalog.model_name] = catalog.display_name or catalog.model_name
             
-            # 按厂商分组
+            # 按厂商分组，并查询每个厂商下的模型能力
             from collections import defaultdict
             vendor_groups = defaultdict(list)
             for acc in accounts:
                 vendor_groups[acc.vendor].append(acc)
             
-            # 账号列表（按厂商分组显示）
+            # 查询每个厂商的模型能力（从ModelCatalog）
+            vendor_models = {}
+            async with AsyncSessionLocal() as session:
+                for vendor in vendor_groups.keys():
+                    cat_result = await session.execute(
+                        select(ModelCatalog).where(ModelCatalog.vendor == vendor)
+                    )
+                    vendor_models[vendor] = cat_result.scalars().all()
+            
+            # 账号列表（按厂商分组显示，可折叠）
             if accounts:
                 for vendor, vendor_accounts in vendor_groups.items():
-                    # 厂商分组标题
-                    with ui.card().classes('w-full shadow-sm bg-gradient-to-r from-purple-50 to-blue-50'):
-                        with ui.row().classes('items-center gap-3 px-4 py-2'):
-                            ui.icon('business', size='sm').classes('text-purple-600')
-                            ui.label(f'{vendor}').classes('text-base font-bold text-gray-700')
-                            ui.badge(f'{len(vendor_accounts)} 个模型', color='purple')
+                    models = vendor_models.get(vendor, [])
                     
-                    # 该厂商下的所有模型
+                    # 厂商分组卡片（可折叠）
+                    with ui.card().classes('w-full shadow-md'):
+                        # 标题行（可点击展开/折叠）
+                        with ui.row().classes('items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50') as header_row:
+                            ui.icon('business', size='md').classes('text-purple-600')
+                            ui.label(f'{vendor}').classes('text-lg font-bold text-gray-800')
+                            ui.badge(f'{len(models)} 个模型', color='purple')
+                            # 显示启用的模型数
+                            active_count = sum(1 for m in models if m.is_active)
+                            ui.badge(f'{active_count} 启用', color='positive')
+                            # 折叠箭头
+                            expand_icon = ui.icon('expand_more', size='md').classes('text-gray-400 ml-auto')
+                        
+                        # 可折叠内容区域
+                        with ui.column().classes('w-full px-4 pb-4 gap-3') as content_area:
+                            content_area.visible = False
+                            
+                            # 模型能力列表
+                            if models:
+                                ui.label('📋 模型能力清单').classes('text-sm font-bold text-gray-600 mt-2')
+                                for model in models:
+                                    with ui.card().classes('w-full shadow-sm'):
+                                        with ui.row().classes('items-center gap-2 w-full'):
+                                            ui.icon('smart_toy', size='sm').classes('text-blue-500')
+                                            ui.label(model.display_name or model.model_name).classes('text-sm font-bold text-gray-700')
+                                            ui.badge(model.model_type or 'chat', color='blue').classes('text-xs')
+                                            if model.is_active:
+                                                ui.badge('启用', color='positive').classes('text-xs')
+                                            else:
+                                                ui.badge('停用', color='negative').classes('text-xs')
+                                            ui.space()
+                                            # 查看/编辑能力描述按钮
+                                            ui.button('能力详情', icon='info', on_click=lambda m=model: show_model_capability_dialog(m.id)).props('outline size=sm color=primary').classes('text-xs')
+                                        
+                                        # 能力描述（截断显示）
+                                        if model.capability_description:
+                                            desc = model.capability_description[:100] + '...' if len(model.capability_description) > 100 else model.capability_description
+                                            ui.label(desc).classes('text-xs text-gray-500 mt-1')
+                                        
+                                        # 示例数
+                                        if model.examples:
+                                            ui.label(f'示例数: {len(model.examples)} 条').classes('text-xs text-gray-400')
+                            
+                            ui.separator()
+                            
+                            # 账号详细信息（原有内容）
+                            ui.label('⚙️ 账号配置').classes('text-sm font-bold text-gray-600')
+                    
+                    # 点击标题行切换展开/折叠
+                    async def toggle_content(area=content_area, icon=expand_icon):
+                        area.visible = not area.visible
+                        icon.props(f'name={"expand_more" if not area.visible else "expand_less"}')
+                    header_row.on('click', toggle_content)
+                    
+                    # 该厂商下的所有账号详细信息
                     for acc in vendor_accounts:
                         # 提前提取所有需要的数据（避免在 UI 构建时访问 ORM 对象）
                         acc_id = acc.id
@@ -1208,6 +1266,79 @@ def show_account_dialog(account_id: Optional[int] = None):
 
         dialog.open()
 
+    ui.timer(0.01, show, once=True)
+
+
+def show_model_capability_dialog(model_id: int):
+    """显示模型能力详情对话框"""
+    async def show():
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(ModelCatalog).where(ModelCatalog.id == model_id)
+            )
+            model = result.scalar_one_or_none()
+            if not model:
+                ui.notify('模型不存在', type='negative')
+                return
+            
+            # 提前提取数据
+            model_name = model.model_name
+            display_name = model.display_name or model.model_name
+            model_type = model.model_type or 'chat'
+            vendor = model.vendor
+            capability_description = model.capability_description or ''
+            examples = model.examples or []
+            is_active = model.is_active
+        
+        with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl'):
+            ui.label(f'🧠 模型能力详情 - {display_name}').classes('text-2xl font-bold')
+            ui.label(f'厂商: {vendor} | 类型: {model_type}').classes('text-sm text-gray-500')
+            
+            ui.separator()
+            
+            # 能力描述
+            ui.label('能力描述').classes('text-sm font-bold text-gray-600')
+            desc_input = ui.textarea(
+                value=capability_description,
+                placeholder='描述这个模型擅长什么，用于智能路由...'
+            ).classes('w-full h-32')
+            
+            # 示例列表
+            ui.label(f'典型请求示例（{len(examples)} 条，用于计算能力向量）').classes('text-sm font-bold text-gray-600 mt-2')
+            examples_text = '\n'.join(examples) if examples else ''
+            examples_input = ui.textarea(
+                value=examples_text,
+                placeholder='每行一条示例请求...'
+            ).classes('w-full h-40 font-mono text-xs')
+            
+            # 启用状态
+            is_active_checkbox = ui.checkbox('启用此模型', value=is_active)
+            
+            ui.separator()
+            
+            with ui.row().classes('gap-2 justify-end'):
+                ui.button('取消', on_click=dialog.close).props('outline')
+                
+                async def save():
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(
+                            select(ModelCatalog).where(ModelCatalog.id == model_id)
+                        )
+                        m = result.scalar_one_or_none()
+                        if m:
+                            m.capability_description = desc_input.value
+                            # 解析示例（每行一条）
+                            new_examples = [line.strip() for line in examples_input.value.split('\n') if line.strip()]
+                            m.examples = new_examples
+                            m.is_active = is_active_checkbox.value
+                            await session.commit()
+                            ui.notify('模型能力已保存', type='positive')
+                            dialog.close()
+                            # 刷新页面
+                            ui.navigate.to('/admin/accounts')
+                
+                ui.button('💾 保存', on_click=save).props('color=primary')
+    
     ui.timer(0.01, show, once=True)
 
 

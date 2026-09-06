@@ -862,6 +862,52 @@ def create_ui():
                     ui.label('暂无日志记录').classes('text-xl text-gray-500 mt-4')
 
 
+async def sync_model_to_catalog(account, session):
+    """同步账号模型到能力目录并计算向量，返回 (model_name, is_new)"""
+    from app.services.model_catalog_service import ModelCatalogService
+    from app.services.embedding import EmbeddingService
+    from app.pipeline.config import PipelineConfig
+    
+    svc = ModelCatalogService(session)
+    catalog = await svc.ensure_model(account.model_name, account.vendor)
+    is_new = catalog.examples is None or len(catalog.examples) == 0
+    
+    # 新模型设置默认示例
+    if is_new:
+        default_examples = [
+            '你好，今天天气怎么样', '帮我写一封请假邮件', '1+1等于几',
+            '推荐一本好看的小说', '今天吃什么好呢', '帮我翻译这句话成英文',
+            '给孩子讲个睡前故事', '微信怎么改密码', '周末去哪里玩比较好',
+            '帮我总结一下这段文字', '电脑开不了机怎么办', '给我几个减肥的建议',
+            '怎么提高工作效率', '推荐几部科幻电影', '帮我写个朋友圈文案',
+        ]
+        catalog.examples = default_examples
+        if not catalog.capability_description:
+            catalog.capability_description = f'{account.vendor}大模型，通用对话能力'
+        await session.commit()
+    
+    # 计算向量（多示例平均）
+    cfg = await PipelineConfig.load(session)
+    embed_svc = EmbeddingService(cfg.router_config, db=session)
+    if catalog.examples:
+        vectors = []
+        for example in catalog.examples:
+            vec = await embed_svc.embed(example)
+            if vec:
+                vectors.append(vec)
+        if vectors:
+            dim = len(vectors[0])
+            avg_vector = [sum(v[i] for v in vectors) / len(vectors) for i in range(dim)]
+            catalog.embedding_vector = avg_vector
+    elif catalog.capability_description:
+        vec = await embed_svc.embed(catalog.capability_description)
+        if vec:
+            catalog.embedding_vector = vec
+    await session.commit()
+    
+    return catalog.display_name or catalog.model_name, is_new
+
+
 def toggle_account_enable(account_id: int, enable: bool):
     """启用/停用账号"""
     async def toggle():
@@ -878,7 +924,19 @@ def toggle_account_enable(account_id: int, enable: bool):
             if enable:
                 account.cool_down_until = None
             await session.commit()
-            ui.notify(f'已{"启用" if enable else "停用"} {account.vendor}', type='positive' if enable else 'warning')
+            
+            if enable:
+                # 启用时自动同步模型并计算向量
+                try:
+                    model_display, is_new = await sync_model_to_catalog(account, session)
+                    if is_new:
+                        ui.notify(f'已启用 {account.vendor}，新增模型 {model_display} 并计算能力向量', type='positive')
+                    else:
+                        ui.notify(f'已启用 {account.vendor}，模型 {model_display} 能力向量已更新', type='positive')
+                except Exception as e:
+                    ui.notify(f'已启用 {account.vendor}，但模型同步失败: {e}', type='warning')
+            else:
+                ui.notify(f'已停用 {account.vendor}', type='warning')
             # 刷新页面
             ui.run_javascript('setTimeout(() => window.location.reload(), 600)')
     ui.timer(0.01, toggle, once=True)
@@ -1054,8 +1112,19 @@ def show_account_dialog(account_id: Optional[int] = None):
                             session.add(new_account)
 
                         await session.commit()
+                        
+                        # 保存后如果账号启用，自动同步模型并计算向量
+                        saved_account = account if account_id else new_account
+                        if saved_account.is_enable:
+                            try:
+                                model_display, is_new = await sync_model_to_catalog(saved_account, session)
+                                sync_msg = f'，模型 {model_display} 已同步并计算向量'
+                            except Exception as sync_err:
+                                sync_msg = f'，但模型同步失败: {sync_err}'
+                        else:
+                            sync_msg = ''
 
-                    ui.notify('保存成功，正在刷新...', type='positive')
+                    ui.notify(f'保存成功{sync_msg}，正在刷新...', type='positive')
                     dialog.close()
                     # 刷新页面
                     ui.run_javascript('window.location.reload()')

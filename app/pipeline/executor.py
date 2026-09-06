@@ -169,11 +169,14 @@ class Executor:
             prev_account = await self._router._infer_previous_account(
                 ctx.original_messages, ctx.requested_model, ctx.estimated_tokens
             )
-            if prev_account:
+            # 粘性只在同一模型内有效：路由决策切换模型时不保持旧账号粘性
+            if prev_account and (not ctx.target_model or prev_account.model_name == ctx.target_model):
                 ctx.selector_strategy = self._account_selector.name
                 ctx.selector_decision = f"sticky: 继续使用账号 {prev_account.id}"
                 logger.info(f"会话粘性：继续使用账号 {prev_account.id} ({prev_account.vendor})")
                 return prev_account
+            elif prev_account:
+                logger.info(f"模型切换（{prev_account.model_name} → {ctx.target_model}），跳过会话粘性")
 
         # 2. 过滤可用账号
         available = await self._router._filter_available_accounts(

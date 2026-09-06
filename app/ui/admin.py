@@ -143,8 +143,9 @@ def create_ui():
     NAV_PAGES = [
         ('🏠 首页', '/', 'home'),
         ('👥 账号管理', '/accounts', 'accounts'),
+        ('🧠 模型能力', '/models', 'models'),
         ('⚙️ 系统配置', '/config', 'config'),
-        ('🧠 管线策略', '/pipeline', 'pipeline'),
+        ('🧩 管线策略', '/pipeline', 'pipeline'),
         ('📋 请求日志', '/logs', 'logs'),
     ]
 
@@ -495,11 +496,11 @@ def create_ui():
                 ui.label('根据用户请求语义，智能选择最适合的模型领域').classes('text-xs text-gray-500 mb-3')
 
                 router_strategy = ui.select(
-                    ['off', 'rules', 'vector', 'llm'],
+                    ['off', 'rules', 'vector', 'llm', 'hybrid'],
                     label='路由策略',
                     value=getattr(config, 'router_strategy', 'off')
                 ).classes('w-full')
-                ui.label('off=不路由（默认） / rules=关键词匹配 / vector=向量相似度 / llm=小模型分类').classes('text-xs text-gray-400 -mt-2 mb-3')
+                ui.label('off=不路由 / rules=关键词匹配 / vector=向量相似度 / llm=小模型分类 / hybrid=混合（向量高置信直接用，低置信升级LLM）').classes('text-xs text-gray-400 -mt-2 mb-3')
 
                 # 加载当前 router_config
                 from app.pipeline.config import PipelineConfig
@@ -591,78 +592,6 @@ def create_ui():
                 ollama_url = ui.input('Ollama 地址', value=config.ollama_base_url).classes('w-full')
                 ui.label('启用后，vendor=ollama 的账号可参与调度；关闭则全部跳过').classes('text-xs text-gray-400 -mt-2')
 
-            # ── ⑤ 模型能力清单（LLM 智能路由用，M4）──
-            with ui.card().classes('w-full shadow-lg'):
-                ui.label('⑤ 模型能力清单').classes('text-xl font-bold text-gray-700 mb-1')
-                ui.label('LLM 智能路由的核心配置：每个模型的能力描述、成本、延迟和能力向量。新增账号后自动同步，可手动微调能力描述').classes('text-xs text-gray-500 mb-3')
-
-                # 操作按钮行
-                with ui.row().classes('gap-2 mb-3'):
-                    sync_btn = ui.button('🔄 同步账号模型', icon='refresh').props('outline')
-                    recompute_btn = ui.button('🔄 重算所有能力向量', icon='refresh').props('outline')
-
-                # 模型列表容器（动态刷新）
-                model_list_container = ui.column().classes('w-full gap-2')
-
-                async def refresh_model_list():
-                    """刷新模型能力清单"""
-                    model_list_container.clear()
-                    async with AsyncSessionLocal() as session:
-                        from app.services.model_catalog_service import ModelCatalogService
-                        svc = ModelCatalogService(session)
-                        models = await svc.list_active_models()
-                        if not models:
-                            ui.label('暂无模型，点击"同步账号模型"从启用账号同步').classes('text-sm text-gray-400')
-                            return
-                        for m in models:
-                            vector_status = '✅ 已计算' if m.embedding_vector else '❌ 未计算'
-                            cost_text = f'¥{m.input_price}/¥{m.output_price}' if m.input_price else '未设置'
-                            with ui.row().classes('items-center w-full p-2 bg-gray-50 rounded gap-2'):
-                                ui.label(f'**{m.model_name}**').classes('text-sm font-bold w-32')
-                                ui.label(f'[{m.vendor}]').classes('text-xs text-gray-500 w-20')
-                                ui.label((m.capability_description or '')[:50] + ('...' if len(m.capability_description or '') > 50 else '')).classes('text-xs text-gray-600 flex-1')
-                                ui.label(vector_status).classes('text-xs')
-                                ui.label(f'成本: {cost_text}').classes('text-xs text-gray-500')
-
-                async def sync_models():
-                    """从启用账号同步模型到目录"""
-                    async with AsyncSessionLocal() as session:
-                        from app.services.model_catalog_service import ModelCatalogService
-                        svc = ModelCatalogService(session)
-                        result = await session.execute(
-                            select(ModelAccount).where(ModelAccount.is_enable == True)  # noqa: E712
-                        )
-                        accounts = result.scalars().all()
-                        for account in accounts:
-                            await svc.ensure_model(account.model_name, account.vendor)
-                    ui.notify(f'已同步 {len(accounts)} 个模型', type='positive')
-                    await refresh_model_list()
-
-                async def recompute_all():
-                    """重算所有模型能力向量"""
-                    recompute_btn.props('loading')
-                    try:
-                        async with AsyncSessionLocal() as session:
-                            from app.services.model_catalog_service import ModelCatalogService
-                            from app.services.embedding import EmbeddingService
-                            from app.pipeline.config import PipelineConfig
-                            cfg = await PipelineConfig.load(session)
-                            embed_svc = EmbeddingService(cfg.router_config, db=session)
-                            svc = ModelCatalogService(session)
-                            count = await svc.recompute_all_embeddings(embed_svc)
-                        ui.notify(f'已重算 {count} 个模型能力向量', type='positive')
-                        await refresh_model_list()
-                    except Exception as e:
-                        ui.notify(f'重算失败: {e}', type='negative')
-                    finally:
-                        recompute_btn.props(remove='loading')
-
-                sync_btn.on('click', sync_models)
-                recompute_btn.on('click', recompute_all)
-
-                # 初始加载
-                await refresh_model_list()
-
             # 保存按钮
             async def save_pipeline():
                 # 组装 router_config_json
@@ -701,6 +630,135 @@ def create_ui():
                     ui.notify('保存失败', type='negative')
 
             ui.button('💾 保存策略', on_click=save_pipeline).props('color=primary size=lg').classes('mt-2')
+
+
+    @ui.page('/models')
+    async def models_page():
+        """模型能力管理页面（M4 智能路由核心配置）"""
+        ui.page_title('模型能力 - WoolGate')
+        nav_header('models')
+
+        with ui.column().classes('w-full max-w-6xl mx-auto p-6 gap-6'):
+            ui.label('🧠 模型能力管理').classes('text-3xl font-bold text-gray-800')
+            ui.label('LLM 智能路由的核心配置：每个模型的能力描述、典型示例和能力向量。新增账号后自动同步，可手动微调').classes('text-sm text-gray-500 -mt-4')
+
+            # 操作按钮行
+            with ui.row().classes('gap-2'):
+                sync_btn = ui.button('🔄 同步账号模型', icon='refresh').props('outline')
+                recompute_btn = ui.button('🔄 重算所有能力向量', icon='refresh').props('outline')
+
+            # 模型列表容器
+            model_list_container = ui.column().classes('w-full gap-3')
+
+            async def refresh_model_list():
+                """刷新模型能力清单"""
+                model_list_container.clear()
+                async with AsyncSessionLocal() as session:
+                    from app.services.model_catalog_service import ModelCatalogService
+                    svc = ModelCatalogService(session)
+                    models = await svc.list_active_models()
+                    if not models:
+                        ui.label('暂无模型，点击"同步账号模型"从启用账号同步').classes('text-sm text-gray-400 p-4')
+                        return
+                    for m in models:
+                        vector_status = '✅ 已计算' if m.embedding_vector else '❌ 未计算'
+                        examples_count = len(m.examples) if m.examples else 0
+                        with ui.card().classes('w-full shadow-md'):
+                            with ui.row().classes('items-center w-full gap-3'):
+                                ui.label(f'**{m.model_name}**').classes('text-lg font-bold w-40')
+                                ui.label(f'[{m.vendor}]').classes('text-xs text-gray-500 w-24')
+                                ui.label((m.capability_description or '')[:60] + ('...' if len(m.capability_description or '') > 60 else '')).classes('text-sm text-gray-600 flex-1')
+                                ui.label(f'示例: {examples_count}条').classes('text-xs text-gray-500')
+                                ui.label(vector_status).classes('text-xs')
+                                edit_btn = ui.button('✏️ 编辑', icon='edit').props('outline size=sm')
+
+                            # 编辑对话框
+                            def make_edit_dialog(model_id, model_name, vendor, cap_desc, examples_json):
+                                with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl'):
+                                    ui.label(f'✏️ 编辑模型能力：{model_name}').classes('text-xl font-bold')
+                                    ui.label(f'厂商：{vendor}').classes('text-sm text-gray-500 -mt-2')
+
+                                    cap_input = ui.textarea('能力描述', value=cap_desc or '').classes('w-full').props('rows=3')
+                                    examples_text = ui.textarea(
+                                        '典型用户请求示例（每行一条，用于计算能力向量）',
+                                        value='\n'.join(examples_json) if examples_json else ''
+                                    ).classes('w-full').props('rows=8')
+                                    ui.label('示例越多越口语化，向量匹配越精准。建议每个模型10-15条').classes('text-xs text-gray-400 -mt-2')
+
+                                    async def save_model():
+                                        try:
+                                            examples_list = [line.strip() for line in examples_text.value.split('\n') if line.strip()]
+                                            async with AsyncSessionLocal() as s:
+                                                from app.services.model_catalog_service import ModelCatalogService
+                                                svc2 = ModelCatalogService(s)
+                                                result = await s.execute(select(ModelCatalog).where(ModelCatalog.id == model_id))
+                                                model = result.scalar_one_or_none()
+                                                if model:
+                                                    model.capability_description = cap_input.value
+                                                    model.examples = examples_list
+                                                    await s.commit()
+                                            ui.notify('已保存，正在重算能力向量...', type='positive')
+                                            dialog.close()
+                                            # 重算该模型向量
+                                            async with AsyncSessionLocal() as s:
+                                                from app.services.model_catalog_service import ModelCatalogService
+                                                from app.services.embedding import EmbeddingService
+                                                from app.pipeline.config import PipelineConfig
+                                                cfg = await PipelineConfig.load(s)
+                                                embed_svc = EmbeddingService(cfg.router_config, db=s)
+                                                svc3 = ModelCatalogService(s)
+                                                await svc3.recompute_all_embeddings(embed_svc)
+                                            ui.notify('能力向量已更新', type='positive')
+                                            await refresh_model_list()
+                                        except Exception as e:
+                                            ui.notify(f'保存失败: {e}', type='negative')
+
+                                    with ui.row().classes('w-full justify-end gap-2 mt-4'):
+                                        ui.button('取消', on_click=dialog.close).props('flat')
+                                        ui.button('💾 保存并重算向量', on_click=save_model).props('color=primary')
+                                return dialog
+
+                            edit_dialog = make_edit_dialog(m.id, m.model_name, m.vendor, m.capability_description, m.examples)
+                            edit_btn.on('click', edit_dialog.open)
+
+            async def sync_models():
+                """从启用账号同步模型到目录"""
+                async with AsyncSessionLocal() as session:
+                    from app.services.model_catalog_service import ModelCatalogService
+                    svc = ModelCatalogService(session)
+                    result = await session.execute(
+                        select(ModelAccount).where(ModelAccount.is_enable == True)  # noqa: E712
+                    )
+                    accounts = result.scalars().all()
+                    for account in accounts:
+                        await svc.ensure_model(account.model_name, account.vendor)
+                ui.notify(f'已同步 {len(accounts)} 个模型', type='positive')
+                await refresh_model_list()
+
+            async def recompute_all():
+                """重算所有模型能力向量"""
+                recompute_btn.props('loading')
+                try:
+                    async with AsyncSessionLocal() as session:
+                        from app.services.model_catalog_service import ModelCatalogService
+                        from app.services.embedding import EmbeddingService
+                        from app.pipeline.config import PipelineConfig
+                        cfg = await PipelineConfig.load(session)
+                        embed_svc = EmbeddingService(cfg.router_config, db=session)
+                        svc = ModelCatalogService(session)
+                        count = await svc.recompute_all_embeddings(embed_svc)
+                    ui.notify(f'已重算 {count} 个模型能力向量', type='positive')
+                    await refresh_model_list()
+                except Exception as e:
+                    ui.notify(f'重算失败: {e}', type='negative')
+                finally:
+                    recompute_btn.props(remove='loading')
+
+            sync_btn.on('click', sync_models)
+            recompute_btn.on('click', recompute_all)
+
+            # 初始加载
+            await refresh_model_list()
 
 
     @ui.page('/logs')
@@ -887,7 +945,8 @@ def show_account_dialog(account_id: Optional[int] = None):
             # 实际模型名：可下拉选择（自动获取填充）也可手动输入，无需手写 JSON
             # 初始 options 必须包含当前值，否则空列表 + 非空 value 会抛 ValueError
             _extra_options = [initial['extra_model']] if initial['extra_model'] else []
-            extra_model = ui.select(options=_extra_options, with_input=True, label='实际模型名（上游调用，自动获取可填充）', value=initial['extra_model']).classes('w-full')
+            _extra_value = initial['extra_model'] if initial['extra_model'] else None
+            extra_model = ui.select(options=_extra_options, with_input=True, label='实际模型名（上游调用，自动获取可填充）', value=_extra_value).classes('w-full')
             balance_info_label = ui.label('💰 厂商余额: 未获取').classes('text-sm text-gray-600')
 
             async def auto_fetch():

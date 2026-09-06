@@ -666,7 +666,7 @@ def create_ui():
                         with ui.card().classes('w-full shadow-md'):
                             with ui.row().classes('items-center w-full gap-3'):
                                 display_name = m.display_name or m.model_name
-                                ui.label(f'**{display_name}**').classes('text-lg font-bold w-40')
+                                ui.label(display_name).classes('text-lg font-bold w-40')
                                 ui.label(f'[{m.vendor}]').classes('text-xs text-gray-500 w-24')
                                 ui.label((m.capability_description or '')[:60] + ('...' if len(m.capability_description or '') > 60 else '')).classes('text-sm text-gray-600 flex-1')
                                 ui.label(f'示例: {examples_count}条').classes('text-xs text-gray-500')

@@ -35,10 +35,9 @@ class PipelineContext:
     estimated_tokens: int
     session_id: str = ""  # 会话标识（从 X-Session-Id 头读取，缺省用 client_ip）
 
-    # ── API Key 权限控制（企业化部署）──
+    # ── API Key 信息（企业化部署）──
     api_key_id: Optional[int] = None  # 匹配到的 ApiKey ID
-    allowed_domains: Optional[List[str]] = None  # API Key 允许的领域列表，None=全部
-    default_domain: Optional[str] = None  # API Key 默认领域，None=自动路由
+    default_domain: Optional[str] = None  # API Key 默认领域，None=向量路由自动判断
     forced_domain: Optional[str] = None  # 斜杠命令强制指定的领域（/code 等）
 
     # ── ① ModelRouter 输出 ──

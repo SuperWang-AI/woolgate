@@ -93,8 +93,8 @@ class VectorRouter(ModelRouter):
                 ctx.router_latency_ms = int((time.time() - start) * 1000)
                 return
 
-            # 3. 读取启用的领域原型（受 API Key allowed_domains 限制）
-            domains = await self._load_active_domains(allowed_domains=ctx.allowed_domains)
+            # 3. 读取启用的领域原型
+            domains = await self._load_active_domains()
             if not domains:
                 target_domain = ctx.default_domain or self.config.fallback_domain
                 target_model = await self._select_model_for_domain(target_domain)
@@ -149,14 +149,12 @@ class VectorRouter(ModelRouter):
                     return " ".join(texts).strip()
         return ""
 
-    async def _load_active_domains(self, allowed_domains: Optional[List[str]] = None) -> List[DomainPrototype]:
-        """加载所有启用且有向量的领域原型，受 allowed_domains 限制"""
+    async def _load_active_domains(self) -> List[DomainPrototype]:
+        """加载所有启用且有向量的领域原型"""
         stmt = select(DomainPrototype).where(
             DomainPrototype.is_active == True,  # noqa: E712
             DomainPrototype.embedding_vector.isnot(None),
         )
-        if allowed_domains is not None:
-            stmt = stmt.where(DomainPrototype.name.in_(allowed_domains))
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 

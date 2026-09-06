@@ -30,9 +30,6 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# 斜杠命令正则：/code /creative /data /general，后面跟空格或结束
-SLASH_COMMAND_PATTERN = re.compile(r'^/(general|code|creative|data)(?:\s+|$)', re.IGNORECASE)
-
 
 class Message(BaseModel):
     role: str
@@ -53,8 +50,8 @@ async def verify_bearer_token(request: Request, db: AsyncSession = Depends(get_d
     验证 Bearer Token，返回匹配的 ApiKey 对象。
 
     优先级：
-    1. api_key 表中匹配的 Key（企业化部署，绑定领域权限）
-    2. 全局默认 token（settings.GATEWAY_BEARER_TOKEN），兼容旧版，返回 None 表示无领域限制
+    1. api_key 表中匹配的 Key（可配置默认领域）
+    2. 全局默认 token（settings.GATEWAY_BEARER_TOKEN），兼容旧版，返回 None
     """
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
@@ -70,29 +67,39 @@ async def verify_bearer_token(request: Request, db: AsyncSession = Depends(get_d
     if api_key:
         return api_key
 
-    # 2. 兼容全局默认 token（无领域限制，全部领域可用，自动路由）
+    # 2. 兼容全局默认 token
     if token == settings.GATEWAY_BEARER_TOKEN:
         return None
 
     raise HTTPException(status_code=401, detail="无效的Token")
 
 
-def _parse_slash_command(messages: List[dict]) -> tuple[Optional[str], List[dict]]:
+async def _parse_slash_command(
+    messages: List[dict], valid_domains: List[str]
+) -> tuple[Optional[str], List[dict]]:
     """
     从最新一条 user 消息中解析斜杠命令。
 
+    Args:
+        messages: 消息列表
+        valid_domains: 有效领域列表（从数据库动态读取）
+
     返回：(forced_domain, cleaned_messages)
-    - forced_domain: 斜杠命令指定的领域，如 "code"；无命令则为 None
+    - forced_domain: 斜杠命令指定的领域；无命令或命令无效则为 None
     - cleaned_messages: 移除斜杠前缀后的消息列表
     """
-    if not messages:
+    if not messages or not valid_domains:
         return None, messages
+
+    # 构建动态正则：/(domain1|domain2|...)，后面跟空格或结束
+    domain_pattern = "|".join(re.escape(d) for d in valid_domains)
+    pattern = re.compile(rf'^/({domain_pattern})(?:\s+|$)', re.IGNORECASE)
 
     # 找到最后一条 user 消息
     for i in range(len(messages) - 1, -1, -1):
         if messages[i].get("role") == "user":
             content = messages[i].get("content", "")
-            match = SLASH_COMMAND_PATTERN.match(content)
+            match = pattern.match(content)
             if match:
                 domain = match.group(1).lower()
                 # 移除斜杠前缀，保留后面的内容
@@ -156,25 +163,24 @@ async def chat_completions(
     # 构建消息
     messages = [{"role": msg.role, "content": msg.content} for msg in req.messages]
 
-    # 解析斜杠命令（/code /creative 等），移除前缀
-    forced_domain, messages = _parse_slash_command(messages)
+    # 动态读取有效领域列表（用于斜杠命令解析）
+    from app.models.database import DomainPrototype
+    result = await db.execute(
+        select(DomainPrototype).where(DomainPrototype.is_active == True)  # noqa: E712
+    )
+    valid_domains = [d.name for d in result.scalars().all()]
 
-    # API Key 领域权限
-    allowed_domains = None
+    # 解析斜杠命令（/code /creative 等），有效领域列表动态校验
+    forced_domain, messages = await _parse_slash_command(messages, valid_domains)
+
+    # API Key 默认领域（可选，为空则向量路由自动判断）
     default_domain = None
     api_key_id = None
     if api_key:
         api_key_id = api_key.id
-        allowed_domains = api_key.allowed_domains  # None=全部领域
-        default_domain = api_key.default_domain    # None=自动路由
-        logger.info(f"API Key: id={api_key.id} name={api_key.name} "
-                    f"allowed={allowed_domains} default={default_domain}")
-
-    # 斜杠命令领域权限校验：只能切换到 allowed_domains 内的领域
-    if forced_domain and allowed_domains is not None:
-        if forced_domain not in allowed_domains:
-            logger.warning(f"斜杠命令 /{forced_domain} 不在 API Key 允许的领域 {allowed_domains} 内，忽略")
-            forced_domain = None
+        default_domain = api_key.default_domain
+        if default_domain:
+            logger.info(f"API Key: id={api_key.id} name={api_key.name} default_domain={default_domain}")
 
     # 预估Token数
     estimated_tokens = sum(len(msg.get("content", "")) for msg in messages) * 0.5
@@ -209,7 +215,6 @@ async def chat_completions(
         estimated_tokens=estimated_tokens,
         session_id=session_id,
         api_key_id=api_key_id,
-        allowed_domains=allowed_domains,
         default_domain=default_domain,
         forced_domain=forced_domain,
     )

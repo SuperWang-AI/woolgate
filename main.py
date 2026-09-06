@@ -86,9 +86,8 @@ async def lifespan(app: FastAPI):
             if not existing:
                 default_key = ApiKey(
                     api_key=settings.GATEWAY_BEARER_TOKEN,
-                    name="默认全局Key（兼容旧版，全部领域可用）",
-                    allowed_domains=None,  # None=全部领域
-                    default_domain=None,   # None=自动路由
+                    name="默认全局Key（兼容旧版，自动路由）",
+                    default_domain=None,   # None=向量路由自动判断
                     is_active=True,
                 )
                 session.add(default_key)

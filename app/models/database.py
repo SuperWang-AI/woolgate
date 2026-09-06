@@ -195,6 +195,7 @@ class ModelCatalog(Base):
     display_name = Column(String(100), nullable=True, comment="展示名")
     capability_description = Column(Text, nullable=True, comment="能力描述（给 LLM 路由和 embedding 用）")
     capability_tags = Column(JSON, nullable=True, comment="能力标签: ['code','chat','vision']")
+    examples = Column(JSON, nullable=True, comment="典型用户请求示例列表（List[str]，用于计算平均向量）")
     input_price = Column(Float, nullable=True, comment="输入单价 元/1M token")
     output_price = Column(Float, nullable=True, comment="输出单价 元/1M token")
     avg_latency = Column(Float, nullable=True, comment="平均延迟（秒），LLM 路由做延迟优化参考")

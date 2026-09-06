@@ -19,43 +19,84 @@ logger = logging.getLogger(__name__)
 PRESET_MODEL_DESCRIPTIONS = {
     "qwen-plus": {
         "vendor": "阿里百炼",
-        "capability_description": "通义千问中等尺寸模型，具备较强的代码生成、数学推理和多语言能力，适合编程任务、技术问答、数据分析和复杂推理场景。",
-        "capability_tags": ["code", "reasoning", "multilingual", "data"],
+        "capability_description": "编程代码生成、算法实现、技术问答、数据分析、数学推理。擅长写代码、调试、SQL、系统设计。",
+        "capability_tags": ["code", "reasoning", "data", "technical"],
         "input_price": 0.8,
         "output_price": 2.0,
         "context_window": 131072,
+        "examples": [
+            "用Python写一个快速排序算法",
+            "帮我调试这段JavaScript代码，报错undefined",
+            "写一个SQL查询，统计每个部门的平均工资",
+            "React Hooks的useEffect怎么用？",
+            "写一个正则表达式匹配邮箱地址",
+            "如何用Python爬取网页数据？",
+            "解释一下TCP三次握手过程",
+            "设计一个高并发的秒杀系统架构",
+            "帮我分析这份销售数据的趋势",
+            "用Excel怎么做数据透视表？",
+        ],
     },
     "qwen-turbo": {
         "vendor": "阿里百炼",
-        "capability_description": "通义千问轻量快速模型，响应速度快，适合简单问答、文本分类、摘要生成和路由决策等低延迟场景。",
+        "capability_description": "轻量快速模型，响应速度快，适合简单问答、文本分类、摘要生成和路由决策等低延迟场景。",
         "capability_tags": ["fast", "chat", "classification", "routing"],
         "input_price": 0.3,
         "output_price": 0.6,
         "context_window": 131072,
+        "examples": [
+            "你好",
+            "今天天气怎么样",
+            "帮我分类这封邮件是垃圾邮件吗",
+            "总结这段文字的要点",
+            "1+1等于几",
+        ],
     },
     "kimi-k2.6": {
         "vendor": "月之暗面",
-        "capability_description": "Moonshot 推理模型，具备强创意写作、长文本理解和深度思考能力，适合文案创作、故事生成、文档分析和复杂推理。注意：推理模型 temperature 固定为 1。",
-        "capability_tags": ["creative", "reasoning", "long-context", "writing"],
+        "capability_description": "创意写作、文案生成、故事创作、诗歌、长文本理解、文档分析。擅长写文章、润色、总结、翻译。",
+        "capability_tags": ["creative", "writing", "long-context", "translation"],
         "input_price": 4.0,
         "output_price": 21.0,
         "context_window": 262144,
+        "examples": [
+            "写一篇关于秋天的散文，要意境优美",
+            "帮我写一个产品发布会的开场白",
+            "写一首关于月亮的现代诗",
+            "给我想一个奶茶店的名字和slogan",
+            "写一个科幻短篇小说的开头",
+            "帮我润色这段营销文案，更有感染力",
+            "你好，今天天气怎么样？",
+            "推荐一本好看的小说",
+            "怎么做好时间管理？",
+            "帮我翻译这句话成英文：人工智能正在改变世界",
+        ],
     },
     "deepseek-chat": {
         "vendor": "DeepSeek",
-        "capability_description": "DeepSeek 通用对话模型，代码能力突出，适合编程辅助、技术问答和通用对话场景。",
+        "capability_description": "通用对话模型，代码能力突出，适合编程辅助、技术问答和通用对话场景。",
         "capability_tags": ["code", "chat", "reasoning"],
         "input_price": 1.0,
         "output_price": 2.0,
         "context_window": 65536,
+        "examples": [
+            "用Python写一个快速排序",
+            "解释一下什么是递归",
+            "帮我写一个链表反转的代码",
+        ],
     },
     "gpt-4o": {
         "vendor": "OpenAI",
-        "capability_description": "GPT-4o 多模态模型，综合能力强，支持文本和图像输入，适合复杂推理、多模态理解和高质量生成。",
+        "capability_description": "多模态模型，综合能力强，支持文本和图像输入，适合复杂推理、多模态理解和高质量生成。",
         "capability_tags": ["multimodal", "reasoning", "creative", "code"],
         "input_price": 5.0,
         "output_price": 15.0,
         "context_window": 128000,
+        "examples": [
+            "分析这张图片的内容",
+            "帮我设计一个复杂的系统架构",
+            "写一篇深度技术分析文章",
+        ],
     },
 }
 
@@ -91,6 +132,15 @@ class ModelCatalogService:
         """
         existing = await self.get_by_model_name(model_name)
         if existing:
+            # 已存在但 examples 为空，且预置模板中有 examples，自动补充
+            if not existing.examples:
+                preset = PRESET_MODEL_DESCRIPTIONS.get(model_name)
+                if preset and preset.get("examples"):
+                    existing.examples = preset["examples"]
+                    existing.embedding_vector = None  # 清空旧向量，待重新计算
+                    await self.db.commit()
+                    await self.db.refresh(existing)
+                    logger.info(f"模型目录补充 examples: {model_name} ({len(preset['examples'])} 条)")
             return existing
 
         # 匹配预置模板
@@ -102,6 +152,7 @@ class ModelCatalogService:
                 display_name=model_name,
                 capability_description=preset["capability_description"],
                 capability_tags=preset["capability_tags"],
+                examples=preset.get("examples", []),
                 input_price=preset["input_price"],
                 output_price=preset["output_price"],
                 context_window=preset["context_window"],
@@ -151,7 +202,10 @@ class ModelCatalogService:
 
     async def recompute_all_embeddings(self, embedding_service) -> int:
         """
-        重新计算所有启用模型的能力向量。
+        重新计算所有启用模型的能力向量（多示例平均）。
+
+        优先使用 examples 字段的典型用户请求计算平均向量；
+        如果没有 examples，则回退到用 capability_description 计算向量。
 
         Args:
             embedding_service: EmbeddingService 实例
@@ -162,17 +216,31 @@ class ModelCatalogService:
         models = await self.list_active_models()
         count = 0
         for model in models:
-            if not model.capability_description:
-                continue
             try:
-                vector = await embedding_service.embed(model.capability_description)
-                if vector:
-                    model.embedding_vector = vector
-                    count += 1
+                # 优先用多示例平均向量
+                if model.examples:
+                    vectors = []
+                    for example in model.examples:
+                        vec = await embedding_service.embed(example)
+                        if vec:
+                            vectors.append(vec)
+                    if vectors:
+                        dim = len(vectors[0])
+                        avg_vector = [sum(v[i] for v in vectors) / len(vectors) for i in range(dim)]
+                        model.embedding_vector = avg_vector
+                        count += 1
+                        continue
+
+                # 回退：用能力描述计算向量
+                if model.capability_description:
+                    vector = await embedding_service.embed(model.capability_description)
+                    if vector:
+                        model.embedding_vector = vector
+                        count += 1
             except Exception as e:
                 logger.warning(f"模型 {model.model_name} 向量计算失败: {e}")
         await self.db.commit()
-        logger.info(f"模型能力向量重算完成: {count}/{len(models)} 个模型")
+        logger.info(f"模型能力向量重算完成: {count}/{len(models)} 个模型（多示例平均）")
         return count
 
     async def generate_description_with_llm(

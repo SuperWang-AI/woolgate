@@ -93,6 +93,7 @@ async def _ensure_columns(conn):
         ("capability_description", "TEXT"),
         ("avg_latency", "FLOAT"),
         ("embedding_vector", "JSON"),
+        ("examples", "JSON"),
     ]
     for col, coltype in catalog_migrations:
         if col not in cols:

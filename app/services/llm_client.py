@@ -176,6 +176,9 @@ class LLMClient:
             base = account.base_url.rstrip("/")
             if "chat/completions" in base:
                 return base
+            # 标准OpenAI兼容base（以/v1结尾）→ 加 /chat/completions
+            if base.endswith("/v1"):
+                return f"{base}/chat/completions"
             # 否则添加标准路径
             return f"{base}/v1/chat/completions"
         

@@ -337,11 +337,11 @@ def create_ui():
                         with ui.column().classes('w-full px-4 pb-4 gap-3') as content_area:
                             content_area.visible = False
                             
-                            # 模型能力列表（只显示启用的模型，整合账号信息）
-                            active_models = [m for m in models if m.is_active]
-                            if active_models:
+                            # 模型能力列表（显示全部模型，停用的置灰显示，便于恢复）
+                            models_to_show = models
+                            if models_to_show:
                                 ui.label('📋 模型清单').classes('text-sm font-bold text-gray-600 mt-2')
-                                for model in active_models:
+                                for model in models_to_show:
                                     # 获取该模型对应的账号信息
                                     acc = model_to_account.get(model.model_name)
                                     acc_id = acc.id if acc else None
@@ -354,7 +354,8 @@ def create_ui():
                                     acc_daily_tokens = acc.daily_used_tokens or 0 if acc else 0
                                     acc_base_url = acc.base_url if acc else ''
                                     
-                                    with ui.card().classes('w-full shadow-sm'):
+                                    card_cls = 'w-full shadow-sm' + ('' if model.is_active else ' opacity-60')
+                                    with ui.card().classes(card_cls):
                                         # 标题行
                                         with ui.row().classes('items-center gap-2 w-full'):
                                             ui.icon('smart_toy', size='sm').classes('text-blue-500')
@@ -1234,6 +1235,7 @@ def show_model_capability_dialog(model_id: int):
                             ui.navigate.to('/admin/accounts')
                 
                 ui.button('💾 保存', on_click=save).props('color=primary')
+        dialog.open()
     
     ui.timer(0.01, show, once=True)
 
@@ -1383,8 +1385,8 @@ def show_delete_dialog(account_id: int):
                 ui.button('取消', on_click=dialog.close).props('flat')
                 ui.button('🗑️ 确认删除', on_click=confirm_delete).props('color=negative')
         
-        dialog.open()
     
+        dialog.open()
     ui.timer(0.01, show, once=True)
 
 

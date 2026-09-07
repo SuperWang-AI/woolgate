@@ -1055,10 +1055,7 @@ def show_account_dialog(account_id: Optional[int] = None):
                     # 1. 拉模型列表
                     models = await fetch_models(tmp)
                     if models:
-                        extra_model.options = models
-                        extra_model.update()
-                        if extra_model.value not in models:
-                            extra_model.value = models[0]
+                        ui.notify(f'发现 {len(models)} 个可用模型', type='info')
                     # 2. 拉余额
                     unit, bal = await fetch_balance(tmp)
                     balance_info_label.set_text(f'💰 厂商余额: {bal:.2f}（{unit}）')

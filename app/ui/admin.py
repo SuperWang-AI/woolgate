@@ -413,47 +413,53 @@ def create_ui():
         # 顶部导航栏
         nav_header('config')
         
-        with ui.column().classes('w-full max-w-4xl mx-auto p-6 gap-6'):
+        with ui.column().classes('w-full max-w-4xl mx-auto p-6 gap-4'):
             ui.label('⚙️ 全局系统配置').classes('text-3xl font-bold text-gray-800')
-            ui.label('所有配置保存后立即生效，无需重启服务').classes('text-sm text-gray-500 -mt-4')
-            
+            ui.label('所有配置保存后立即生效，无需重启服务').classes('text-sm text-gray-500 -mt-3')
+
             # 获取当前配置
             config = await get_system_config()
-            
-            with ui.card().classes('w-full shadow-lg'):
-                ui.label('额度耗尽策略').classes('text-xl font-bold text-gray-700 mb-3')
-                quota_strategy = ui.select(
-                    ['auto_switch_next', 'return_warn_error', 'allow_pay_quota'],
-                    label='策略',
-                    value=config.quota_exhaust_strategy
-                ).classes('w-full')
-                
-                ui.separator().classes('my-6')
-                
-                ui.label('重试配置').classes('text-xl font-bold text-gray-700 mb-3')
-                max_retry = ui.number('最大重试次数', value=config.max_retry_count, min=0, max=10).classes('w-full')
-                cool_down = ui.number('故障冷却秒数', value=config.cool_down_seconds, min=0).classes('w-full')
-                
-                ui.separator().classes('my-6')
-                
-                ui.label('日志配置').classes('text-xl font-bold text-gray-700 mb-3')
-                log_retention = ui.number('日志保留天数', value=config.log_retention_days, min=1).classes('w-full')
 
-                # 保存按钮
-                async def save():
-                    config_data = {
-                        'quota_exhaust_strategy': quota_strategy.value,
-                        'max_retry_count': int(max_retry.value),
-                        'cool_down_seconds': int(cool_down.value),
-                        'log_retention_days': int(log_retention.value),
-                    }
-                    success = await save_system_config(config_data)
-                    if success:
-                        ui.notify('配置已保存', type='positive')
-                    else:
-                        ui.notify('保存失败', type='negative')
+            # 额度耗尽策略
+            with ui.card().classes('w-full shadow-sm'):
+                with ui.row().classes('items-center gap-3 w-full flex-wrap'):
+                    ui.label('额度耗尽策略').classes('text-sm font-bold text-gray-600 w-32')
+                    quota_strategy = ui.select(
+                        ['auto_switch_next', 'return_warn_error', 'allow_pay_quota'],
+                        value=config.quota_exhaust_strategy
+                    ).classes('w-72')
+                    ui.label('auto_switch_next=自动切下个账号 / return_warn_error=报错 / allow_pay_quota=允许扣费').classes('text-xs text-gray-400 flex-1')
 
-                ui.button('💾 保存配置', on_click=save).props('color=primary size=lg').classes('mt-6')
+            # 重试与日志
+            with ui.card().classes('w-full shadow-sm'):
+                with ui.row().classes('items-center gap-6 w-full flex-wrap'):
+                    with ui.row().classes('items-center gap-2'):
+                        ui.label('最大重试次数').classes('text-sm text-gray-600')
+                        max_retry = ui.number(value=config.max_retry_count, min=0, max=10).classes('w-28')
+                    with ui.row().classes('items-center gap-2'):
+                        ui.label('故障冷却(秒)').classes('text-sm text-gray-600')
+                        cool_down = ui.number(value=config.cool_down_seconds, min=0).classes('w-28')
+                    with ui.row().classes('items-center gap-2'):
+                        ui.label('日志保留(天)').classes('text-sm text-gray-600')
+                        log_retention = ui.number(value=config.log_retention_days, min=1).classes('w-28')
+
+            # 保存按钮
+            async def save():
+                config_data = {
+                    'quota_exhaust_strategy': quota_strategy.value,
+                    'max_retry_count': int(max_retry.value),
+                    'cool_down_seconds': int(cool_down.value),
+                    'log_retention_days': int(log_retention.value),
+                }
+                success = await save_system_config(config_data)
+                if success:
+                    ui.notify('配置已保存', type='positive')
+                else:
+                    ui.notify('保存失败', type='negative')
+
+            with ui.row().classes('justify-end w-full'):
+                ui.button('💾 保存配置', on_click=save).props('color=primary')
+
 
 
     @ui.page('/pipeline')
@@ -473,14 +479,14 @@ def create_ui():
 
             # ── ① 模型路由 ──
             with ui.card().classes('w-full shadow-lg'):
-                ui.label('① 模型路由策略').classes('text-xl font-bold text-gray-700 mb-1')
+                ui.label('① 模型路由策略').classes('text-base font-bold text-gray-700 mb-1')
                 ui.label('根据用户请求语义，智能选择最适合的模型').classes('text-xs text-gray-500 mb-3')
 
                 router_strategy = ui.select(
                     ['off', 'vector', 'llm', 'hybrid'],
                     label='路由策略',
                     value=getattr(config, 'router_strategy', 'off')
-                ).classes('w-full')
+                ).classes('w-72')
                 ui.label('off=不路由 / vector=向量相似度 / llm=小模型分类 / hybrid=混合（向量高置信直接用，低置信升级LLM）').classes('text-xs text-gray-400 -mt-2 mb-3')
 
                 # 加载当前 router_config
@@ -511,7 +517,7 @@ def create_ui():
                     options=_embed_options,
                     label='选择 Embedding 模型',
                     value=getattr(_router_cfg, 'embedding_model_id', 0) or 0,
-                ).classes('w-full')
+                ).classes('w-72')
                 if not _embed_models:
                     ui.label('⚠️ 暂无embedding模型，请先在账号管理中添加').classes('text-xs text-red-500 -mt-2 mb-3')
                 else:
@@ -522,34 +528,34 @@ def create_ui():
                     threshold_high = ui.number(
                         '切入阈值（高于此值切换）', value=_router_cfg.threshold_high,
                         min=0.0, max=1.0, step=0.05
-                    ).classes('flex-1')
+                    ).classes('w-48')
                     threshold_low = ui.number(
                         '保持阈值（低于此值才允许切走）', value=_router_cfg.threshold_low,
                         min=0.0, max=1.0, step=0.05
-                    ).classes('flex-1')
+                    ).classes('w-56')
 
             # ── ② 账号调度 ──
             with ui.card().classes('w-full shadow-lg'):
-                ui.label('② 账号调度策略').classes('text-xl font-bold text-gray-700 mb-1')
+                ui.label('② 账号调度策略').classes('text-base font-bold text-gray-700 mb-1')
                 ui.label('从可用账号池中选择具体账号，管理免费额度消耗顺序').classes('text-xs text-gray-500 mb-3')
 
                 selector_strategy = ui.select(
                     ['pin', 'free-first', 'round-robin', 'sticky', 'failover', 'cost-first'],
                     label='调度策略',
                     value=getattr(config, 'selector_strategy', 'pin')
-                ).classes('w-full')
+                ).classes('w-72')
                 ui.label('pin=指定模型（默认） / free-first=免费额度优先 / round-robin=轮询 / sticky=会话粘性 / failover=主备 / cost-first=成本最低').classes('text-xs text-gray-400 -mt-2')
 
             # ── ③ 上下文管理 ──
             with ui.card().classes('w-full shadow-lg'):
-                ui.label('③ 上下文管理策略').classes('text-xl font-bold text-gray-700 mb-1')
+                ui.label('③ 上下文管理策略').classes('text-base font-bold text-gray-700 mb-1')
                 ui.label('控制发送给上游的消息组装方式，平衡上下文完整性与 token 消耗').classes('text-xs text-gray-500 mb-3')
 
                 context_strategy = ui.select(
                     ['passthrough', 'window', 'summary'],
                     label='上下文策略',
                     value=getattr(config, 'context_strategy', 'passthrough')
-                ).classes('w-full')
+                ).classes('w-72')
                 ui.label('passthrough=直传（默认） / window=滑动窗口 / summary=摘要压缩').classes('text-xs text-gray-400 -mt-2 mb-3')
 
                 _context_cfg = _pipeline_cfg.context_config
@@ -557,7 +563,7 @@ def create_ui():
                 ui.label('滑动窗口参数（window 策略用）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
                 window_turns = ui.number(
                     '保留最近 N 轮对话', value=_context_cfg.window_turns, min=1, max=100
-                ).classes('w-full')
+                ).classes('w-48')
 
                 ui.label('摘要模型配置（summary 策略用）').classes('text-sm font-bold text-gray-600 mt-3 mb-1')
                 with ui.row().classes('gap-2 w-full'):
@@ -576,16 +582,17 @@ def create_ui():
                     ).classes('flex-1')
                 summary_window_turns = ui.number(
                     '摘要后保留最近 N 轮原文', value=_context_cfg.summary_window_turns, min=0, max=20
-                ).classes('w-full')
+                ).classes('w-48')
                 ui.label('cloud=从账号池选该模型的启用账号 / local=调用 Ollama；跨模型切换时强制摘要').classes('text-xs text-gray-400 -mt-2')
 
             # ── ④ 本地模型运行时 ──
             with ui.card().classes('w-full shadow-lg'):
-                ui.label('④ 本地模型运行时（Ollama）').classes('text-xl font-bold text-gray-700 mb-1')
+                ui.label('④ 本地模型运行时（Ollama）').classes('text-base font-bold text-gray-700 mb-1')
                 ui.label('用于本地 Embedding、摘要等轻量任务，不参与主模型调度').classes('text-xs text-gray-500 mb-3')
 
-                ollama_enabled = ui.checkbox('启用 Ollama', value=config.ollama_enabled)
-                ollama_url = ui.input('Ollama 地址', value=config.ollama_base_url).classes('w-full')
+                with ui.row().classes('items-center gap-3 w-full'):
+                    ollama_enabled = ui.checkbox('启用 Ollama', value=config.ollama_enabled)
+                    ollama_url = ui.input('Ollama 地址', value=config.ollama_base_url).classes('flex-1')
                 ui.label('启用后，vendor=ollama 的账号可参与调度；关闭则全部跳过').classes('text-xs text-gray-400 -mt-2')
 
             # 保存按钮
@@ -1024,13 +1031,15 @@ def show_account_dialog(account_id: Optional[int] = None):
                         'currency_rate': account.currency_rate or 0,
                     }
 
-        with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl'):
-            ui.label('✏️ 编辑账号' if account_id else '➕ 新增账号').classes('text-2xl font-bold')
+        with ui.dialog() as dialog, ui.card().classes('w-full max-w-3xl'):
+            ui.label('✏️ 编辑账号' if account_id else '➕ 新增账号').classes('text-xl font-bold')
 
-            vendor = ui.input('厂商名称', value=initial['vendor']).classes('w-full')
-            api_key = ui.input('API Key', value=initial['api_key'], password=True, password_toggle_button=True).classes('w-full')
-            model_name = ui.input('模型名称（用于显示和路由匹配）', value=initial['model_name']).classes('w-full')
-            endpoint_id = ui.input('Endpoint ID（如豆包/火山引擎需要，调用时优先使用；不需要可留空）', value=initial['endpoint_id']).classes('w-full')
+            with ui.row().classes('gap-4 w-full'):
+                vendor = ui.input('厂商名称', value=initial['vendor']).classes('flex-1')
+                api_key = ui.input('API Key', value=initial['api_key'], password=True, password_toggle_button=True).classes('flex-1')
+            with ui.row().classes('gap-4 w-full'):
+                model_name = ui.input('模型名称（用于显示和路由匹配）', value=initial['model_name']).classes('flex-1')
+                endpoint_id = ui.input('Endpoint ID（豆包/火山引擎需要，可留空）', value=initial['endpoint_id']).classes('flex-1')
             base_url = ui.input('API Base URL', value=initial['base_url']).classes('w-full')
 
             # 实际模型名已由 model_name/endpoint_id 决定，不再提供独立字段（避免写入 extra_json.model 污染调用）
@@ -1071,15 +1080,19 @@ def show_account_dialog(account_id: Optional[int] = None):
                 except Exception as e:
                     ui.notify(f'自动获取失败: {str(e)[:120]}', type='negative')
 
-            ui.button('🔄 自动获取', on_click=auto_fetch).props('color=orange outline').classes('w-full')
+            with ui.row().classes('items-center gap-3 w-full'):
+                ui.button('🔄 自动获取', on_click=auto_fetch).props('color=orange outline').classes('w-44')
+                balance_info_label.classes('text-sm text-gray-600 flex-1')
 
-            priority = ui.number('优先级', value=initial['priority'], min=0, max=100).classes('w-full')
-            is_enable = ui.checkbox('启用', value=initial['is_enable'])
+            with ui.row().classes('items-center gap-4 w-full'):
+                priority = ui.number('优先级', value=initial['priority'], min=0, max=100).classes('w-40')
+                is_enable = ui.checkbox('启用', value=initial['is_enable'])
 
             ui.separator()
 
-            balance_unit = ui.select(['token', 'currency'], label='额度单位', value=initial['balance_unit']).classes('w-full')
-            balance_remaining = ui.number('初始额度（厂商余额自动同步；手动维护/充值请在此重置）', value=initial['balance_remaining'], min=0).classes('w-full')
+            with ui.row().classes('gap-4 w-full items-center'):
+                balance_unit = ui.select(['token', 'currency'], label='额度单位', value=initial['balance_unit']).classes('w-44')
+                balance_remaining = ui.number('初始额度（厂商余额自动同步；手动维护/充值请在此重置）', value=initial['balance_remaining'], min=0).classes('flex-1')
             currency_rate = ui.number('厂商结算单价（元/1M token，currency 单位时用于估算金额消耗）', value=initial['currency_rate'], min=0).classes('w-full')
 
             async def save():

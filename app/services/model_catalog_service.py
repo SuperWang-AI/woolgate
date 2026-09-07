@@ -279,7 +279,7 @@ class ModelCatalogService:
                 stream=False,
                 max_tokens=200,
             )
-            description = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+            description = response.get("choices", [{}]).get("message", {}).get("content", "")
             if description:
                 return description.strip()
         except Exception as e:

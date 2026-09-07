@@ -81,9 +81,11 @@ class LLMClient:
             **kwargs
         }
         
-        # 合并账号默认参数
+        # 合并账号默认参数（注意：extra_json 不得包含 model 键，防止覆盖正确模型）
         if account.extra_json:
             payload.update(_normalize_extra_json(account.extra_json))
+        # 强制恢复 model（防历史脏数据/手工误填覆盖）
+        payload["model"] = api_model
         
         # 应用模型参数约束（如 kimi-k2.6 强制 temperature=1）
         _apply_model_param_constraints(account.model_name, payload)
@@ -149,9 +151,11 @@ class LLMClient:
             **kwargs
         }
         
-        # 合并账号默认参数
+        # 合并账号默认参数（注意：extra_json 不得包含 model 键，防止覆盖正确模型）
         if account.extra_json:
             payload.update(_normalize_extra_json(account.extra_json))
+        # 强制恢复 model（防历史脏数据/手工误填覆盖）
+        payload["model"] = api_model
         
         # 应用模型参数约束（如 kimi-k2.6 强制 temperature=1）
         _apply_model_param_constraints(account.model_name, payload)

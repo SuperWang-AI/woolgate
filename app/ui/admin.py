@@ -1032,11 +1032,7 @@ def show_account_dialog(account_id: Optional[int] = None):
             endpoint_id = ui.input('Endpoint ID（如豆包/火山引擎需要，调用时优先使用；不需要可留空）', value=initial['endpoint_id']).classes('w-full')
             base_url = ui.input('API Base URL', value=initial['base_url']).classes('w-full')
 
-            # 实际模型名：可下拉选择（自动获取填充）也可手动输入，无需手写 JSON
-            # 初始 options 必须包含当前值，否则空列表 + 非空 value 会抛 ValueError
-            _extra_options = [initial['extra_model']] if initial['extra_model'] else []
-            _extra_value = initial['extra_model'] if initial['extra_model'] else None
-            extra_model = ui.select(options=_extra_options, with_input=True, label='实际模型名（上游调用，自动获取可填充）', value=_extra_value).classes('w-full')
+            # 实际模型名已由 model_name/endpoint_id 决定，不再提供独立字段（避免写入 extra_json.model 污染调用）
             balance_info_label = ui.label('💰 厂商余额: 未获取').classes('text-sm text-gray-600')
 
             async def auto_fetch():
@@ -1090,7 +1086,7 @@ def show_account_dialog(account_id: Optional[int] = None):
 
             async def save():
                 try:
-                    # 构造 extra_json：只存实际模型名（保留原 extra_json 其他键）
+                    # 保留原 extra_json 其他键（不再写 model，模型由 model_name/endpoint_id 决定）
                     orig_extra = {}
                     if account_id:
                         async with AsyncSessionLocal() as _s:
@@ -1099,8 +1095,7 @@ def show_account_dialog(account_id: Optional[int] = None):
                             if _acc and isinstance(_acc.extra_json, dict):
                                 orig_extra = dict(_acc.extra_json)
                     parsed_extra = dict(orig_extra)
-                    if extra_model.value:
-                        parsed_extra['model'] = extra_model.value.strip()
+                    parsed_extra.pop('model', None)
 
                     # 独立打开新 session 写库，避免复用已关闭的旧 session
                     async with AsyncSessionLocal() as session:

@@ -364,7 +364,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                         is_local = v.get('no_key', False)
                                         card_cls = 'w-full shadow-lg cursor-pointer hover:shadow-xl transition-all p-3' + (' local-card' if is_local else '')
                                         with ui.card().classes(card_cls).props(
-                                            f'data-sel={"1" if is_sel else "0"}'
+                                            f'data-sel={"1" if is_sel else "0"} data-vendor-id="{v["id"]}"'
                                         ).on('click', lambda vv=v: select_vendor(vv)):
                                             with ui.row().classes('items-center gap-2 w-full'):
                                                 ui.label(v['icon']).classes('text-2xl')

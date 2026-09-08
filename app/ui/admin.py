@@ -378,7 +378,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                             if v.get('access_note'):
                                                 ui.label(f"⚠️ {v['access_note']}").classes('text-xs text-orange-600 font-bold').style('line-height:1.3')
                                             ui.button('选择', on_click=lambda vv=v: select_vendor(vv)) \
-                                                .props('color=green outline size=sm no-caps').classes('w-full mt-1')
+                                                .props('color=green outline size=sm no-caps').classes('w-full mt-1 wg-select-vendor')
 
                     cards()
 
@@ -429,7 +429,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                         .props('dense outlined').classes('w-full')
 
                             ui.button('🚀 一键自动配置', on_click=lambda: run_config(v, api_key_input)) \
-                                .props('color=green size=md no-caps').classes('mt-1')
+                                .props('color=green size=md no-caps').classes('mt-1 wg-config-btn')
 
                     detail()
 

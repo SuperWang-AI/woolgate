@@ -116,28 +116,6 @@ async def save_system_config(config_data: dict):
 def create_ui():
     """创建UI"""
     
-    # 添加自定义样式
-    ui.add_head_html('''
-        <style>
-            .header-gradient {
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            }
-            .stat-card {
-                transition: transform 0.2s, box-shadow 0.2s;
-            }
-            .stat-card:hover {
-                transform: translateY(-4px);
-                box-shadow: 0 12px 24px rgba(0,0,0,0.15);
-            }
-            .account-card {
-                transition: all 0.2s;
-                border-left: 4px solid #667eea;
-            }
-            .account-card:hover {
-                box-shadow: 0 8px 16px rgba(0,0,0,0.1);
-            }
-        </style>
-    ''')
     
     # 导航页面定义（label, path, key）
     NAV_PAGES = [
@@ -152,6 +130,17 @@ def create_ui():
 
     def nav_header(current: str):
         """顶部导航栏（tab 效果：当前页白色背景高亮，其他页透明）"""
+        ui.add_head_html('''
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐑%3C/text%3E%3C/svg%3E">
+<script>document.querySelectorAll('link[rel="shortcut icon"]').forEach(function(l){l.remove()})</script>
+<style>
+.header-gradient { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+.stat-card { transition: transform 0.2s, box-shadow 0.2s; }
+.stat-card:hover { transform: translateY(-4px); box-shadow: 0 12px 24px rgba(0,0,0,0.15); }
+.account-card { transition: all 0.2s; border-left: 4px solid #667eea; }
+.account-card:hover { box-shadow: 0 8px 16px rgba(0,0,0,0.1); }
+</style>
+''')
         with ui.header().classes('header-gradient items-center justify-between px-6 shadow-lg'):
             with ui.row().classes('items-center gap-4'):
                 ui.label('🐑').classes('text-4xl')
@@ -170,13 +159,13 @@ def create_ui():
     @ui.page('/')
     async def index():
         """首页"""
-        ui.page_title('WoolGate - AI 羊毛聚合网关')
+        ui.page_title('WoolGate 智能聚合网关')
         
         # 顶部导航栏
         nav_header('home')
         
         # 主内容区域
-        with ui.column().classes('w-full max-w-7xl mx-auto p-6 gap-6'):
+        with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):
             # 欢迎标题
             ui.label('AI 羊毛聚合网关').classes('text-4xl font-bold text-gray-800')
             ui.label('智能调度多平台免费额度，自动切换账号').classes('text-lg text-gray-500 -mt-4')
@@ -279,7 +268,13 @@ def create_ui():
     @ui.page('/wizard')
     async def wizard_page():
         """免费接入向导（A1+A7）——选厂商 → 看步骤 → 粘 Key → 自动配置（refreshable 局部刷新，无整页跳转）"""
-        ui.page_title('免费接入 - WoolGate')
+        ui.page_title('WoolGate 智能聚合网关')
+        ui.add_head_html('''
+        <style>
+          .vendor-list .q-card { border: 2px solid transparent; }
+          .vendor-list .q-card[data-sel="1"] { border: 2px solid #52c41a !important; }
+        </style>
+        ''')
         nav_header('wizard')
 
         from app.services.free_tier_catalog import list_vendors, get_vendor, FreeTierService, vendor_matches
@@ -301,8 +296,16 @@ def create_ui():
 
         def select_vendor(v):
             state['selected'] = v
-            cards.refresh()
+            # 只刷新详情，左侧卡片区不重绘（避免滚动位置重置）；选中高亮用 JS 切换
             detail.refresh()
+            ui.run_javascript(f"""
+                const list = document.querySelector('.vendor-list');
+                if (!list) return;
+                list.querySelectorAll('.q-card').forEach(c => c.removeAttribute('data-sel'));
+                const cards = [...list.querySelectorAll('.q-card')];
+                const cur = cards.find(c => c.textContent.includes({v['name']!r}));
+                if (cur) cur.setAttribute('data-sel', '1');
+            """)
 
         async def run_config(v, api_key_input):
             nonlocal _vendor_models
@@ -336,39 +339,42 @@ def create_ui():
             except Exception as e:
                 ui.notify(f'配置失败: {str(e)[:150]}', type='negative')
 
-        with ui.column().classes('w-full max-w-7xl mx-auto p-6 gap-6'):
+        with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):
             ui.label('🆓 免费模型接入向导').classes('text-3xl font-bold text-gray-800')
-            ui.label('选一个厂商 → 按步骤拿到 API Key → 粘贴后自动完成建账号、能力描述、向量计算、启用。全程 10 分钟以内，无需理解任何底层概念').classes('text-sm text-gray-500 -mt-4')
+            ui.label('选一个厂商 → 按步骤拿到 API Key → 粘贴后自动完成建账号、能力描述、向量计算、启用。全程 10 分钟以内，无需理解任何底层概念').classes('text-[13px] text-gray-500 -mt-2')
 
             with ui.row().classes('w-full gap-6 items-start'):
                 # ── 左：厂商卡片（列表独立滚动）──
-                with ui.column().classes('w-[540px] min-w-[540px] gap-3'):
+                with ui.column().classes('w-[540px] min-w-[540px] gap-3 vendor-list'):
                     ui.label('① 选择厂商').classes('text-xl font-bold text-gray-700')
 
                     @ui.refreshable
                     def cards():
-                        with ui.row().classes('w-full gap-3 flex-wrap max-h-[70vh] overflow-y-auto pr-1 content-start'):
-                            for v in vendors:
-                                is_sel = state['selected'] and state['selected']['id'] == v['id']
-                                with ui.card().classes('w-64 shadow-lg cursor-pointer hover:shadow-xl transition-all p-4').style(
-                                    'border:2px solid #52c41a;' if is_sel else 'border:2px solid transparent;'
-                                ).on('click', lambda vv=v: select_vendor(vv)):
-                                    with ui.row().classes('items-center gap-2 w-full'):
-                                        ui.label(v['icon']).classes('text-3xl')
-                                        ui.label(v['name']).classes('text-lg font-bold')
-                                    ui.label(v['tag']).classes('text-xs text-green-600 font-bold')
-                                    with ui.row().classes('items-center gap-1 w-full'):
-                                        ui.label(f"🧩 {len(v['models'])} 个免费模型").classes('text-xs text-gray-500')
-                                        if vendor_connected(v):
-                                            ui.label(f'✅ 已接入 {len(vendor_connected_models(v))} 个').classes('text-xs text-green-600 font-bold')
-                                    ui.label(v['quota_note']).classes('text-xs text-gray-500').style('line-height:1.4')
-                                    ui.button('选择', on_click=lambda vv=v: select_vendor(vv)) \
-                                        .props('color=green outline size=sm no-caps').classes('w-full mt-1')
+                        # 瀑布流：两列各自自适应高度，描述完整显示；整卡可点，点击只 JS 高亮 + 刷详情（不重绘本区，滚动位置保持）
+                        with ui.row().classes('w-full max-h-[calc(100vh-320px)] overflow-y-auto pr-1 items-start gap-3'):
+                            for col_vendors in (vendors[::2], vendors[1::2]):
+                                with ui.column().classes('flex-1 min-w-0 gap-3'):
+                                    for v in col_vendors:
+                                        is_sel = state['selected'] and state['selected']['id'] == v['id']
+                                        with ui.card().classes('w-full shadow-lg cursor-pointer hover:shadow-xl transition-all p-3').props(
+                                            f'data-sel={"1" if is_sel else "0"}'
+                                        ).on('click', lambda vv=v: select_vendor(vv)):
+                                            with ui.row().classes('items-center gap-2 w-full'):
+                                                ui.label(v['icon']).classes('text-2xl')
+                                                ui.label(v['name']).classes('text-base font-bold')
+                                            ui.label(v['tag']).classes('text-xs text-green-600 font-bold')
+                                            with ui.row().classes('items-center gap-1 w-full'):
+                                                ui.label(f"🧩 {len(v['models'])} 个免费模型").classes('text-xs text-gray-500')
+                                                if vendor_connected(v):
+                                                    ui.label(f'✅ 已接入 {len(vendor_connected_models(v))} 个').classes('text-xs text-green-600 font-bold')
+                                            ui.label(v['quota_note']).classes('text-xs text-gray-500').style('line-height:1.35')
+                                            ui.button('选择', on_click=lambda vv=v: select_vendor(vv)) \
+                                                .props('color=green outline size=sm no-caps').classes('w-full mt-1')
 
                     cards()
 
                 # ── 右：详情 / 配置区（独立滚动）──
-                with ui.column().classes('flex-1 min-w-0 gap-3'):
+                with ui.column().classes('flex-1 min-w-0 gap-2 max-h-[calc(100vh-320px)] overflow-y-auto pr-1'):
                     @ui.refreshable
                     def detail():
                         v = state['selected']
@@ -376,46 +382,46 @@ def create_ui():
                             with ui.card().classes('w-full shadow p-8'):
                                 ui.label('👈 点击左侧卡片选择一个厂商').classes('text-gray-400 text-center py-16 w-full')
                             return
-                        with ui.card().classes('w-full shadow-lg border-l-4 border-green-500 p-4 max-h-[70vh] overflow-y-auto'):
-                            with ui.row().classes('items-center gap-3'):
-                                ui.label(f"{v['icon']} {v['name']}").classes('text-2xl font-bold')
-                                ui.label(v['tag']).classes('text-xs bg-green-50 text-green-700 px-2 py-1 rounded font-bold')
-                            ui.label(f"额度说明：{v['quota_note']}").classes('text-sm text-gray-600 mt-1')
+                        with ui.card().classes('w-full shadow-lg border-l-4 border-green-500 p-3'):
+                            with ui.row().classes('items-center gap-2'):
+                                ui.label(f"{v['icon']} {v['name']}").classes('text-lg font-bold')
+                                ui.label(v['tag']).classes('text-xs bg-green-50 text-green-700 px-2 py-0.5 rounded font-bold')
+                            ui.label(f"额度说明：{v['quota_note']}").classes('text-[13px] text-gray-600 mt-0.5').style('line-height:1.35')
                             connected_models = vendor_connected_models(v)
                             if connected_models:
                                 ui.label(
-                                    f"ℹ️ 该厂商已接入 {len(connected_models)} 个模型（{', '.join(connected_models[:3])}{'…' if len(connected_models) > 3 else ''}），"
-                                    f"向导只会补充未接入的免费模型，不会重复建号"
-                                ).classes('text-xs text-blue-700 bg-blue-50 px-2 py-1 rounded mt-2')
+                                    f"ℹ️ 已接入 {len(connected_models)} 个模型（{', '.join(connected_models[:3])}{'…' if len(connected_models) > 3 else ''}），只补充未接入的免费模型"
+                                ).classes('text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded mt-0.5')
 
-                            ui.label('② 获取 API Key（只需这一步）').classes('text-lg font-bold text-gray-700 mt-4')
+                            ui.label('② 获取 API Key（只需这一步）').classes('text-sm font-bold text-gray-700 mt-2')
                             for i, step in enumerate(get_vendor(v['id'])['steps'], 1):
-                                with ui.row().classes('items-start gap-2 w-full'):
-                                    ui.label(str(i)).classes('w-6 h-6 rounded-full bg-green-500 text-white text-xs flex items-center justify-center mt-0.5')
-                                    ui.label(step).classes('text-sm flex-1 pt-0.5')
+                                with ui.row().classes('items-start gap-1.5 w-full'):
+                                    ui.label(str(i)).classes('w-5 h-5 rounded-full bg-green-500 text-white text-xs flex items-center justify-center mt-0.5')
+                                    ui.label(step).classes('text-[13px] flex-1 pt-0.5').style('line-height:1.3')
                             ui.link(f'🔗 前往 {v["name"]} 获取 API Key', v['signup_url'], new_tab=True) \
-                                .classes('text-blue-600 underline text-sm mt-2')
-                            ui.label('拿到 Key 后回到本页继续').classes('text-xs text-gray-400')
+                                .classes('text-blue-600 underline text-[13px] mt-0.5')
 
-                            ui.label('③ 粘贴 API Key，一键自动配置').classes('text-lg font-bold text-gray-700 mt-4')
-                            api_key_input = ui.input('API Key', password=True, password_toggle_button=True).classes('w-full')
+                            ui.label('③ 粘贴 API Key，一键自动配置').classes('text-sm font-bold text-gray-700 mt-2')
+                            api_key_input = ui.input('API Key', password=True, password_toggle_button=True) \
+                                .props('dense outlined').classes('w-full')
                             for f in v.get('extra_fields', []):
-                                extra_inputs[f['key']] = ui.input(f['label'], placeholder=f.get('placeholder', '')).classes('w-full')
+                                extra_inputs[f['key']] = ui.input(f['label'], placeholder=f.get('placeholder', '')) \
+                                    .props('dense outlined').classes('w-full')
 
                             ui.button('🚀 一键自动配置', on_click=lambda: run_config(v, api_key_input)) \
-                                .props('color=green size=lg no-caps').classes('mt-2')
+                                .props('color=green size=md no-caps').classes('mt-1')
 
                     detail()
 
     @ui.page('/accounts')
     async def accounts_page():
         """账号管理页面"""
-        ui.page_title('账号管理 - WoolGate')
+        ui.page_title('WoolGate 智能聚合网关')
         
         # 顶部导航栏
         nav_header('accounts')
         
-        with ui.column().classes('w-full max-w-7xl mx-auto p-6 gap-6'):
+        with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):
             with ui.row().classes('items-center justify-between w-full'):
                 ui.label('🎯 模型账号管理').classes('text-3xl font-bold text-gray-800')
                 ui.button('➕ 新增账号', on_click=lambda: show_account_dialog()).props('color=primary size=lg')
@@ -541,14 +547,14 @@ def create_ui():
     @ui.page('/config')
     async def config_page():
         """系统配置页面"""
-        ui.page_title('系统配置 - WoolGate')
+        ui.page_title('WoolGate 智能聚合网关')
         
         # 顶部导航栏
         nav_header('config')
         
-        with ui.column().classes('w-full max-w-4xl mx-auto p-6 gap-4'):
+        with ui.column().classes('w-full max-w-4xl mx-auto p-5 gap-4'):
             ui.label('⚙️ 全局系统配置').classes('text-3xl font-bold text-gray-800')
-            ui.label('所有配置保存后立即生效，无需重启服务').classes('text-sm text-gray-500 -mt-3')
+            ui.label('所有配置保存后立即生效，无需重启服务').classes('text-sm text-gray-500 -mt-2')
 
             # 获取当前配置
             config = await get_system_config()
@@ -598,14 +604,14 @@ def create_ui():
     @ui.page('/pipeline')
     async def pipeline_page():
         """管线策略配置页面"""
-        ui.page_title('管线策略 - WoolGate')
+        ui.page_title('WoolGate 智能聚合网关')
 
         # 顶部导航栏
         nav_header('pipeline')
 
-        with ui.column().classes('w-full max-w-4xl mx-auto p-6 gap-6'):
+        with ui.column().classes('w-full max-w-4xl mx-auto p-5 gap-4'):
             ui.label('🧩 管线策略配置').classes('text-3xl font-bold text-gray-800')
-            ui.label('三层策略串行：模型路由 → 账号调度 → 上下文管理，保存后立即生效').classes('text-sm text-gray-500 -mt-4')
+            ui.label('三层策略串行：模型路由 → 账号调度 → 上下文管理，保存后立即生效').classes('text-sm text-gray-500 -mt-2')
 
             # 获取当前配置
             config = await get_system_config()
@@ -770,12 +776,12 @@ def create_ui():
     @ui.page('/models')
     async def models_page():
         """模型能力管理页面（M4 智能路由核心配置）"""
-        ui.page_title('模型能力 - WoolGate')
+        ui.page_title('WoolGate 智能聚合网关')
         nav_header('models')
 
-        with ui.column().classes('w-full max-w-6xl mx-auto p-6 gap-6'):
+        with ui.column().classes('w-full max-w-6xl mx-auto p-5 gap-4'):
             ui.label('🧠 模型能力管理').classes('text-3xl font-bold text-gray-800')
-            ui.label('LLM 智能路由的核心配置：每个模型的能力描述、典型示例和能力向量。新增账号后自动同步，可手动微调').classes('text-sm text-gray-500 -mt-4')
+            ui.label('LLM 智能路由的核心配置：每个模型的能力描述、典型示例和能力向量。新增账号后自动同步，可手动微调').classes('text-sm text-gray-500 -mt-2')
 
             # 操作按钮行
             with ui.row().classes('gap-2'):
@@ -900,12 +906,12 @@ def create_ui():
     @ui.page('/logs')
     async def logs_page():
         """请求日志页面"""
-        ui.page_title('请求日志 - WoolGate')
+        ui.page_title('WoolGate 智能聚合网关')
         
         # 顶部导航栏
         nav_header('logs')
         
-        with ui.column().classes('w-full max-w-7xl mx-auto p-6 gap-4'):
+        with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):
             with ui.row().classes('items-center justify-between w-full'):
                 ui.label('📋 请求日志').classes('text-3xl font-bold text-gray-800')
                 ui.button('🔄 刷新', on_click=lambda: ui.run_javascript('window.location.reload()')).props('outline color=primary')

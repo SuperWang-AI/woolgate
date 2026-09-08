@@ -14,6 +14,24 @@ from app.models import AsyncSessionLocal
 from app.models.database import ModelAccount, SystemConfig, RequestLog, ModelCatalog
 from app.utils.encryption import encryption_service
 from app.config import settings
+import html as _html
+import urllib.parse as _up
+
+# 默认厂商图标兜底（找不到原厂图标时显示「AI」字母图标）
+AI_FALLBACK = "data:image/svg+xml," + _up.quote(
+    "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>"
+    "<rect width='64' height='64' rx='14' fill='#7C6FF0'/>"
+    "<text x='32' y='43' font-size='28' font-weight='700' fill='#fff' text-anchor='middle' "
+    "font-family='Arial,Helvetica,sans-serif'>AI</text></svg>"
+)
+
+def vendor_icon_html(icon, cls='w-8 h-8 rounded object-contain'):
+    """渲染厂商图标：有原厂 URL 用 img，加载失败/为空回退默认 AI 图标"""
+    src = _html.escape((icon or '').strip(), quote=True)
+    if not src:
+        src = AI_FALLBACK
+        return f"<img src='{src}' class='{cls}' alt='AI'>"
+    return f"<img src='{src}' class='{cls}' alt='AI' loading='lazy' onerror=\"this.onerror=null;this.src='{AI_FALLBACK}'\">"
 
 # 默认市场行情价（2026年基准价）
 DEFAULT_MARKET_PRICES = {
@@ -368,7 +386,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                             f'data-sel={"1" if is_sel else "0"} data-vendor-id="{v["id"]}"'
                                         ).on('click', lambda vv=v: select_vendor(vv)):
                                             with ui.row().classes('items-center gap-2 w-full'):
-                                                ui.label(v['icon']).classes('text-2xl')
+                                                ui.html(vendor_icon_html(v.get('icon', ''), 'w-7 h-7 rounded object-contain'))
                                                 ui.label(v['name']).classes('text-base font-bold')
                                             ui.label(v['tag']).classes(('text-xs text-cyan-600 font-bold' if is_local else 'text-xs text-green-600 font-bold'))
                                             with ui.row().classes('items-center gap-1 w-full'):
@@ -396,7 +414,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                             full = await get_vendor_merged(ds, v['id']) or v
                         with ui.card().classes('w-full shadow-lg border-l-4 border-green-500 p-3'):
                             with ui.row().classes('items-center gap-2'):
-                                ui.label(f"{v['icon']} {v['name']}").classes('text-lg font-bold')
+                                ui.html(vendor_icon_html(v.get('icon', ''), 'w-7 h-7 rounded object-contain'))
+                                ui.label(v['name']).classes('text-lg font-bold')
                                 ui.label(v['tag']).classes('text-xs bg-green-50 text-green-700 px-2 py-0.5 rounded font-bold')
                             ui.label(f"额度说明：{v['quota_note']}").classes('text-[13px] text-gray-600 mt-0.5').style('line-height:1.35')
                             if v.get('access_note'):
@@ -1063,7 +1082,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         ui.page_title('WoolGate 智能聚合网关')
         nav_header('vendors')
 
-        from app.services.free_tier_catalog import _merged_vendors, FREE_TIER_VENDORS
+        from app.services.free_tier_catalog import _merged_vendors, FREE_TIER_VENDORS, vendor_matches
         from app.models.database import VendorOverride
 
         def builtin_ids():
@@ -1104,7 +1123,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 with ui.grid(columns=2).classes('w-full gap-3'):
                     f['id'] = ui.input('厂商 ID（唯一，如 myvendor）', value=(v or {}).get('id', '')).props('dense outlined').classes('w-full')
                     f['name'] = ui.input('厂商名称', value=(v or {}).get('name', '')).props('dense outlined').classes('w-full')
-                    f['icon'] = ui.input('图标（emoji）', value=(v or {}).get('icon', '🤖')).props('dense outlined').classes('w-full')
+                    f['icon'] = ui.input('图标 URL（原厂 logo，留空用默认 AI）', value=(v or {}).get('icon', '')).props('dense outlined').classes('w-full')
                     f['tag'] = ui.input('标签（如 国内 · 免费）', value=(v or {}).get('tag', '')).props('dense outlined').classes('w-full')
                     f['region'] = ui.select({'国内': '国内', '海外': '海外', '本地': '本地'}, label='地域', value=(v or {}).get('region', '国内')).props('dense outlined').classes('w-full')
                     f['base_url'] = ui.input('Base URL（OpenAI 兼容）', value=(v or {}).get('base_url', '')).props('dense outlined').classes('w-full')
@@ -1141,7 +1160,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 vendor_dict = {
                     'id': vendor_id,
                     'name': name,
-                    'icon': (f['icon'].value or '🤖').strip(),
+                    'icon': (f['icon'].value or '').strip(),
                     'tag': (f['tag'].value or '').strip(),
                     'region': f['region'].value or '国内',
                     'base_url': base_url,
@@ -1177,14 +1196,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             async with AsyncSessionLocal() as s:
                 merged = await _merged_vendors(s)
                 overrides = (await s.execute(select(VendorOverride))).scalars().all()
+                _acc = (await s.execute(select(ModelAccount.vendor, ModelAccount.model_name))).all()
             ov_by_id = {o.id: o for o in overrides}
+            _acc_models = [(r[0] or '', r[1]) for r in _acc]
+
+            def _connected_models(v):
+                return [mn for vn, mn in _acc_models if vendor_matches(vn, v['id'])]
+
             b_ids = builtin_ids()
             with ui.card().classes('w-full shadow-lg p-4'):
                 with ui.row().classes('items-center justify-between w-full'):
                     ui.label(f'厂商目录（{len(merged)} 家）').classes('text-lg font-bold')
                     ui.button('➕ 新增厂商', on_click=lambda: show_edit_dialog()).props('color=primary size=md no-caps').classes('wg-vendor-add')
                 ui.label('内置目录随版本发布；此处新增/覆盖/停用即时生效（合并后供免费接入向导使用）').classes('text-xs text-gray-500 mt-1')
-                with ui.column().classes('w-full gap-2 mt-2'):
+                with ui.row().classes('w-full gap-3 flex-wrap mt-3'):
                     for v in merged:
                         o = ov_by_id.get(v['id'])
                         if o and o.is_deleted:
@@ -1195,21 +1220,28 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                             src_tag, src_color = '🖊 已覆盖', 'blue'
                         else:
                             src_tag, src_color = '内置', 'grey'
-                        with ui.card().classes('w-full p-3'):
-                            with ui.row().classes('items-center justify-between w-full gap-2'):
-                                with ui.row().classes('items-center gap-2'):
-                                    ui.label(v['icon']).classes('text-xl')
-                                    ui.label(v['name']).classes('font-bold')
-                                    ui.label(src_tag).classes(f'text-xs bg-{src_color}-100 text-{src_color}-700 px-2 py-0.5 rounded font-bold')
-                                    ui.label(f"{len(v['models'])} 模型").classes('text-xs text-gray-500')
-                                with ui.row().classes('gap-1'):
-                                    ui.button('✏️ 编辑', on_click=lambda vv=v: show_edit_dialog(vv)).props('outline size=sm color=primary no-caps').classes('wg-vendor-edit')
-                                    if o and o.is_deleted:
-                                        ui.button('▶️ 恢复', on_click=lambda vid=v['id']: set_deleted(vid, False)).props('outline size=sm color=positive no-caps')
-                                    elif v['id'] in b_ids:
-                                        ui.button('⏸ 停用', on_click=lambda vid=v['id']: set_deleted(vid, True)).props('outline size=sm color=warning no-caps')
-                                    if o and not o.is_deleted and v['id'] not in b_ids:
-                                        ui.button('🗑 删除', on_click=lambda vid=v['id']: delete_override(vid)).props('outline size=sm color=negative no-caps')
+                        connected = _connected_models(v)
+                        with ui.card().classes('flex-1 min-w-[240px] max-w-[330px] p-3 shadow-md'):
+                            with ui.row().classes('items-center gap-2 w-full'):
+                                ui.html(vendor_icon_html(v.get('icon', ''), 'w-8 h-8 rounded object-contain'))
+                                ui.label(v['name']).classes('font-bold text-sm flex-1 min-w-0')
+                                ui.label(src_tag).classes(f'text-xs bg-{src_color}-100 text-{src_color}-700 px-2 py-0.5 rounded font-bold shrink-0')
+                            with ui.row().classes('items-center gap-1.5 w-full mt-1.5'):
+                                ui.label(f"🧩 {len(v['models'])} 模型").classes('text-xs text-gray-500')
+                                if connected:
+                                    ui.label(f'✅ 已接入 {len(connected)}').classes('text-xs text-green-600 font-bold')
+                                else:
+                                    ui.label('未接入').classes('text-xs text-gray-400')
+                            if v.get('quota_note'):
+                                ui.label(v['quota_note']).classes('text-xs text-gray-500 mt-1').style('line-height:1.35')
+                            with ui.row().classes('gap-1 mt-2 w-full flex-wrap'):
+                                ui.button('✏️ 编辑', on_click=lambda vv=v: show_edit_dialog(vv)).props('outline size=sm color=primary no-caps').classes('wg-vendor-edit')
+                                if o and o.is_deleted:
+                                    ui.button('▶️ 恢复', on_click=lambda vid=v['id']: set_deleted(vid, False)).props('outline size=sm color=positive no-caps')
+                                elif v['id'] in b_ids:
+                                    ui.button('⏸ 停用', on_click=lambda vid=v['id']: set_deleted(vid, True)).props('outline size=sm color=warning no-caps')
+                                if o and not o.is_deleted and v['id'] not in b_ids:
+                                    ui.button('🗑 删除', on_click=lambda vid=v['id']: delete_override(vid)).props('outline size=sm color=negative no-caps')
 
         ui.timer(0.01, vendor_table, once=True)
 

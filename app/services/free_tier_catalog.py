@@ -37,7 +37,7 @@ FREE_TIER_VENDORS: List[dict] = [
     {
         "id": "ollama",
         "name": "本地模型（Ollama）",
-        "icon": "💻",
+        "icon": "https://ollama.com/public/ollama.png",
         "tag": "本地 · 完全免费",
         "region": "本地",
         # docker 部署下容器访问宿主机 Ollama 用 host.docker.internal（compose 已配 host-gateway）；裸机部署改回 localhost
@@ -84,7 +84,7 @@ FREE_TIER_VENDORS: List[dict] = [
     {
         "id": "zhipu",
         "name": "智谱 AI",
-        "icon": "🧪",
+        "icon": "https://www.zhipuai.cn/favicon.png",
         "tag": "国内 · 注册赠送",
         "region": "国内",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
@@ -111,7 +111,7 @@ FREE_TIER_VENDORS: List[dict] = [
     },    {
         "id": "siliconflow",
         "name": "硅基流动 SiliconFlow",
-        "icon": "🌊",
+        "icon": "https://siliconflow.cn/favicon.ico",
         "tag": "国内 · 注册赠送",
         "region": "国内",
         "base_url": "https://api.siliconflow.cn/v1",
@@ -146,7 +146,7 @@ FREE_TIER_VENDORS: List[dict] = [
     },    {
         "id": "moonshot",
         "name": "月之暗面 Kimi",
-        "icon": "🌙",
+        "icon": "https://www.kimi.com/favicon.ico",
         "tag": "国内 · 新用户赠送",
         "region": "国内",
         "base_url": "https://api.moonshot.cn/v1",
@@ -183,7 +183,7 @@ FREE_TIER_VENDORS: List[dict] = [
     {
         "id": "deepseek",
         "name": "DeepSeek",
-        "icon": "🐋",
+        "icon": "https://www.deepseek.com/favicon.ico",
         "tag": "国内 · 极低价",
         "region": "国内",
         "base_url": "https://api.deepseek.com/v1",
@@ -219,7 +219,7 @@ FREE_TIER_VENDORS: List[dict] = [
     {
         "id": "aliyun",
         "name": "阿里百炼（通义千问）",
-        "icon": "🌤️",
+        "icon": "https://img.alicdn.com/tfs/TB1_ZXuNcfpK1RjSZFOXXa6nFXa-32-32.ico",
         "tag": "国内 · 新用户赠送",
         "region": "国内",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -255,7 +255,7 @@ FREE_TIER_VENDORS: List[dict] = [
     {
         "id": "hunyuan",
         "name": "腾讯混元",
-        "icon": "🌀",
+        "icon": "https://hunyuan-blog-web-prod-1258344703.cos.ap-guangzhou.myqcloud.com/logo.svg",
         "tag": "国内 · 注册赠送",
         "region": "国内",
         "base_url": "https://api.hunyuan.cloud.tencent.com/v1",
@@ -291,7 +291,7 @@ FREE_TIER_VENDORS: List[dict] = [
     {
         "id": "doubao",
         "name": "字节豆包（火山方舟）",
-        "icon": "🫘",
+        "icon": "https://lf-flow-web-cdn.doubao.com/obj/flow-doubao/doubao/chat/favicon-doubao.png",
         "tag": "国内 · 新用户赠送",
         "region": "国内",
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
@@ -331,7 +331,7 @@ FREE_TIER_VENDORS: List[dict] = [
     {
         "id": "qianfan",
         "name": "百度千帆",
-        "icon": "🌐",
+        "icon": "https://bce.bdstatic.com/img/favicon.ico",
         "tag": "国内 · 注册赠送",
         "region": "国内",
         "base_url": "https://qianfan.baidubce.com/v2",
@@ -367,7 +367,7 @@ FREE_TIER_VENDORS: List[dict] = [
     {
         "id": "groq",
         "name": "Groq",
-        "icon": "⚡",
+        "icon": "https://groq.com/favicon.ico",
         "tag": "海外 · 速度极快",
         "region": "海外",
         "base_url": "https://api.groq.com/openai/v1",
@@ -404,7 +404,7 @@ FREE_TIER_VENDORS: List[dict] = [
     },    {
         "id": "cerebras",
         "name": "Cerebras",
-        "icon": "🚀",
+        "icon": "https://cdn.sanity.io/images/e4qjo92p/production/e7a55ae5ab7e2c4fdfd4e66a51f628d1f2f44207-967x967.png?w=512&h=512&fit=max&auto=format",
         "tag": "海外 · 超快推理",
         "region": "海外",
         "base_url": "https://api.cerebras.ai/v1",
@@ -432,7 +432,7 @@ FREE_TIER_VENDORS: List[dict] = [
     },    {
         "id": "mistral",
         "name": "Mistral",
-        "icon": "🌬️",
+        "icon": "",
         "tag": "海外 · 开发者免费",
         "region": "海外",
         "base_url": "https://api.mistral.ai/v1",
@@ -468,7 +468,7 @@ FREE_TIER_VENDORS: List[dict] = [
     },    {
         "id": "gemini",
         "name": "Google Gemini",
-        "icon": "✨",
+        "icon": "https://www.gstatic.com/images/branding/product/2x/gemini_512dp.png",
         "tag": "海外 · 免费额度大",
         "region": "海外",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -505,7 +505,7 @@ FREE_TIER_VENDORS: List[dict] = [
     },    {
         "id": "openrouter",
         "name": "OpenRouter",
-        "icon": "🔀",
+        "icon": "https://openrouter.ai/favicon.ico",
         "tag": "聚合 · 免费模型池",
         "region": "海外",
         "base_url": "https://openrouter.ai/api/v1",
@@ -541,7 +541,7 @@ FREE_TIER_VENDORS: List[dict] = [
     },    {
         "id": "github-models",
         "name": "GitHub Models",
-        "icon": "🐙",
+        "icon": "https://github.githubassets.com/favicons/favicon.png",
         "tag": "开发者 · 限速免费",
         "region": "海外",
         "base_url": "https://models.inference.ai.azure.com",
@@ -577,7 +577,7 @@ FREE_TIER_VENDORS: List[dict] = [
     },    {
         "id": "cloudflare",
         "name": "Cloudflare Workers AI",
-        "icon": "☁️",
+        "icon": "https://www.cloudflare.com/favicon.ico",
         "tag": "海外 · 每日免费额度",
         "region": "海外",
         "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",

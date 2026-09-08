@@ -130,6 +130,7 @@ def create_ui():
 
     def nav_header(current: str):
         """顶部导航栏（tab 效果：当前页白色背景高亮，其他页透明）"""
+        ui.colors(primary='#667eea', secondary='#764ba2')
         ui.add_head_html('''
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐑%3C/text%3E%3C/svg%3E">
 <script>document.querySelectorAll('link[rel="shortcut icon"]').forEach(function(l){l.remove()})</script>
@@ -139,6 +140,8 @@ def create_ui():
 .stat-card:hover { transform: translateY(-4px); box-shadow: 0 12px 24px rgba(0,0,0,0.15); }
 .account-card { transition: all 0.2s; border-left: 4px solid #667eea; }
 .account-card:hover { box-shadow: 0 8px 16px rgba(0,0,0,0.1); }
+.q-card { border-radius: 10px; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', Roboto, sans-serif; }
 </style>
 ''')
         with ui.header().classes('header-gradient items-center justify-between px-6 shadow-lg'):
@@ -280,7 +283,7 @@ def create_ui():
         from app.services.free_tier_catalog import list_vendors, get_vendor, FreeTierService, vendor_matches
 
         vendors = list_vendors()
-        state = {'selected': None}   # 当前选中厂商
+        state = {'selected': vendors[0] if vendors else None}   # 默认选中第一个厂商
         extra_inputs = {}            # extra 字段输入框引用（detail 重建后重填）
 
         # 已接入厂商标记（按别名匹配，避免同名不同写法漏判）
@@ -351,7 +354,7 @@ def create_ui():
                     @ui.refreshable
                     def cards():
                         # 瀑布流：两列各自自适应高度，描述完整显示；整卡可点，点击只 JS 高亮 + 刷详情（不重绘本区，滚动位置保持）
-                        with ui.row().classes('w-full max-h-[calc(100vh-320px)] overflow-y-auto pr-1 items-start gap-3'):
+                        with ui.row().classes('w-full max-h-[calc(200vh-270px)] overflow-y-auto pr-1 items-start gap-3'):
                             for col_vendors in (vendors[::2], vendors[1::2]):
                                 with ui.column().classes('flex-1 min-w-0 gap-3'):
                                     for v in col_vendors:
@@ -374,7 +377,7 @@ def create_ui():
                     cards()
 
                 # ── 右：详情 / 配置区（独立滚动）──
-                with ui.column().classes('flex-1 min-w-0 gap-2 max-h-[calc(100vh-320px)] overflow-y-auto pr-1'):
+                with ui.column().classes('flex-1 min-w-0 gap-2 max-h-[calc(200vh-270px)] overflow-y-auto pr-1'):
                     @ui.refreshable
                     def detail():
                         v = state['selected']

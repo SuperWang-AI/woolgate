@@ -133,7 +133,11 @@ async def fetch_models(account):
     try:
         api_key = _decrypt_key(account)
     except ValueError:
-        return []
+        # 本地模型（Ollama）无 API Key，允许继续探测；其他厂商无 Key 视为不可探测
+        if any(k in account.vendor.lower() for k in ('ollama', '本地')):
+            api_key = ''
+        else:
+            return []
     headers = {'Authorization': f'Bearer {api_key}'}
 
     if any(k in vendor_lower for k in ('kimi', 'moonshot', '月之暗面')):
@@ -145,6 +149,10 @@ async def fetch_models(account):
         url = 'https://api.siliconflow.cn/v1/models'
     elif any(k in vendor_lower for k in ('阿里', '百炼', 'qwen', '通义', 'dashscope')):
         url = 'https://dashscope.aliyuncs.com/compatible-mode/v1/models'
+    elif any(k in vendor_lower for k in ('ollama', '本地')):
+        # Ollama OpenAI 兼容接口：base_url 已含 /v1（如 http://host:11434/v1），免鉴权
+        url = account.base_url.rstrip('/') + '/models'
+        headers = {}
     else:
         return []
 

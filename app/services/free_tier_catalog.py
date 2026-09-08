@@ -40,7 +40,8 @@ FREE_TIER_VENDORS: List[dict] = [
         "icon": "💻",
         "tag": "本地 · 完全免费",
         "region": "本地",
-        "base_url": "http://localhost:11434/v1",
+        # docker 部署下容器访问宿主机 Ollama 用 host.docker.internal（compose 已配 host-gateway）；裸机部署改回 localhost
+        "base_url": "http://host.docker.internal:11434/v1",
         "models": [
             {
                 "id": "llama3.1",

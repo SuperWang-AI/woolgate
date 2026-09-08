@@ -139,7 +139,7 @@ def create_ui():
     NAV_PAGES = [
         ('🏠 首页', '/', 'home'),
         ('🆓 免费接入', '/wizard', 'wizard'),
-        ('🏪 厂商目录', '/vendors', 'vendors'),
+        ('📖 模型菜单', '/vendors', 'vendors'),
         ('👥 账号管理', '/accounts', 'accounts'),
         ('🧠 模型能力', '/models', 'models'),
         ('⚙️ 系统配置', '/config', 'config'),
@@ -375,7 +375,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     @ui.refreshable
                     def cards():
                         # 瀑布流：两列各自自适应高度，描述完整显示；整卡可点，点击只 JS 高亮 + 刷详情（不重绘本区，滚动位置保持）
-                        with ui.row().classes('w-full max-h-[calc(200vh-270px)] overflow-y-auto pr-1 items-start gap-3'):
+                        # 左列固定视口内高度 + 内部滚动，与右侧详情完全独立，互不影响
+                        with ui.row().classes('w-full h-[calc(100vh-235px)] overflow-y-auto pr-1 items-start gap-3'):
                             for col_vendors in (vendors[::2], vendors[1::2]):
                                 with ui.column().classes('flex-1 min-w-0 gap-3'):
                                     for v in col_vendors:
@@ -402,7 +403,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     cards()
 
                 # ── 右：详情 / 配置区（独立滚动）──
-                with ui.column().classes('flex-1 min-w-0 gap-2 max-h-[calc(200vh-270px)] overflow-y-auto pr-1'):
+                with ui.column().classes('flex-1 min-w-0 gap-2 h-[calc(100vh-235px)] overflow-y-auto pr-1'):
                     @ui.refreshable
                     async def detail():
                         v = state['selected']
@@ -1078,7 +1079,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     ui.label('暂无日志记录').classes('text-xl text-gray-500 mt-4')
     @ui.page('/vendors')
     async def vendors_page():
-        """厂商目录维护页：内置目录 + DB 用户覆盖 = 最终目录（B/C 迭代）"""
+        """模型菜单维护页：内置菜单 + DB 用户覆盖 = 最终目录（B/C 迭代）"""
         ui.page_title('WoolGate 智能聚合网关')
         nav_header('vendors')
 
@@ -1206,9 +1207,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             b_ids = builtin_ids()
             with ui.card().classes('w-full shadow-lg p-4'):
                 with ui.row().classes('items-center justify-between w-full'):
-                    ui.label(f'厂商目录（{len(merged)} 家）').classes('text-lg font-bold')
+                    ui.label(f'模型菜单（{len(merged)} 家）').classes('text-lg font-bold')
                     ui.button('➕ 新增厂商', on_click=lambda: show_edit_dialog()).props('color=primary size=md no-caps').classes('wg-vendor-add')
-                ui.label('内置目录随版本发布；此处新增/覆盖/停用即时生效（合并后供免费接入向导使用）').classes('text-xs text-gray-500 mt-1')
+                ui.label('内置菜单随版本发布；此处新增/覆盖/停用即时生效（合并后供免费接入向导使用）').classes('text-xs text-gray-500 mt-1')
                 with ui.row().classes('w-full gap-3 flex-wrap mt-3'):
                     for v in merged:
                         o = ov_by_id.get(v['id'])

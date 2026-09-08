@@ -371,6 +371,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                                 if vendor_connected(v):
                                                     ui.label(f'✅ 已接入 {len(vendor_connected_models(v))} 个').classes('text-xs text-green-600 font-bold')
                                             ui.label(v['quota_note']).classes('text-xs text-gray-500').style('line-height:1.35')
+                                            if v.get('access_note'):
+                                                ui.label(f"⚠️ {v['access_note']}").classes('text-xs text-orange-600 font-bold').style('line-height:1.3')
                                             ui.button('选择', on_click=lambda vv=v: select_vendor(vv)) \
                                                 .props('color=green outline size=sm no-caps').classes('w-full mt-1')
 
@@ -390,6 +392,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                 ui.label(f"{v['icon']} {v['name']}").classes('text-lg font-bold')
                                 ui.label(v['tag']).classes('text-xs bg-green-50 text-green-700 px-2 py-0.5 rounded font-bold')
                             ui.label(f"额度说明：{v['quota_note']}").classes('text-[13px] text-gray-600 mt-0.5').style('line-height:1.35')
+                            if v.get('access_note'):
+                                ui.label(f"⚠️ {v['access_note']}").classes('text-xs text-orange-600 font-bold mt-0.5')
                             connected_models = vendor_connected_models(v)
                             if connected_models:
                                 ui.label(

@@ -167,6 +167,7 @@ FREE_TIER_VENDORS: List[dict] = [    {
         ],
         "balance_support": False,
         "quota_note": "免费额度大（按分钟限速），适合日常薅羊毛；具体额度以官网实时为准",
+        "access_note": "海外站点，国内访问可能不稳定，建议科学上网",
     },    {
         "id": "cerebras",
         "name": "Cerebras",
@@ -194,6 +195,7 @@ FREE_TIER_VENDORS: List[dict] = [    {
         ],
         "balance_support": False,
         "quota_note": "注册赠送免费额度，推理速度极快；具体额度以官网实时为准",
+        "access_note": "海外站点，国内访问可能不稳定，建议科学上网",
     },    {
         "id": "mistral",
         "name": "Mistral",
@@ -229,6 +231,7 @@ FREE_TIER_VENDORS: List[dict] = [    {
         ],
         "balance_support": False,
         "quota_note": "免费 tier 赠送额度，开放模型（open- 前缀）免费使用；具体以官网实时为准",
+        "access_note": "海外站点，国内访问可能不稳定，建议科学上网",
     },    {
         "id": "gemini",
         "name": "Google Gemini",
@@ -265,6 +268,7 @@ FREE_TIER_VENDORS: List[dict] = [    {
         ],
         "balance_support": False,
         "quota_note": "免费 tier 额度较大（按分钟/天限速），Flash 系列免费；具体以官网实时为准",
+        "access_note": "需科学上网访问",
     },    {
         "id": "openrouter",
         "name": "OpenRouter",
@@ -300,6 +304,7 @@ FREE_TIER_VENDORS: List[dict] = [    {
         ],
         "balance_support": False,
         "quota_note": ":free 后缀模型免费（有限速/非高峰限制）；付费模型按用量扣费，需充值。具体以官网实时为准",
+        "access_note": "海外站点，国内访问可能不稳定，建议科学上网",
     },    {
         "id": "github-models",
         "name": "GitHub Models",
@@ -335,6 +340,7 @@ FREE_TIER_VENDORS: List[dict] = [    {
         ],
         "balance_support": False,
         "quota_note": "GitHub 账号免费使用，按请求限速（每分钟约 15-20 请求）；具体以官网实时为准",
+        "access_note": "GitHub 国内访问可能不稳定，建议科学上网",
     },    {
         "id": "cloudflare",
         "name": "Cloudflare Workers AI",
@@ -421,6 +427,7 @@ def list_vendors() -> List[dict]:
             "balance_support": v["balance_support"],
             "quota_note": v["quota_note"],
             "extra_fields": v.get("extra_fields", []),
+            "access_note": v.get("access_note", ""),
         }
         for v in FREE_TIER_VENDORS
     ]

@@ -274,6 +274,7 @@ class Executor:
         error_occurred = False
         error_message = None
         full_content = ""  # 累加输出内容，用于估算 token
+        produced_any = False  # A3: 本账号是否已产出内容（判定 stream_interrupted 信号）
 
         try:
             async for chunk in llm_client.chat_completion_stream(
@@ -294,6 +295,7 @@ class Executor:
                         content = delta.get("content", "")
                         if content:
                             full_content += content
+                            produced_any = True
                 except Exception:
                     pass
                 
@@ -326,11 +328,19 @@ class Executor:
                 chinese_chars = sum(1 for c in full_content if '\u4e00' <= c <= '\u9fff')
                 other_chars = len(full_content) - chinese_chars
                 completion_tokens = int(chinese_chars / 1.5 + other_chars / 4)
-            
+
+            # A3: 隐式信号——输出后中断 vs 输出前失败（由外层决定是否切换）
+            implicit_signal = None
+            if error_occurred and produced_any:
+                implicit_signal = "stream_interrupted"
+            elif error_occurred:
+                implicit_signal = "switch_retry"
+
             await self._record(
                 account, ctx, prompt_tokens, completion_tokens,
                 "success" if not error_occurred else "failed",
                 error_message, response_time,
+                implicit_signal=implicit_signal,
             )
 
     # ══════════════════════════════════════════════════════════
@@ -413,9 +423,10 @@ class Executor:
             logger.error(f"非流式请求失败: {e}", exc_info=True)
             response_time = int((time.time() - start_time) * 1000)
 
-            # 记账（失败日志）
+            # 记账（失败日志，A3: 非流式失败必然触发切换 → switch_retry 信号）
             await self._record(
                 account, ctx, 0, 0, "failed", error_message, response_time,
+                implicit_signal="switch_retry",
             )
             # 冷却（与现有 non_stream_handler 一致）
             await self._router.mark_account_failed(account.id)
@@ -430,8 +441,9 @@ class Executor:
         self, account, ctx: PipelineContext,
         prompt_tokens: int, completion_tokens: int,
         status: str, error_message, response_time: int,
+        implicit_signal: str = None,
     ):
-        """统一记账（deduct_quota）+ 请求日志（RequestLog，含 M1 观测埋点）"""
+        """统一记账（deduct_quota）+ 请求日志（RequestLog，含 M1 观测埋点 + A3 反馈/信号字段）"""
         try:
             await self._router.deduct_quota(account.id, prompt_tokens, completion_tokens)
 
@@ -449,6 +461,7 @@ class Executor:
                 endpoint="/v1/chat/completions",
                 # ── M1 观测埋点 ──
                 request_id=ctx.request_id,
+                session_id=ctx.session_id,
                 domain_tag=ctx.target_model,  # M4 后存目标模型名
                 router_strategy=ctx.router_strategy,
                 selector_strategy=ctx.selector_strategy,
@@ -456,6 +469,8 @@ class Executor:
                 switch_count=ctx.switch_count,
                 summary_used=ctx.summary_used,
                 tenant_id=ctx.tenant_id,
+                # ── A3 隐式信号 ──
+                implicit_signal=implicit_signal,
             )
             self.db.add(log)
             await self.db.commit()

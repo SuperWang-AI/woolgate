@@ -20,7 +20,7 @@ import hashlib
 import re
 
 from app.models import get_db, AsyncSessionLocal
-from app.models.database import ModelAccount, ApiKey
+from app.models.database import ModelAccount, ApiKey, RequestLog
 from sqlalchemy import select
 from app.services.balance import fetch_balance, BalanceUnsupportedError, get_today_str
 from app.pipeline.context import PipelineContext
@@ -29,6 +29,9 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# A3: 同一会话短时间内的下一次请求，将上一条成功日志标记为 followup（回答被接受/继续追问）
+FOLLOWUP_WINDOW_SECONDS = 300
 
 
 class Message(BaseModel):
@@ -43,6 +46,12 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     top_p: Optional[float] = None
+
+
+class FeedbackRequest(BaseModel):
+    """A3 显式反馈上报：对某次请求（request_id）给出 up/down/neutral"""
+    request_id: str
+    feedback: str
 
 
 async def verify_bearer_token(request: Request, db: AsyncSession = Depends(get_db)):
@@ -148,6 +157,82 @@ async def _sync_daily_balances():
         logger.warning(f'每日余额同步任务异常: {e}')
 
 
+async def _mark_followup_signal(session_id: str, _session=None):
+    """
+    A3 隐式信号——继续追问（followup）。
+
+    同一会话在 FOLLOWUP_WINDOW_SECONDS 内发起下一次请求，
+    说明上一条成功回答被用户接受并继续对话 → 给上一条成功日志打 followup 信号。
+    后台执行，不影响主请求链路。
+
+    Args:
+        session_id: 会话ID
+        _session: 测试注入用；为 None 时使用全局 AsyncSessionLocal
+    """
+    if not session_id:
+        return
+    try:
+        from datetime import datetime
+        from sqlalchemy import desc
+
+        async def _mark(s):
+            result = await s.execute(
+                select(RequestLog)
+                .where(
+                    RequestLog.session_id == session_id,
+                    RequestLog.status == "success",
+                )
+                .order_by(desc(RequestLog.created_at))
+                .limit(1)
+            )
+            prev_log = result.scalar_one_or_none()
+            if not prev_log or prev_log.implicit_signal:
+                return
+            now = datetime.utcnow()
+            if prev_log.created_at and (now - prev_log.created_at).total_seconds() <= FOLLOWUP_WINDOW_SECONDS:
+                prev_log.implicit_signal = "followup"
+                await s.commit()
+                logger.info(f"[A3] 会话 {session_id} 继续追问 → 日志 {prev_log.id} 标记 followup")
+
+        if _session is not None:
+            await _mark(_session)
+        else:
+            async with AsyncSessionLocal() as s:
+                await _mark(s)
+    except Exception as e:
+        logger.warning(f"[A3] followup 信号标记失败: {e}")
+
+
+@router.post("/v1/feedback")
+async def submit_feedback(
+    req: FeedbackRequest,
+    db: AsyncSession = Depends(get_db),
+    _auth: None = Depends(verify_bearer_token),
+):
+    """
+    A3 显式反馈上报端点。
+
+    客户端在收到响应后，携带 request_id（响应上下文/自定义头返回）调用本接口，
+    对本次请求质量给出 up / down / neutral 评价。幂等：重复提交覆盖。
+    """
+    if req.feedback not in ("up", "down", "neutral"):
+        raise HTTPException(status_code=400, detail="feedback 必须是 up / down / neutral")
+
+    result = await db.execute(
+        select(RequestLog).where(RequestLog.request_id == req.request_id)
+    )
+    log = result.scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="请求日志不存在（request_id 无效）")
+
+    from datetime import datetime
+    log.user_feedback = req.feedback
+    log.feedback_at = datetime.utcnow()
+    await db.commit()
+    logger.info(f"[A3] 反馈上报: request_id={req.request_id} feedback={req.feedback}")
+    return {"ok": True, "request_id": req.request_id, "feedback": req.feedback}
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(
     req: ChatCompletionRequest,
@@ -203,6 +288,9 @@ async def chat_completions(
         first_user_msg = next((m["content"] for m in messages if m.get("role") == "user"), "")
         msg_hash = hashlib.md5(first_user_msg.encode("utf-8")).hexdigest()[:8]
         session_id = f"{request.client.host}:{msg_hash}"
+
+    # A3: 后台标记上一条成功日志为 followup（同一会话短时间继续追问 = 上一条回答被接受）
+    asyncio.create_task(_mark_followup_signal(session_id))
 
     # 构建管线上下文
     ctx = PipelineContext(

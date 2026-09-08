@@ -157,6 +157,7 @@ class RequestLog(Base):
 
     # ── M1 架构重构：观测埋点 ──
     request_id = Column(String(64), nullable=True, comment="请求唯一ID，关联管线上下文")
+    session_id = Column(String(64), nullable=True, comment="会话ID，用于学习型路由按会话聚合")
     domain_tag = Column(String(50), nullable=True, comment="路由领域标签")
     router_strategy = Column(String(20), nullable=True, comment="实际路由策略")
     selector_strategy = Column(String(20), nullable=True, comment="实际调度策略")
@@ -164,6 +165,12 @@ class RequestLog(Base):
     switch_count = Column(Integer, default=0, comment="本次请求切换账号次数")
     summary_used = Column(Boolean, default=False, comment="是否使用了摘要压缩")
     tenant_id = Column(String(64), nullable=True, comment="租户ID（企业版）")
+
+    # ── A3 学习型路由：反馈与隐式信号 ──
+    user_feedback = Column(String(20), nullable=True, comment="用户显式反馈: up/down/neutral")
+    feedback_at = Column(DateTime, nullable=True, comment="反馈时间")
+    implicit_signal = Column(String(50), nullable=True,
+                             comment="隐式信号: switch_retry(失败切换)/stream_interrupted(输出中断)/followup(继续追问)")
 
     created_at = Column(DateTime, default=datetime.utcnow)
 

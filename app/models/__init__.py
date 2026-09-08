@@ -73,6 +73,7 @@ async def _ensure_columns(conn):
     cols = {row[1] for row in result.fetchall()}
     log_migrations = [
         ("request_id", "VARCHAR(64)"),
+        ("session_id", "VARCHAR(64)"),
         ("domain_tag", "VARCHAR(50)"),
         ("router_strategy", "VARCHAR(20)"),
         ("selector_strategy", "VARCHAR(20)"),
@@ -80,6 +81,9 @@ async def _ensure_columns(conn):
         ("switch_count", "INTEGER DEFAULT 0"),
         ("summary_used", "BOOLEAN DEFAULT 0"),
         ("tenant_id", "VARCHAR(64)"),
+        ("user_feedback", "VARCHAR(20)"),
+        ("feedback_at", "DATETIME"),
+        ("implicit_signal", "VARCHAR(50)"),
     ]
     for col, coltype in log_migrations:
         if col not in cols:

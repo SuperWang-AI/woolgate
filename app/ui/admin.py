@@ -836,6 +836,8 @@ def create_ui():
                     log_response_time = log.response_time_ms or 0
                     log_error = log.error_message
                     log_account_id = log.account_id
+                    log_implicit_signal = log.implicit_signal
+                    log_user_feedback = log.user_feedback
                     
                     # 状态颜色
                     if log_status == 'success':
@@ -844,6 +846,18 @@ def create_ui():
                     else:
                         status_color = 'negative'
                         status_icon = 'error'
+                    
+                    # A3: 隐式信号/显式反馈徽标映射
+                    signal_badges = {
+                        'switch_retry': ('🔄 切换重试', 'warning'),
+                        'stream_interrupted': ('✂️ 输出中断', 'negative'),
+                        'followup': ('💬 继续追问', 'positive'),
+                    }
+                    feedback_badges = {
+                        'up': ('👍', 'positive'),
+                        'down': ('👎', 'negative'),
+                        'neutral': ('➖', 'info'),
+                    }
                     
                     with ui.card().classes('w-full shadow-sm hover:shadow-md transition-shadow'):
                         with ui.row().classes('w-full items-start justify-between gap-4'):
@@ -856,6 +870,13 @@ def create_ui():
                                     ui.label(log_vendor).classes('text-sm bg-blue-100 text-blue-700 px-2 py-1 rounded')
                                     ui.badge(log_model, color='purple')
                                     ui.label(log_created).classes('text-xs text-gray-500')
+                                    # A3: 隐式信号 + 显式反馈
+                                    if log_implicit_signal in signal_badges:
+                                        label, color = signal_badges[log_implicit_signal]
+                                        ui.badge(label, color=color).props('outline')
+                                    if log_user_feedback in feedback_badges:
+                                        icon, color = feedback_badges[log_user_feedback]
+                                        ui.badge(icon, color=color).props('outline')
                                 
                                 # Token 统计
                                 with ui.row().classes('items-center gap-4 text-sm'):

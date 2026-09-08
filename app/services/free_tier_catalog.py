@@ -33,249 +33,7 @@ logger = logging.getLogger(__name__)
 #   balance_support  是否支持自动获取余额（fetch_balance）
 #   quota_note    额度说明（定性，以官网为准）
 #   extra_fields  该厂商需要的额外配置项（如 Cloudflare 的 account_id）
-FREE_TIER_VENDORS: List[dict] = [
-    {
-        "id": "groq",
-        "name": "Groq",
-        "icon": "⚡",
-        "tag": "海外 · 速度极快",
-        "region": "海外",
-        "base_url": "https://api.groq.com/openai/v1",
-        "models": [
-            {
-                "id": "llama-3.3-70b-versatile",
-                "display": "Llama 3.3 70B（通用）",
-                "capability": "通用对话能力强，推理、写作、翻译、代码问答均擅长，响应速度极快。",
-                "tags": ["chat", "code", "reasoning"],
-                "examples": [
-                    "你好，介绍一下你自己", "用Python写一个快速排序", "帮我写一封请假邮件",
-                    "解释一下什么是区块链", "把这句话翻译成英文：今天天气很好",
-                ],
-            },
-            {
-                "id": "llama-3.1-8b-instant",
-                "display": "Llama 3.1 8B（轻量）",
-                "capability": "轻量快速，适合简单问答、文本分类、摘要等低延迟任务。",
-                "tags": ["chat", "fast", "classification"],
-                "examples": [
-                    "你好", "今天天气怎么样", "总结这段文字的要点", "1+1等于几",
-                ],
-            },
-        ],
-        "signup_url": "https://console.groq.com/keys",
-        "steps": [
-            "打开上方链接注册账号（支持 Google 一键登录）",
-            "进入左侧 API Keys 页，创建 API Key",
-            "复制 Key（sk- 开头），粘贴到下方输入框",
-        ],
-        "balance_support": False,
-        "quota_note": "免费额度大（按分钟限速），适合日常薅羊毛；具体额度以官网实时为准",
-    },
-    {
-        "id": "cerebras",
-        "name": "Cerebras",
-        "icon": "🚀",
-        "tag": "海外 · 超快推理",
-        "region": "海外",
-        "base_url": "https://api.cerebras.ai/v1",
-        "models": [
-            {
-                "id": "llama-3.3-70b",
-                "display": "Llama 3.3 70B（极速版）",
-                "capability": "世界最快推理的 Llama 3.3 70B，通用对话、代码、分析均出色，延迟极低。",
-                "tags": ["chat", "code", "reasoning"],
-                "examples": [
-                    "你好", "解释一下TCP三次握手", "写一段Python代码计算斐波那契数列",
-                    "帮我分析这段日志的报错原因", "写一个工作周报的模板",
-                ],
-            },
-        ],
-        "signup_url": "https://cloud.cerebras.ai/",
-        "steps": [
-            "打开上方链接注册账号",
-            "进入 Settings → API Keys，新建 Key",
-            "复制 Key（csk- 开头），粘贴到下方输入框",
-        ],
-        "balance_support": False,
-        "quota_note": "注册赠送免费额度，推理速度极快；具体额度以官网实时为准",
-    },
-    {
-        "id": "mistral",
-        "name": "Mistral",
-        "icon": "🌬️",
-        "tag": "海外 · 开发者免费",
-        "region": "海外",
-        "base_url": "https://api.mistral.ai/v1",
-        "models": [
-            {
-                "id": "open-mistral-nemo",
-                "display": "Mistral Nemo 12B（免费）",
-                "capability": "免费小模型，多语言能力强，适合日常对话、摘要、分类等常规任务。",
-                "tags": ["chat", "multilingual", "fast"],
-                "examples": [
-                    "你好", "帮我总结一下这段话", "推荐一本法语学习书", "把这段中文翻译成英文",
-                ],
-            },
-            {
-                "id": "mistral-small-latest",
-                "display": "Mistral Small（轻量旗舰）",
-                "capability": "轻量级旗舰模型，代码、推理、多语言兼顾，速度快成本低。",
-                "tags": ["chat", "code", "reasoning"],
-                "examples": [
-                    "用Python写一个二分查找", "解释一下量子计算", "帮我起一个英文品牌名",
-                ],
-            },
-        ],
-        "signup_url": "https://console.mistral.ai/",
-        "steps": [
-            "打开上方链接注册账号",
-            "进入 API Keys 页，点击 Create new key",
-            "复制 Key，粘贴到下方输入框",
-        ],
-        "balance_support": False,
-        "quota_note": "免费 tier 赠送额度，开放模型（open- 前缀）免费使用；具体以官网实时为准",
-    },
-    {
-        "id": "gemini",
-        "name": "Google Gemini",
-        "icon": "✨",
-        "tag": "海外 · 免费额度大",
-        "region": "海外",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "models": [
-            {
-                "id": "gemini-2.0-flash",
-                "display": "Gemini 2.0 Flash",
-                "capability": "免费额度大的多模态模型，支持文本/图像输入，速度快，综合能力强。",
-                "tags": ["chat", "multimodal", "fast", "reasoning"],
-                "examples": [
-                    "你好", "分析这张图片的内容", "写一首关于夏天的诗",
-                    "解释一下相对论", "帮我规划一次杭州三日游",
-                ],
-            },
-            {
-                "id": "gemini-2.5-flash",
-                "display": "Gemini 2.5 Flash（思考型）",
-                "capability": "带思考能力的 Flash 模型，复杂推理、数学、编程表现更好。",
-                "tags": ["reasoning", "code", "math"],
-                "examples": [
-                    "解一道高中数学题", "分析这段代码的时间复杂度", "设计一个分布式锁方案",
-                ],
-            },
-        ],
-        "signup_url": "https://aistudio.google.com/apikey",
-        "steps": [
-            "打开上方链接（需科学上网）",
-            "用 Google 账号登录，点击 Create API key",
-            "复制 Key（AIza 开头），粘贴到下方输入框",
-        ],
-        "balance_support": False,
-        "quota_note": "免费 tier 额度较大（按分钟/天限速），Flash 系列免费；具体以官网实时为准",
-    },
-    {
-        "id": "openrouter",
-        "name": "OpenRouter",
-        "icon": "🔀",
-        "tag": "聚合 · 免费模型池",
-        "region": "海外",
-        "base_url": "https://openrouter.ai/api/v1",
-        "models": [
-            {
-                "id": "meta-llama/llama-3.3-70b-instruct:free",
-                "display": "Llama 3.3 70B（:free）",
-                "capability": "OpenRouter 免费路由的 Llama 3.3 70B，通用对话能力强。",
-                "tags": ["chat", "code", "reasoning"],
-                "examples": [
-                    "你好", "解释一下什么是API", "帮我写一份产品需求文档",
-                ],
-            },
-            {
-                "id": "deepseek/deepseek-chat-v3-0324:free",
-                "display": "DeepSeek V3（:free）",
-                "capability": "DeepSeek V3 免费路由版，代码与推理能力突出。",
-                "tags": ["code", "reasoning", "chat"],
-                "examples": [
-                    "用Python写一个爬虫", "解释一下DP动态规划", "帮我调试这段报错",
-                ],
-            },
-        ],
-        "signup_url": "https://openrouter.ai/keys",
-        "steps": [
-            "打开上方链接注册账号",
-            "进入 Keys 页，点击 Create Key",
-            "复制 Key（sk-or-v1- 开头），粘贴到下方输入框",
-        ],
-        "balance_support": False,
-        "quota_note": ":free 后缀模型免费（有限速/非高峰限制）；付费模型按用量扣费，需充值。具体以官网实时为准",
-    },
-    {
-        "id": "github-models",
-        "name": "GitHub Models",
-        "icon": "🐙",
-        "tag": "开发者 · 限速免费",
-        "region": "海外",
-        "base_url": "https://models.inference.ai.azure.com",
-        "models": [
-            {
-                "id": "gpt-4o-mini",
-                "display": "GPT-4o mini",
-                "capability": "OpenAI 轻量模型，速度快，通用对话与代码辅助都够用。",
-                "tags": ["chat", "code", "fast"],
-                "examples": [
-                    "你好", "用Python写一个冒泡排序", "帮我润色这段英文",
-                ],
-            },
-            {
-                "id": "gpt-4.1-mini",
-                "display": "GPT-4.1 mini",
-                "capability": "GPT-4.1 轻量版，代码与长上下文能力更强。",
-                "tags": ["chat", "code", "reasoning"],
-                "examples": [
-                    "解释一下RESTful API设计", "写一个SQL窗口函数示例",
-                ],
-            },
-        ],
-        "signup_url": "https://github.com/settings/tokens",
-        "steps": [
-            "打开上方链接（需 GitHub 账号）",
-            "Generate new token → Fine-grained，勾选 Models 读取",
-            "复制 token（github_pat_ 开头），粘贴到下方输入框",
-        ],
-        "balance_support": False,
-        "quota_note": "GitHub 账号免费使用，按请求限速（每分钟约 15-20 请求）；具体以官网实时为准",
-    },
-    {
-        "id": "cloudflare",
-        "name": "Cloudflare Workers AI",
-        "icon": "☁️",
-        "tag": "海外 · 每日免费额度",
-        "region": "海外",
-        "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
-        "models": [
-            {
-                "id": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-                "display": "Llama 3.3 70B（Workers AI）",
-                "capability": "Cloudflare 边缘推理的 Llama 3.3 70B，通用对话与代码能力均衡。",
-                "tags": ["chat", "code", "reasoning"],
-                "examples": [
-                    "你好", "帮我写一个函数", "解释一下CDN原理",
-                ],
-            },
-        ],
-        "signup_url": "https://dash.cloudflare.com/",
-        "steps": [
-            "打开上方链接注册账号",
-            "复制右侧的 Account ID（稍后需填写）",
-            "创建 API Token（需 AI 权限），复制",
-            "注意：还需额外填写 Account ID",
-        ],
-        "balance_support": False,
-        "quota_note": "免费 tier 每日赠送额度（约 10k 神经元/天）；需要 Account ID + Token 两样。具体以官网实时为准",
-        "extra_fields": [
-            {"key": "account_id", "label": "Account ID", "placeholder": "Cloudflare 账户 ID（如 8b3f...）"},
-        ],
-    },
-    {
+FREE_TIER_VENDORS: List[dict] = [    {
         "id": "zhipu",
         "name": "智谱 AI",
         "icon": "🧪",
@@ -302,8 +60,7 @@ FREE_TIER_VENDORS: List[dict] = [
         ],
         "balance_support": False,
         "quota_note": "GLM-4-Flash 官方免费（限速）；注册赠送 token 可用于其他模型。具体以官网实时为准",
-    },
-    {
+    },    {
         "id": "siliconflow",
         "name": "硅基流动 SiliconFlow",
         "icon": "🌊",
@@ -338,8 +95,7 @@ FREE_TIER_VENDORS: List[dict] = [
         ],
         "balance_support": True,
         "quota_note": "注册赠送 14 元体验额度；部分开源模型免费（标注免费）；支持自动获取余额。具体以官网实时为准",
-    },
-    {
+    },    {
         "id": "moonshot",
         "name": "月之暗面 Kimi",
         "icon": "🌙",
@@ -375,6 +131,240 @@ FREE_TIER_VENDORS: List[dict] = [
         ],
         "balance_support": True,
         "quota_note": "新用户注册赠送额度；支持自动获取余额。具体以官网实时为准",
+    },    {
+        "id": "groq",
+        "name": "Groq",
+        "icon": "⚡",
+        "tag": "海外 · 速度极快",
+        "region": "海外",
+        "base_url": "https://api.groq.com/openai/v1",
+        "models": [
+            {
+                "id": "llama-3.3-70b-versatile",
+                "display": "Llama 3.3 70B（通用）",
+                "capability": "通用对话能力强，推理、写作、翻译、代码问答均擅长，响应速度极快。",
+                "tags": ["chat", "code", "reasoning"],
+                "examples": [
+                    "你好，介绍一下你自己", "用Python写一个快速排序", "帮我写一封请假邮件",
+                    "解释一下什么是区块链", "把这句话翻译成英文：今天天气很好",
+                ],
+            },
+            {
+                "id": "llama-3.1-8b-instant",
+                "display": "Llama 3.1 8B（轻量）",
+                "capability": "轻量快速，适合简单问答、文本分类、摘要等低延迟任务。",
+                "tags": ["chat", "fast", "classification"],
+                "examples": [
+                    "你好", "今天天气怎么样", "总结这段文字的要点", "1+1等于几",
+                ],
+            },
+        ],
+        "signup_url": "https://console.groq.com/keys",
+        "steps": [
+            "打开上方链接注册账号（支持 Google 一键登录）",
+            "进入左侧 API Keys 页，创建 API Key",
+            "复制 Key（sk- 开头），粘贴到下方输入框",
+        ],
+        "balance_support": False,
+        "quota_note": "免费额度大（按分钟限速），适合日常薅羊毛；具体额度以官网实时为准",
+    },    {
+        "id": "cerebras",
+        "name": "Cerebras",
+        "icon": "🚀",
+        "tag": "海外 · 超快推理",
+        "region": "海外",
+        "base_url": "https://api.cerebras.ai/v1",
+        "models": [
+            {
+                "id": "llama-3.3-70b",
+                "display": "Llama 3.3 70B（极速版）",
+                "capability": "世界最快推理的 Llama 3.3 70B，通用对话、代码、分析均出色，延迟极低。",
+                "tags": ["chat", "code", "reasoning"],
+                "examples": [
+                    "你好", "解释一下TCP三次握手", "写一段Python代码计算斐波那契数列",
+                    "帮我分析这段日志的报错原因", "写一个工作周报的模板",
+                ],
+            },
+        ],
+        "signup_url": "https://cloud.cerebras.ai/",
+        "steps": [
+            "打开上方链接注册账号",
+            "进入 Settings → API Keys，新建 Key",
+            "复制 Key（csk- 开头），粘贴到下方输入框",
+        ],
+        "balance_support": False,
+        "quota_note": "注册赠送免费额度，推理速度极快；具体额度以官网实时为准",
+    },    {
+        "id": "mistral",
+        "name": "Mistral",
+        "icon": "🌬️",
+        "tag": "海外 · 开发者免费",
+        "region": "海外",
+        "base_url": "https://api.mistral.ai/v1",
+        "models": [
+            {
+                "id": "open-mistral-nemo",
+                "display": "Mistral Nemo 12B（免费）",
+                "capability": "免费小模型，多语言能力强，适合日常对话、摘要、分类等常规任务。",
+                "tags": ["chat", "multilingual", "fast"],
+                "examples": [
+                    "你好", "帮我总结一下这段话", "推荐一本法语学习书", "把这段中文翻译成英文",
+                ],
+            },
+            {
+                "id": "mistral-small-latest",
+                "display": "Mistral Small（轻量旗舰）",
+                "capability": "轻量级旗舰模型，代码、推理、多语言兼顾，速度快成本低。",
+                "tags": ["chat", "code", "reasoning"],
+                "examples": [
+                    "用Python写一个二分查找", "解释一下量子计算", "帮我起一个英文品牌名",
+                ],
+            },
+        ],
+        "signup_url": "https://console.mistral.ai/",
+        "steps": [
+            "打开上方链接注册账号",
+            "进入 API Keys 页，点击 Create new key",
+            "复制 Key，粘贴到下方输入框",
+        ],
+        "balance_support": False,
+        "quota_note": "免费 tier 赠送额度，开放模型（open- 前缀）免费使用；具体以官网实时为准",
+    },    {
+        "id": "gemini",
+        "name": "Google Gemini",
+        "icon": "✨",
+        "tag": "海外 · 免费额度大",
+        "region": "海外",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "models": [
+            {
+                "id": "gemini-2.0-flash",
+                "display": "Gemini 2.0 Flash",
+                "capability": "免费额度大的多模态模型，支持文本/图像输入，速度快，综合能力强。",
+                "tags": ["chat", "multimodal", "fast", "reasoning"],
+                "examples": [
+                    "你好", "分析这张图片的内容", "写一首关于夏天的诗",
+                    "解释一下相对论", "帮我规划一次杭州三日游",
+                ],
+            },
+            {
+                "id": "gemini-2.5-flash",
+                "display": "Gemini 2.5 Flash（思考型）",
+                "capability": "带思考能力的 Flash 模型，复杂推理、数学、编程表现更好。",
+                "tags": ["reasoning", "code", "math"],
+                "examples": [
+                    "解一道高中数学题", "分析这段代码的时间复杂度", "设计一个分布式锁方案",
+                ],
+            },
+        ],
+        "signup_url": "https://aistudio.google.com/apikey",
+        "steps": [
+            "打开上方链接（需科学上网）",
+            "用 Google 账号登录，点击 Create API key",
+            "复制 Key（AIza 开头），粘贴到下方输入框",
+        ],
+        "balance_support": False,
+        "quota_note": "免费 tier 额度较大（按分钟/天限速），Flash 系列免费；具体以官网实时为准",
+    },    {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "icon": "🔀",
+        "tag": "聚合 · 免费模型池",
+        "region": "海外",
+        "base_url": "https://openrouter.ai/api/v1",
+        "models": [
+            {
+                "id": "meta-llama/llama-3.3-70b-instruct:free",
+                "display": "Llama 3.3 70B（:free）",
+                "capability": "OpenRouter 免费路由的 Llama 3.3 70B，通用对话能力强。",
+                "tags": ["chat", "code", "reasoning"],
+                "examples": [
+                    "你好", "解释一下什么是API", "帮我写一份产品需求文档",
+                ],
+            },
+            {
+                "id": "deepseek/deepseek-chat-v3-0324:free",
+                "display": "DeepSeek V3（:free）",
+                "capability": "DeepSeek V3 免费路由版，代码与推理能力突出。",
+                "tags": ["code", "reasoning", "chat"],
+                "examples": [
+                    "用Python写一个爬虫", "解释一下DP动态规划", "帮我调试这段报错",
+                ],
+            },
+        ],
+        "signup_url": "https://openrouter.ai/keys",
+        "steps": [
+            "打开上方链接注册账号",
+            "进入 Keys 页，点击 Create Key",
+            "复制 Key（sk-or-v1- 开头），粘贴到下方输入框",
+        ],
+        "balance_support": False,
+        "quota_note": ":free 后缀模型免费（有限速/非高峰限制）；付费模型按用量扣费，需充值。具体以官网实时为准",
+    },    {
+        "id": "github-models",
+        "name": "GitHub Models",
+        "icon": "🐙",
+        "tag": "开发者 · 限速免费",
+        "region": "海外",
+        "base_url": "https://models.inference.ai.azure.com",
+        "models": [
+            {
+                "id": "gpt-4o-mini",
+                "display": "GPT-4o mini",
+                "capability": "OpenAI 轻量模型，速度快，通用对话与代码辅助都够用。",
+                "tags": ["chat", "code", "fast"],
+                "examples": [
+                    "你好", "用Python写一个冒泡排序", "帮我润色这段英文",
+                ],
+            },
+            {
+                "id": "gpt-4.1-mini",
+                "display": "GPT-4.1 mini",
+                "capability": "GPT-4.1 轻量版，代码与长上下文能力更强。",
+                "tags": ["chat", "code", "reasoning"],
+                "examples": [
+                    "解释一下RESTful API设计", "写一个SQL窗口函数示例",
+                ],
+            },
+        ],
+        "signup_url": "https://github.com/settings/tokens",
+        "steps": [
+            "打开上方链接（需 GitHub 账号）",
+            "Generate new token → Fine-grained，勾选 Models 读取",
+            "复制 token（github_pat_ 开头），粘贴到下方输入框",
+        ],
+        "balance_support": False,
+        "quota_note": "GitHub 账号免费使用，按请求限速（每分钟约 15-20 请求）；具体以官网实时为准",
+    },    {
+        "id": "cloudflare",
+        "name": "Cloudflare Workers AI",
+        "icon": "☁️",
+        "tag": "海外 · 每日免费额度",
+        "region": "海外",
+        "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+        "models": [
+            {
+                "id": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+                "display": "Llama 3.3 70B（Workers AI）",
+                "capability": "Cloudflare 边缘推理的 Llama 3.3 70B，通用对话与代码能力均衡。",
+                "tags": ["chat", "code", "reasoning"],
+                "examples": [
+                    "你好", "帮我写一个函数", "解释一下CDN原理",
+                ],
+            },
+        ],
+        "signup_url": "https://dash.cloudflare.com/",
+        "steps": [
+            "打开上方链接注册账号",
+            "复制右侧的 Account ID（稍后需填写）",
+            "创建 API Token（需 AI 权限），复制",
+            "注意：还需额外填写 Account ID",
+        ],
+        "balance_support": False,
+        "quota_note": "免费 tier 每日赠送额度（约 10k 神经元/天）；需要 Account ID + Token 两样。具体以官网实时为准",
+        "extra_fields": [
+            {"key": "account_id", "label": "Account ID", "placeholder": "Cloudflare 账户 ID（如 8b3f...）"},
+        ],
     },
 ]
 

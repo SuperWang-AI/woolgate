@@ -277,96 +277,88 @@ def create_ui():
     
     
     @ui.page('/wizard')
-    async def wizard_page():
-        """免费接入向导（A1+A7）——选厂商 → 看步骤 → 粘 Key → 自动配置"""
+    async def wizard_page(vendor: str = ''):
+        """免费接入向导（A1+A7）——选厂商 → 看步骤 → 粘 Key → 自动配置（query 驱动整页渲染）"""
         ui.page_title('免费接入 - WoolGate')
         nav_header('wizard')
 
-        from app.services.free_tier_catalog import list_vendors, get_vendor, FreeTierService
+        from app.services.free_tier_catalog import list_vendors, get_vendor, FreeTierService, vendor_matches
 
         vendors = list_vendors()
-        state = {'vendor': None}
-        extra_inputs = {}
+        selected = get_vendor(vendor) if vendor else None
+
+        # 已接入厂商标记（按别名匹配，避免同名不同写法漏判）
+        async with AsyncSessionLocal() as _s:
+            acc_res = await _s.execute(select(ModelAccount.vendor, ModelAccount.model_name))
+            _vendor_models = [(r[0] or '', r[1]) for r in acc_res.all()]
+
+        def vendor_connected(v):
+            return any(vendor_matches(vn, v['id']) for vn, _ in _vendor_models)
+
+        def vendor_connected_models(v):
+            return [mn for vn, mn in _vendor_models if vendor_matches(vn, v['id'])]
 
         with ui.column().classes('w-full max-w-7xl mx-auto p-6 gap-6'):
             ui.label('🆓 免费模型接入向导').classes('text-3xl font-bold text-gray-800')
             ui.label('选一个厂商 → 按步骤拿到 API Key → 粘贴后自动完成建账号、能力描述、向量计算、启用。全程 10 分钟以内，无需理解任何底层概念').classes('text-sm text-gray-500 -mt-4')
 
-            # 已接入厂商标记（按别名匹配，避免同名不同写法漏判）
-            from app.services.free_tier_catalog import vendor_matches
-            async with AsyncSessionLocal() as _s:
-                acc_res = await _s.execute(select(ModelAccount.vendor, ModelAccount.model_name))
-                _vendor_models = [(r[0] or '', r[1]) for r in acc_res.all()]
+            with ui.row().classes('w-full gap-6 items-start'):
+                # ── 左：厂商卡片（网格）──
+                with ui.column().classes('flex-1 min-w-0 gap-3'):
+                    ui.label('① 选择厂商').classes('text-xl font-bold text-gray-700')
+                    with ui.row().classes('w-full gap-3 flex-wrap'):
+                        for v in vendors:
+                            is_sel = selected and selected['id'] == v['id']
+                            with ui.card().classes('w-72 shadow-lg cursor-pointer hover:shadow-xl transition-all p-4').style(
+                                'border:2px solid #52c41a;' if is_sel else 'border:2px solid transparent;'
+                            ).on('click', lambda vv=v: ui.run_javascript(f"window.location.href='/admin/wizard?vendor={vv['id']}'")):
+                                with ui.row().classes('items-center gap-2 w-full'):
+                                    ui.label(v['icon']).classes('text-3xl')
+                                    ui.label(v['name']).classes('text-lg font-bold')
+                                ui.label(v['tag']).classes('text-xs text-green-600 font-bold')
+                                with ui.row().classes('items-center gap-1 w-full'):
+                                    ui.label(f"🧩 {len(v['models'])} 个免费模型").classes('text-xs text-gray-500')
+                                    if vendor_connected(v):
+                                        ui.label(f'✅ 已接入 {len(vendor_connected_models(v))} 个').classes('text-xs text-green-600 font-bold')
+                                ui.label(v['quota_note']).classes('text-xs text-gray-500').style('line-height:1.4')
 
-            def vendor_connected(v):
-                return any(vendor_matches(vn, v['id']) for vn, _ in _vendor_models)
+                # ── 右：详情 / 配置区（固定宽，滚动跟随）──
+                with ui.column().classes('w-[420px] min-w-[420px] gap-3'):
+                    if not selected:
+                        with ui.card().classes('w-full shadow p-8'):
+                            ui.label('👈 点击左侧卡片选择一个厂商').classes('text-gray-400 text-center py-16 w-full')
+                    else:
+                        with ui.card().classes('w-full shadow-lg border-l-4 border-green-500 p-4'):
+                            with ui.row().classes('items-center gap-3'):
+                                ui.label(f"{selected['icon']} {selected['name']}").classes('text-2xl font-bold')
+                                ui.label(selected['tag']).classes('text-xs bg-green-50 text-green-700 px-2 py-1 rounded font-bold')
+                            ui.label(f"额度说明：{selected['quota_note']}").classes('text-sm text-gray-600 mt-1')
+                            connected_models = vendor_connected_models(selected)
+                            if connected_models:
+                                ui.label(
+                                    f"ℹ️ 该厂商已接入 {len(connected_models)} 个模型（{', '.join(connected_models[:3])}{'…' if len(connected_models) > 3 else ''}），"
+                                    f"向导只会补充未接入的免费模型，不会重复建号"
+                                ).classes('text-xs text-blue-700 bg-blue-50 px-2 py-1 rounded mt-2')
 
-            def vendor_connected_models(v):
-                return [mn for vn, mn in _vendor_models if vendor_matches(vn, v['id'])]
+                            ui.label('② 获取 API Key（只需这一步）').classes('text-lg font-bold text-gray-700 mt-4')
+                            for i, step in enumerate(selected['steps'], 1):
+                                with ui.row().classes('items-start gap-2 w-full'):
+                                    ui.label(str(i)).classes('w-6 h-6 rounded-full bg-green-500 text-white text-xs flex items-center justify-center mt-0.5')
+                                    ui.label(step).classes('text-sm flex-1 pt-0.5')
+                            ui.link(f'🔗 前往 {selected["name"]} 获取 API Key', selected['signup_url'], new_tab=True) \
+                                .classes('text-blue-600 underline text-sm mt-2')
+                            ui.label('拿到 Key 后回到本页继续').classes('text-xs text-gray-400')
 
-            ui.label('① 选择厂商').classes('text-xl font-bold text-gray-700 mt-2')
+                            ui.label('③ 粘贴 API Key，一键自动配置').classes('text-lg font-bold text-gray-700 mt-4')
+                            api_key_input = ui.input('API Key', password=True, password_toggle_button=True).classes('w-full')
+                            extra_inputs = {}
+                            for f in selected.get('extra_fields', []):
+                                extra_inputs[f['key']] = ui.input(f['label'], placeholder=f.get('placeholder', '')).classes('w-full')
 
-            @ui.refreshable
-            def vendor_cards():
-                for v in vendors:
-                    is_sel = state['vendor'] and state['vendor']['id'] == v['id']
-                    with ui.card().classes('w-64 shadow-lg cursor-pointer hover:shadow-xl transition-all p-4').style(
-                        'border:2px solid #52c41a;' if is_sel else 'border:2px solid transparent;'
-                    ):
-                        with ui.row().classes('items-center gap-2 w-full'):
-                            ui.label(v['icon']).classes('text-3xl')
-                            ui.label(v['name']).classes('text-lg font-bold')
-                        ui.label(v['tag']).classes('text-xs text-green-600 font-bold')
-                        with ui.row().classes('items-center gap-1 w-full'):
-                            ui.label(f"🧩 {len(v['models'])} 个免费模型").classes('text-xs text-gray-500')
-                            if vendor_connected(v):
-                                ui.label(f'✅ 已接入 {len(vendor_connected_models(v))} 个').classes('text-xs text-green-600 font-bold')
-                        ui.label(v['quota_note']).classes('text-xs text-gray-500').style('line-height:1.4')
-                        ui.button('选择', on_click=lambda vv=v: select_vendor(vv)) \
-                            .props('color=green outline size=sm no-caps').classes('w-full mt-1')
+                            ui.button('🚀 一键自动配置', on_click=lambda: run_config(selected, api_key_input, extra_inputs)) \
+                                .props('color=green size=lg no-caps').classes('mt-2')
 
-            def select_vendor(v):
-                state['vendor'] = v
-                vendor_cards.refresh()
-                detail.refresh()
-
-            @ui.refreshable
-            def detail():
-                v = state['vendor']
-                if not v:
-                    ui.label('👆 点击上方卡片选择一个厂商开始').classes('text-gray-400 text-center py-10 w-full')
-                    return
-                with ui.card().classes('w-full shadow-lg border-l-4 border-green-500 p-4'):
-                    with ui.row().classes('items-center gap-3'):
-                        ui.label(f"{v['icon']} {v['name']}").classes('text-2xl font-bold')
-                        ui.label(v['tag']).classes('text-xs bg-green-50 text-green-700 px-2 py-1 rounded font-bold')
-                    ui.label(f"额度说明：{v['quota_note']}").classes('text-sm text-gray-600 mt-1')
-                    connected_models = vendor_connected_models(v)
-                    if connected_models:
-                        ui.label(
-                            f"ℹ️ 该厂商已接入 {len(connected_models)} 个模型（{', '.join(connected_models[:3])}{'…' if len(connected_models) > 3 else ''}），"
-                            f"向导只会补充未接入的免费模型，不会重复建号"
-                        ).classes('text-xs text-blue-700 bg-blue-50 px-2 py-1 rounded mt-2')
-
-                    ui.label('② 获取 API Key（只需这一步）').classes('text-lg font-bold text-gray-700 mt-4')
-                    for i, step in enumerate(get_vendor(v['id'])['steps'], 1):
-                        with ui.row().classes('items-start gap-2 w-full'):
-                            ui.label(str(i)).classes('w-6 h-6 rounded-full bg-green-500 text-white text-xs flex items-center justify-center mt-0.5')
-                            ui.label(step).classes('text-sm flex-1 pt-0.5')
-                    with ui.row().classes('items-center gap-2 mt-2'):
-                        ui.button('🔗 打开获取页面', on_click=lambda: ui.navigate.to(v['signup_url'], new_tab=True)).props('color=primary outline no-caps')
-                        ui.label('拿到 Key 后回到本页继续').classes('text-xs text-gray-400')
-
-                    ui.label('③ 粘贴 API Key，一键自动配置').classes('text-lg font-bold text-gray-700 mt-4')
-                    api_key_input = ui.input('API Key', password=True, password_toggle_button=True).classes('w-full')
-                    for f in v.get('extra_fields', []):
-                        extra_inputs[f['key']] = ui.input(f['label'], placeholder=f.get('placeholder', '')).classes('w-full')
-
-                    result_box = ui.column().classes('w-full gap-1 mt-2')
-                    ui.button('🚀 一键自动配置', on_click=lambda: run_config(v, api_key_input, result_box)) \
-                        .props('color=green size=lg no-caps').classes('mt-2')
-
-            async def run_config(v, api_key_input, result_box):
+            async def run_config(v, api_key_input, extra_inputs):
                 key = api_key_input.value or ''
                 if not key.strip():
                     ui.notify('请先粘贴 API Key', type='warning')
@@ -376,32 +368,21 @@ def create_ui():
                     async with AsyncSessionLocal() as session:
                         svc = FreeTierService(session)
                         res = await svc.auto_configure(v['id'], key, extra)
-                    result_box.clear()
-                    with result_box:
-                        ui.label(f"✅ {res['vendor']} 配置完成").classes('text-lg font-bold text-green-700')
-                        if res['created_accounts']:
-                            for a in res['created_accounts']:
-                                ui.label(f"➕ {a}").classes('text-sm')
-                        if res['models_synced']:
-                            ui.label(f"🧠 已同步模型（能力描述+向量）: {', '.join(res['models_synced'])}").classes('text-sm text-blue-700')
-                        if res['balance']:
-                            unit, bal = res['balance']
-                            ui.label(f"💰 自动获取余额: {bal:.2f}（{unit}）").classes('text-sm text-orange-700')
-                        if res['skipped']:
-                            ui.label(f"⏭️ 已存在跳过: {', '.join(res['skipped'])}").classes('text-sm text-gray-500')
-                        if res['errors']:
-                            for e in res['errors']:
-                                ui.label(f'⚠️ {e}').classes('text-sm text-red-500')
-                    ui.notify('配置完成', type='positive')
-                    ui.run_javascript('setTimeout(() => window.location.reload(), 800)')
+                    parts = []
+                    if res['created_accounts']:
+                        parts.append(f"新建 {len(res['created_accounts'])} 个账号")
+                    if res['models_synced']:
+                        parts.append(f"同步 {len(res['models_synced'])} 个模型")
+                    if res['balance']:
+                        parts.append(f"余额 {res['balance'][1]:.2f} {res['balance'][0]}")
+                    if res['skipped']:
+                        parts.append(f"跳过 {len(res['skipped'])} 个已存在")
+                    if res['errors']:
+                        parts.append(f"错误 {len(res['errors'])} 个: {'; '.join(res['errors'][:2])}")
+                    ui.notify("✅ " + res['vendor'] + " 配置完成 " + " | ".join(parts), type='positive', timeout=6000)
+                    ui.run_javascript(f"setTimeout(() => window.location.href='/admin/wizard?vendor={v['id']}', 1000)")
                 except Exception as e:
-                    ui.notify(f'配置失败: {str(e)[:120]}', type='negative')
-                    with result_box:
-                        ui.label(f'❌ {str(e)[:200]}').classes('text-sm text-red-500')
-
-            vendor_cards()
-            detail()
-
+                    ui.notify(f'配置失败: {str(e)[:150]}', type='negative')
 
     @ui.page('/accounts')
     async def accounts_page():

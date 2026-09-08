@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.pool import StaticPool
 
 from app.models.database import Base, ModelAccount, ModelCatalog, SystemConfig
-from app.services.free_tier_catalog import FREE_TIER_VENDORS, get_vendor, list_vendors, FreeTierService
+from app.services.free_tier_catalog import FREE_TIER_VENDORS, get_vendor, list_vendors, FreeTierService, vendor_matches
 
 
 @pytest.fixture
@@ -229,3 +229,49 @@ async def test_auto_configure_cloudflare_with_account_id(db_session, monkeypatch
     assert res["created_accounts"]
     accounts = (await db_session.execute(select(ModelAccount))).scalars().all()
     assert accounts[0].base_url == "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1"
+
+
+# ───────────────────────── 别名匹配（已接入/幂等） ─────────────────────────
+
+def test_vendor_matches_alias():
+    """同一厂商不同写法应匹配"""
+    assert vendor_matches("月之暗面 (Moonshot)", "moonshot")
+    assert vendor_matches("月之暗面 Kimi", "moonshot")
+    assert vendor_matches("Kimi", "moonshot")
+    assert vendor_matches("硅基流动 (SiliconFlow)", "siliconflow")
+    assert vendor_matches("智谱", "zhipu")
+    assert vendor_matches("阿里百炼 (Qwen)", "gemini") is False  # 不同厂商不误配
+    assert vendor_matches("", "groq") is False
+    assert vendor_matches("Groq", "groq")
+
+
+@pytest.mark.asyncio
+async def test_auto_configure_dedup_by_alias(db_session, monkeypatch):
+    """真实场景：库里已有 '月之暗面 (Moonshot)' 账号 → 向导配置 moonshot 不重复建号"""
+    # 预置已有账号（模拟账号管理里的月之暗面）
+    existing = ModelAccount(
+        vendor="月之暗面 (Moonshot)",
+        model_name="kimi-k2.6",
+        api_key_encrypted="enc-old-key",
+        virtual_model="chat",
+        is_enable=True,
+    )
+    db_session.add(existing)
+    await db_session.commit()
+
+    async def fake_fetch_models(account):
+        return ["kimi-k2.6", "moonshot-v1-8k"]
+
+    monkeypatch.setattr("app.services.balance.fetch_models", fake_fetch_models)
+    monkeypatch.setattr("app.services.embedding.EmbeddingService", FakeEmbed)
+
+    svc = FreeTierService(db_session)
+    res = await svc.auto_configure("moonshot", "sk-new-key")
+
+    # kimi-k2.6 已存在（别名匹配）→ 跳过；moonshot-v1-8k 新建
+    assert res["skipped"] == ["kimi-k2.6"]
+    assert len(res["created_accounts"]) == 1
+    assert res["models_synced"] == ["moonshot-v1-8k"]
+
+    accounts = (await db_session.execute(select(ModelAccount))).scalars().all()
+    assert len(accounts) == 2  # 原账号 + 1 个新账号

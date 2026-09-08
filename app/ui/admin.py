@@ -292,10 +292,17 @@ def create_ui():
             ui.label('🆓 免费模型接入向导').classes('text-3xl font-bold text-gray-800')
             ui.label('选一个厂商 → 按步骤拿到 API Key → 粘贴后自动完成建账号、能力描述、向量计算、启用。全程 10 分钟以内，无需理解任何底层概念').classes('text-sm text-gray-500 -mt-4')
 
-            # 已接入厂商标记
+            # 已接入厂商标记（按别名匹配，避免同名不同写法漏判）
+            from app.services.free_tier_catalog import vendor_matches
             async with AsyncSessionLocal() as _s:
-                acc_res = await _s.execute(select(ModelAccount.vendor).distinct())
-                existing_vendors = {r[0] for r in acc_res.all()}
+                acc_res = await _s.execute(select(ModelAccount.vendor, ModelAccount.model_name))
+                _vendor_models = [(r[0] or '', r[1]) for r in acc_res.all()]
+
+            def vendor_connected(v):
+                return any(vendor_matches(vn, v['id']) for vn, _ in _vendor_models)
+
+            def vendor_connected_models(v):
+                return [mn for vn, mn in _vendor_models if vendor_matches(vn, v['id'])]
 
             ui.label('① 选择厂商').classes('text-xl font-bold text-gray-700 mt-2')
 
@@ -312,8 +319,8 @@ def create_ui():
                         ui.label(v['tag']).classes('text-xs text-green-600 font-bold')
                         with ui.row().classes('items-center gap-1 w-full'):
                             ui.label(f"🧩 {len(v['models'])} 个免费模型").classes('text-xs text-gray-500')
-                            if v['name'] in existing_vendors:
-                                ui.label('✅ 已接入').classes('text-xs text-green-600 font-bold')
+                            if vendor_connected(v):
+                                ui.label(f'✅ 已接入 {len(vendor_connected_models(v))} 个').classes('text-xs text-green-600 font-bold')
                         ui.label(v['quota_note']).classes('text-xs text-gray-500').style('line-height:1.4')
                         ui.button('选择', on_click=lambda vv=v: select_vendor(vv)) \
                             .props('color=green outline size=sm no-caps').classes('w-full mt-1')
@@ -334,6 +341,12 @@ def create_ui():
                         ui.label(f"{v['icon']} {v['name']}").classes('text-2xl font-bold')
                         ui.label(v['tag']).classes('text-xs bg-green-50 text-green-700 px-2 py-1 rounded font-bold')
                     ui.label(f"额度说明：{v['quota_note']}").classes('text-sm text-gray-600 mt-1')
+                    connected_models = vendor_connected_models(v)
+                    if connected_models:
+                        ui.label(
+                            f"ℹ️ 该厂商已接入 {len(connected_models)} 个模型（{', '.join(connected_models[:3])}{'…' if len(connected_models) > 3 else ''}），"
+                            f"向导只会补充未接入的免费模型，不会重复建号"
+                        ).classes('text-xs text-blue-700 bg-blue-50 px-2 py-1 rounded mt-2')
 
                     ui.label('② 获取 API Key（只需这一步）').classes('text-lg font-bold text-gray-700 mt-4')
                     for i, step in enumerate(get_vendor(v['id'])['steps'], 1):

@@ -379,6 +379,36 @@ FREE_TIER_VENDORS: List[dict] = [
 ]
 
 
+# ══════════════════════════════════════════════════════════
+# 厂商别名表
+# ══════════════════════════════════════════════════════════
+# 同一厂商在账号管理里可能被写成不同名称（如"月之暗面 (Moonshot)" / "月之暗面 Kimi"），
+# 幂等查重与"已接入"判定必须按别名模糊匹配，否则会重复建号。
+VENDOR_ALIASES: dict = {
+    "groq": ["groq"],
+    "cerebras": ["cerebras"],
+    "mistral": ["mistral"],
+    "gemini": ["gemini", "google"],
+    "openrouter": ["openrouter"],
+    "github-models": ["github", "github models"],
+    "cloudflare": ["cloudflare"],
+    "zhipu": ["智谱", "zhipu", "bigmodel", "glm"],
+    "siliconflow": ["硅基流动", "siliconflow"],
+    "moonshot": ["月之暗面", "moonshot", "kimi"],
+}
+
+
+def vendor_matches(vendor_name: str, vendor_id: str) -> bool:
+    """判断账号的 vendor 名称是否属于目录中的某厂商（别名模糊匹配）"""
+    if not vendor_name:
+        return False
+    aliases = VENDOR_ALIASES.get(vendor_id, [])
+    if not aliases:
+        return False
+    n = vendor_name.lower()
+    return any(a.lower() in n for a in aliases)
+
+
 def get_vendor(vendor_id: str) -> Optional[dict]:
     """按 id 获取厂商目录项"""
     for v in FREE_TIER_VENDORS:
@@ -496,14 +526,16 @@ class FreeTierService:
 
         for model_id in models:
             try:
-                # 查重：同 vendor+model 已存在则跳过
-                existing = await self.db.execute(
-                    select(ModelAccount).where(
-                        ModelAccount.vendor == vendor["name"],
-                        ModelAccount.model_name == model_id,
-                    )
+                # 查重：同厂商（别名匹配）同模型已存在则跳过，避免重复建号
+                existing_result = await self.db.execute(
+                    select(ModelAccount).where(ModelAccount.model_name == model_id)
                 )
-                if existing.scalar_one_or_none():
+                duplicated = None
+                for acc in existing_result.scalars().all():
+                    if vendor_matches(acc.vendor or "", vendor["id"]):
+                        duplicated = acc
+                        break
+                if duplicated:
                     result["skipped"].append(model_id)
                     continue
 

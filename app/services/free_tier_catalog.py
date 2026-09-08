@@ -33,7 +33,54 @@ logger = logging.getLogger(__name__)
 #   balance_support  是否支持自动获取余额（fetch_balance）
 #   quota_note    额度说明（定性，以官网为准）
 #   extra_fields  该厂商需要的额外配置项（如 Cloudflare 的 account_id）
-FREE_TIER_VENDORS: List[dict] = [    {
+FREE_TIER_VENDORS: List[dict] = [
+    {
+        "id": "ollama",
+        "name": "本地模型（Ollama）",
+        "icon": "💻",
+        "tag": "本地 · 完全免费",
+        "region": "本地",
+        "base_url": "http://localhost:11434/v1",
+        "models": [
+            {
+                "id": "llama3.1",
+                "display": "Llama 3.1（示例）",
+                "capability": "Meta 开源旗舰，通用对话、写作、代码均衡，本地运行隐私安全。",
+                "tags": ["chat", "code", "writing"],
+                "examples": [
+                    "你好", "帮我写一封邮件", "解释一下什么是数据库索引", "用Python写一个快速排序",
+                ],
+            },
+            {
+                "id": "qwen2.5",
+                "display": "Qwen2.5（示例）",
+                "capability": "通义千问开源模型，中文能力强，本地运行速度快。",
+                "tags": ["chat", "writing"],
+                "examples": [
+                    "你好", "帮我写一首诗", "解释一下量子计算",
+                ],
+            },
+            {
+                "id": "deepseek-r1",
+                "display": "DeepSeek-R1（示例）",
+                "capability": "深度求索开源推理模型，数学、逻辑、代码推理出色。",
+                "tags": ["reasoning", "code", "math"],
+                "examples": [
+                    "解一道数学题", "分析这段代码的时间复杂度", "解释一下贝叶斯定理",
+                ],
+            },
+        ],
+        "signup_url": "https://ollama.com/",
+        "steps": [
+            "下载安装 Ollama（支持 Windows/macOS/Linux）",
+            "终端执行 ollama pull 模型名，拉取想用的模型",
+            "无需 Key，确保本机 Ollama 已启动，直接点击一键配置",
+        ],
+        "balance_support": False,
+        "quota_note": "完全免费无上限，跑的是本地开源模型；卡片模型为示例，实际以你本地已安装的为准（自动探测）",
+        "no_key": True,
+    },
+    {
         "id": "zhipu",
         "name": "智谱 AI",
         "icon": "🧪",
@@ -131,7 +178,192 @@ FREE_TIER_VENDORS: List[dict] = [    {
         ],
         "balance_support": True,
         "quota_note": "新用户注册赠送额度；支持自动获取余额。具体以官网实时为准",
-    },    {
+    },
+    {
+        "id": "deepseek",
+        "name": "DeepSeek",
+        "icon": "🐋",
+        "tag": "国内 · 极低价",
+        "region": "国内",
+        "base_url": "https://api.deepseek.com/v1",
+        "models": [
+            {
+                "id": "deepseek-chat",
+                "display": "DeepSeek-V3（通用）",
+                "capability": "深度求索旗舰通用模型，代码、推理、写作全面，价格极低。",
+                "tags": ["chat", "code", "reasoning"],
+                "examples": [
+                    "你好", "用Python写一个爬虫", "帮我调试这段报错", "解释一下动态规划",
+                ],
+            },
+            {
+                "id": "deepseek-reasoner",
+                "display": "DeepSeek-R1（推理）",
+                "capability": "深度推理模型，数学、逻辑、复杂分析能力强。",
+                "tags": ["reasoning", "math", "code"],
+                "examples": [
+                    "解一道高中数学题", "证明费马小定理", "分析这份数据的异常点",
+                ],
+            },
+        ],
+        "signup_url": "https://platform.deepseek.com/",
+        "steps": [
+            "打开上方链接注册账号（手机号即可）",
+            "进入 API Keys 页创建 API Key",
+            "复制 Key（sk- 开头），粘贴到下方输入框",
+        ],
+        "balance_support": True,
+        "quota_note": "按量计费价格极低（无免费额度，充 10 元可用很久）；支持自动获取余额。具体以官网实时为准",
+    },
+    {
+        "id": "aliyun",
+        "name": "阿里百炼（通义千问）",
+        "icon": "🌤️",
+        "tag": "国内 · 新用户赠送",
+        "region": "国内",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "models": [
+            {
+                "id": "qwen-turbo",
+                "display": "Qwen-Turbo（赠送）",
+                "capability": "通义千问轻量模型，速度快，日常对话、写作、问答免费额度大。",
+                "tags": ["chat", "writing", "fast"],
+                "examples": [
+                    "你好", "帮我写一段产品介绍", "解释一下什么是API",
+                ],
+            },
+            {
+                "id": "qwen-plus",
+                "display": "Qwen-Plus（增强）",
+                "capability": "通义千问增强模型，理解与生成质量更高，通用场景。",
+                "tags": ["chat", "writing", "reasoning"],
+                "examples": [
+                    "你好", "帮我写一份周报", "分析这篇文章的论点",
+                ],
+            },
+        ],
+        "signup_url": "https://bailian.console.aliyun.com/",
+        "steps": [
+            "打开上方链接注册账号（手机号即可，需实名）",
+            "开通百炼，进入 API-KEY 管理创建",
+            "复制 Key（sk- 开头），粘贴到下方输入框",
+        ],
+        "balance_support": False,
+        "quota_note": "新用户赠送免费额度，qwen-turbo 等模型有免费调用额度。具体以官网实时为准",
+    },
+    {
+        "id": "hunyuan",
+        "name": "腾讯混元",
+        "icon": "🌀",
+        "tag": "国内 · 注册赠送",
+        "region": "国内",
+        "base_url": "https://api.hunyuan.cloud.tencent.com/v1",
+        "models": [
+            {
+                "id": "hunyuan-turbos-latest",
+                "display": "混元 TurboS（免费）",
+                "capability": "腾讯混元旗舰，中文对话、写作、代码均衡，TurboS 系列免费。",
+                "tags": ["chat", "code", "writing"],
+                "examples": [
+                    "你好", "帮我写一封请假邮件", "解释一下区块链原理",
+                ],
+            },
+            {
+                "id": "hunyuan-turbo",
+                "display": "混元 Turbo",
+                "capability": "混元标准模型，速度快成本低，日常问答够用。",
+                "tags": ["chat", "fast"],
+                "examples": [
+                    "你好", "今天天气怎么样", "1+1等于几",
+                ],
+            },
+        ],
+        "signup_url": "https://console.cloud.tencent.com/hunyuan",
+        "steps": [
+            "打开上方链接注册账号（手机号即可，需实名）",
+            "开通混元大模型，进入密钥管理创建 API Key",
+            "复制 Key（sk- 开头），粘贴到下方输入框",
+        ],
+        "balance_support": False,
+        "quota_note": "混元 TurboS 等模型官方免费额度，注册赠送 token。具体以官网实时为准",
+    },
+    {
+        "id": "doubao",
+        "name": "字节豆包（火山方舟）",
+        "icon": "🫘",
+        "tag": "国内 · 新用户赠送",
+        "region": "国内",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "models": [
+            {
+                "id": "doubao-seed-1-6-lite",
+                "display": "Doubao Seed 1.6 Lite（示例）",
+                "capability": "豆包轻量模型，速度快，日常对话、写作免费额度大。",
+                "tags": ["chat", "fast", "writing"],
+                "examples": [
+                    "你好", "帮我写一句宣传语", "总结这段话",
+                ],
+            },
+            {
+                "id": "doubao-1-5-pro",
+                "display": "Doubao 1.5 Pro（示例）",
+                "capability": "豆包旗舰模型，理解与生成质量高，支持长上下文。",
+                "tags": ["chat", "reasoning", "long-context"],
+                "examples": [
+                    "你好", "分析这份合同的风险点", "帮我写一份方案",
+                ],
+            },
+        ],
+        "signup_url": "https://console.volcengine.com/ark",
+        "steps": [
+            "打开上方链接注册账号（手机号即可，需实名）",
+            "开通火山方舟，创建推理接入点（Endpoint）",
+            "创建 API Key，复制 Key，下方还需填 Endpoint ID",
+        ],
+        "balance_support": False,
+        "quota_note": "新用户赠送额度；需额外填写 Endpoint ID（方舟控制台推理接入点页复制）。具体以官网实时为准",
+        "extra_fields": [
+            {"key": "endpoint_id", "label": "Endpoint ID", "placeholder": "火山方舟推理接入点 ID（如 ep-2026...）"},
+        ],
+        "require_extra": "endpoint_id",
+    },
+    {
+        "id": "qianfan",
+        "name": "百度千帆",
+        "icon": "🌐",
+        "tag": "国内 · 注册赠送",
+        "region": "国内",
+        "base_url": "https://qianfan.baidubce.com/v2",
+        "models": [
+            {
+                "id": "ernie-speed-8k",
+                "display": "ERNIE Speed（免费）",
+                "capability": "百度文心轻量模型，速度快，日常问答、写作免费。",
+                "tags": ["chat", "fast", "writing"],
+                "examples": [
+                    "你好", "帮我写一份会议纪要", "解释一下什么是物联网",
+                ],
+            },
+            {
+                "id": "ernie-4.0-turbo-8k",
+                "display": "ERNIE 4.0 Turbo",
+                "capability": "文心 4.0 轻量旗舰，理解与推理质量高。",
+                "tags": ["chat", "reasoning"],
+                "examples": [
+                    "你好", "分析这段代码的问题", "推荐一个学习路线",
+                ],
+            },
+        ],
+        "signup_url": "https://console.bce.baidu.com/qianfan/",
+        "steps": [
+            "打开上方链接注册账号（手机号即可，需实名）",
+            "开通千帆大模型平台，进入 API Key 管理",
+            "复制 API Key（bce-v3 开头），粘贴到下方输入框",
+        ],
+        "balance_support": False,
+        "quota_note": "注册实名赠送额度，ERNIE Speed 有免费调用。具体以官网实时为准",
+    },
+    {
         "id": "groq",
         "name": "Groq",
         "icon": "⚡",
@@ -391,6 +623,12 @@ VENDOR_ALIASES: dict = {
     "zhipu": ["智谱", "zhipu", "bigmodel", "glm"],
     "siliconflow": ["硅基流动", "siliconflow"],
     "moonshot": ["月之暗面", "moonshot", "kimi"],
+    "ollama": ["ollama", "本地", "local"],
+    "deepseek": ["deepseek", "深度求索"],
+    "aliyun": ["阿里", "百炼", "dashscope", "通义", "qwen"],
+    "hunyuan": ["腾讯", "混元", "hunyuan"],
+    "doubao": ["字节", "豆包", "doubao", "火山", "方舟", "volcengine", "ark"],
+    "qianfan": ["百度", "千帆", "qianfan", "文心", "ernie"],
 }
 
 
@@ -426,6 +664,7 @@ def list_vendors() -> List[dict]:
             "signup_url": v["signup_url"],
             "balance_support": v["balance_support"],
             "quota_note": v["quota_note"],
+            "no_key": v.get("no_key", False),
             "extra_fields": v.get("extra_fields", []),
             "access_note": v.get("access_note", ""),
         }
@@ -475,17 +714,23 @@ class FreeTierService:
         vendor = get_vendor(vendor_id)
         if not vendor:
             raise ValueError(f"未知厂商: {vendor_id}")
-        if not api_key or not api_key.strip():
-            raise ValueError("API Key 不能为空")
-
         extra = extra or {}
+
+        # 必填 extra 字段校验（Cloudflare account_id / 豆包 endpoint_id）
+        req_key = vendor.get("require_extra") or "account_id"
+        req_label = {"account_id": "Account ID", "endpoint_id": "Endpoint ID"}.get(req_key, req_key)
+        if vendor.get("require_extra") or "{account_id}" in vendor["base_url"]:
+            if not (extra.get(req_key) or "").strip():
+                raise ValueError(f"{vendor['name']} 需要填写 {req_label}")
+
+        # no_key 厂商（本地 Ollama）：跳过 API Key 校验
+        if not vendor.get("no_key") and (not api_key or not api_key.strip()):
+            raise ValueError("API Key 不能为空")
 
         # 处理 base_url 模板（Cloudflare 需要 account_id 填入 URL）
         base_url = vendor["base_url"]
         if "{account_id}" in base_url:
             account_id = (extra.get("account_id") or "").strip()
-            if not account_id:
-                raise ValueError(f"{vendor['name']} 需要填写 Account ID")
             base_url = base_url.replace("{account_id}", account_id)
 
         # 1. 探测真实模型列表（优先用真实模型，目录兜底）
@@ -502,7 +747,22 @@ class FreeTierService:
         except Exception as e:
             logger.warning(f"[向导] {vendor['name']} 模型探测失败: {e}")
 
-        if real_models:
+        if vendor.get("no_key"):
+            # 本地模型（Ollama）：必须探测到真实本地模型，探测失败直接返回提示
+            if not real_models:
+                return {
+                    "vendor": vendor["name"],
+                    "created_accounts": [],
+                    "skipped": [],
+                    "models_synced": [],
+                    "balance": None,
+                    "errors": ["未检测到本地 Ollama 服务或模型，请先安装 Ollama 并执行 ollama pull 拉取模型"],
+                }
+            models = real_models
+        elif vendor.get("require_extra") == "endpoint_id" and (extra.get("endpoint_id") or "").strip():
+            # 豆包（火山方舟）：以推理接入点 Endpoint 作为模型入口
+            models = [(extra.get("endpoint_id") or "").strip()]
+        elif real_models:
             # 目录优先：取 目录∩真实；交集为空则用真实前 2 个
             models = [m for m in catalog_model_ids if m in real_models]
             if not models:
@@ -547,7 +807,15 @@ class FreeTierService:
                 result["created_accounts"].append(f"{vendor['name']} / {model_id}")
 
                 # 同步模型目录 + 能力描述 + 向量
-                await self._sync_model(account, vendor, model_id)
+                display_override = None
+                if (
+                    vendor.get("require_extra") == "endpoint_id"
+                    and (extra.get("endpoint_id") or "").strip()
+                    and model_id == (extra.get("endpoint_id") or "").strip()
+                    and vendor["models"]
+                ):
+                    display_override = vendor["models"][0]["display"]
+                await self._sync_model(account, vendor, model_id, display_override)
                 result["models_synced"].append(model_id)
             except Exception as e:
                 logger.error(f"[向导] 配置 {model_id} 失败: {e}", exc_info=True)
@@ -572,7 +840,7 @@ class FreeTierService:
 
         return result
 
-    async def _sync_model(self, account, vendor: dict, model_id: str):
+    async def _sync_model(self, account, vendor: dict, model_id: str, display_override: str = None):
         """建 ModelCatalog + 能力描述 + 示例 + 计算向量（多示例平均）"""
         from app.models.database import ModelCatalog
         from app.pipeline.config import PipelineConfig
@@ -589,7 +857,7 @@ class FreeTierService:
             catalog = ModelCatalog(
                 vendor=vendor["name"],
                 model_name=model_id,
-                display_name=(model_meta or {}).get("display") or model_id,
+                display_name=display_override or (model_meta or {}).get("display") or model_id,
                 capability_description=(model_meta or {}).get("capability")
                 or f"{vendor['name']} {model_id} 模型，具备通用对话能力。",
                 capability_tags=(model_meta or {}).get("tags") or ["chat", "general"],

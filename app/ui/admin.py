@@ -276,6 +276,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         <style>
           .vendor-list .q-card { border: 2px solid transparent; }
           .vendor-list .q-card[data-sel="1"] { border: 2px solid #52c41a !important; }
+          .vendor-list .q-card.local-card { border: 2px solid #22d3ee !important; background: linear-gradient(135deg, #f0fdff 0%, #ffffff 60%); }
+          .vendor-list .q-card.local-card[data-sel="1"] { border-color: #0891b2 !important; }
         </style>
         ''')
         nav_header('wizard')
@@ -312,8 +314,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
         async def run_config(v, api_key_input):
             nonlocal _vendor_models
-            key = api_key_input.value or ''
-            if not key.strip():
+            key = (api_key_input.value or '') if api_key_input else ''
+            if not v.get('no_key') and not key:
                 ui.notify('请先粘贴 API Key', type='warning')
                 return
             try:
@@ -359,13 +361,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                 with ui.column().classes('flex-1 min-w-0 gap-3'):
                                     for v in col_vendors:
                                         is_sel = state['selected'] and state['selected']['id'] == v['id']
-                                        with ui.card().classes('w-full shadow-lg cursor-pointer hover:shadow-xl transition-all p-3').props(
+                                        is_local = v.get('no_key', False)
+                                        card_cls = 'w-full shadow-lg cursor-pointer hover:shadow-xl transition-all p-3' + (' local-card' if is_local else '')
+                                        with ui.card().classes(card_cls).props(
                                             f'data-sel={"1" if is_sel else "0"}'
                                         ).on('click', lambda vv=v: select_vendor(vv)):
                                             with ui.row().classes('items-center gap-2 w-full'):
                                                 ui.label(v['icon']).classes('text-2xl')
                                                 ui.label(v['name']).classes('text-base font-bold')
-                                            ui.label(v['tag']).classes('text-xs text-green-600 font-bold')
+                                            ui.label(v['tag']).classes(('text-xs text-cyan-600 font-bold' if is_local else 'text-xs text-green-600 font-bold'))
                                             with ui.row().classes('items-center gap-1 w-full'):
                                                 ui.label(f"🧩 {len(v['models'])} 个免费模型").classes('text-xs text-gray-500')
                                                 if vendor_connected(v):
@@ -400,20 +404,29 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                     f"ℹ️ 已接入 {len(connected_models)} 个模型（{', '.join(connected_models[:3])}{'…' if len(connected_models) > 3 else ''}），只补充未接入的免费模型"
                                 ).classes('text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded mt-0.5')
 
-                            ui.label('② 获取 API Key（只需这一步）').classes('text-sm font-bold text-gray-700 mt-2')
-                            for i, step in enumerate(get_vendor(v['id'])['steps'], 1):
-                                with ui.row().classes('items-start gap-1.5 w-full'):
-                                    ui.label(str(i)).classes('w-5 h-5 rounded-full bg-green-500 text-white text-xs flex items-center justify-center mt-0.5')
-                                    ui.label(step).classes('text-[13px] flex-1 pt-0.5').style('line-height:1.3')
-                            ui.link(f'🔗 前往 {v["name"]} 获取 API Key', v['signup_url'], new_tab=True) \
-                                .classes('text-blue-600 underline text-[13px] mt-0.5')
-
-                            ui.label('③ 粘贴 API Key，一键自动配置').classes('text-sm font-bold text-gray-700 mt-2')
-                            api_key_input = ui.input('API Key', password=True, password_toggle_button=True) \
-                                .props('dense outlined').classes('w-full')
-                            for f in v.get('extra_fields', []):
-                                extra_inputs[f['key']] = ui.input(f['label'], placeholder=f.get('placeholder', '')) \
+                            is_no_key = v.get('no_key', False)
+                            if is_no_key:
+                                ui.label('② 准备本地模型（无需 API Key）').classes('text-sm font-bold text-gray-700 mt-2')
+                                for i, step in enumerate(get_vendor(v['id'])['steps'], 1):
+                                    with ui.row().classes('items-start gap-1.5 w-full'):
+                                        ui.label(str(i)).classes('w-5 h-5 rounded-full bg-green-500 text-white text-xs flex items-center justify-center mt-0.5')
+                                        ui.label(step).classes('text-x] flex-1 pt-0.5').style('line-height:1.3')
+                                ui.label('③ 一键自动配置（自动探测本地已安装模型）').classes('text-sm font-bold text-gray-700 mt-2')
+                                api_key_input = None
+                            else:
+                                ui.label('② 获取 API Key（只需这一步）').classes('text-sm font-bold text-gray-700 mt-2')
+                                for i, step in enumerate(get_vendor(v['id'])['steps'], 1):
+                                    with ui.row().classes('items-start gap-1.5 w-full'):
+                                        ui.label(str(i)).classes('w-5 h-5 rounded-full bg-green-500 text-white text-xs flex items-center justify-center mt-0.5')
+                                        ui.label(step).classes('text-[13px] flex-1 pt-0.5').style('line-height:1.3')
+                                ui.link(f'🔗 前往 {v["name"]} 获取 API Key', v['signup_url'], new_tab=True) \
+                                    .classes('text-blue-600 underline text-[13px] mt-0.5')
+                                ui.label('③ 粘贴 API Key，一键自动配置').classes('text-sm font-bold text-gray-700 mt-2')
+                                api_key_input = ui.input('API Key', password=True, password_toggle_button=True) \
                                     .props('dense outlined').classes('w-full')
+                                for f in v.get('extra_fields', []):
+                                    extra_inputs[f['key']] = ui.input(f['label'], placeholder=f.get('placeholder', '')) \
+                                        .props('dense outlined').classes('w-full')
 
                             ui.button('🚀 一键自动配置', on_click=lambda: run_config(v, api_key_input)) \
                                 .props('color=green size=md no-caps').classes('mt-1')

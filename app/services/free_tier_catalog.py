@@ -639,7 +639,8 @@ def vendor_matches(vendor_name: str, vendor_id: str) -> bool:
         return False
     aliases = VENDOR_ALIASES.get(vendor_id, [])
     if not aliases:
-        return False
+        # 自定义厂商无内置别名时，退化为按 id 本身匹配（如 vendor_name 含厂商 id）
+        aliases = [vendor_id]
     n = vendor_name.lower()
     return any(a.lower() in n for a in aliases)
 
@@ -671,6 +672,68 @@ def list_vendors() -> List[dict]:
         }
         for v in FREE_TIER_VENDORS
     ]
+
+
+async def _merged_vendors(db: Optional[AsyncSession]) -> List[dict]:
+    """内置目录 + DB 用户覆盖 → 最终目录（深拷贝，避免污染内置常量）"""
+    from copy import deepcopy
+    import json as _json
+
+    base = [deepcopy(v) for v in FREE_TIER_VENDORS]
+    if db is None:
+        return base
+    from app.models.database import VendorOverride
+
+    rows = (
+        await db.execute(select(VendorOverride).where(VendorOverride.enabled == True))  # noqa: E712
+    ).scalars().all()
+    for o in rows:
+        try:
+            v = _json.loads(o.vendor_json)
+        except Exception:
+            logger.warning(f"[目录] vendor_override {o.id} JSON 解析失败，跳过")
+            continue
+        if o.is_deleted:
+            base = [b for b in base if b["id"] != o.id]
+            continue
+        replaced = False
+        for i, b in enumerate(base):
+            if b["id"] == o.id:
+                base[i] = v
+                replaced = True
+                break
+        if not replaced:
+            base.append(v)
+    return base
+
+
+async def list_vendors_merged(db: Optional[AsyncSession] = None) -> List[dict]:
+    """合并后目录的简要列表（与 list_vendors 同构，供向导卡片使用）"""
+    return [
+        {
+            "id": v["id"],
+            "name": v["name"],
+            "icon": v["icon"],
+            "tag": v["tag"],
+            "region": v["region"],
+            "models": [m["id"] for m in v["models"]],
+            "signup_url": v["signup_url"],
+            "balance_support": v["balance_support"],
+            "quota_note": v["quota_note"],
+            "no_key": v.get("no_key", False),
+            "extra_fields": v.get("extra_fields", []),
+            "access_note": v.get("access_note", ""),
+        }
+        for v in await _merged_vendors(db)
+    ]
+
+
+async def get_vendor_merged(db: Optional[AsyncSession], vendor_id: str) -> Optional[dict]:
+    """按 id 获取合并后目录项（含完整 models/steps/examples）"""
+    for v in await _merged_vendors(db):
+        if v["id"] == vendor_id:
+            return v
+    return None
 
 
 # ══════════════════════════════════════════════════════════
@@ -712,7 +775,7 @@ class FreeTierService:
         """
         from app.utils.encryption import encryption_service
 
-        vendor = get_vendor(vendor_id)
+        vendor = await get_vendor_merged(self.db, vendor_id)
         if not vendor:
             raise ValueError(f"未知厂商: {vendor_id}")
         extra = extra or {}

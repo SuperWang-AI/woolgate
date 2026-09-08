@@ -244,3 +244,15 @@ class ApiKey(Base):
     is_active = Column(Boolean, default=True, comment="是否启用")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class VendorOverride(Base):
+    """厂商目录用户覆盖层：内置目录(FREE_TIER_VENDORS) + 本表 = 最终目录（向导/一键配置读合并结果）"""
+    __tablename__ = "vendor_override"
+
+    id = Column(String(64), primary_key=True, comment="厂商 id（与内置目录 id 对齐则覆盖，新 id 则新增）")
+    vendor_json = Column(Text, nullable=False, comment="完整厂商配置（JSON，与 FREE_TIER_VENDORS 字典同构）")
+    is_deleted = Column(Boolean, default=False, comment="停用标记：True 表示从目录隐藏（用于下架内置厂商）")
+    enabled = Column(Boolean, default=True, comment="是否启用")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

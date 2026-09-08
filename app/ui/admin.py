@@ -121,6 +121,7 @@ def create_ui():
     NAV_PAGES = [
         ('🏠 首页', '/', 'home'),
         ('🆓 免费接入', '/wizard', 'wizard'),
+        ('🏪 厂商目录', '/vendors', 'vendors'),
         ('👥 账号管理', '/accounts', 'accounts'),
         ('🧠 模型能力', '/models', 'models'),
         ('⚙️ 系统配置', '/config', 'config'),
@@ -282,16 +283,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         ''')
         nav_header('wizard')
 
-        from app.services.free_tier_catalog import list_vendors, get_vendor, FreeTierService, vendor_matches
+        from app.services.free_tier_catalog import list_vendors_merged, get_vendor_merged, FreeTierService, vendor_matches
 
-        vendors = list_vendors()
-        state = {'selected': vendors[0] if vendors else None}   # 默认选中第一个厂商
         extra_inputs = {}            # extra 字段输入框引用（detail 重建后重填）
 
-        # 已接入厂商标记（按别名匹配，避免同名不同写法漏判）
+        # 合并目录（内置 + DB 用户覆盖）+ 已接入厂商标记（按别名匹配，避免同名不同写法漏判）
         async with AsyncSessionLocal() as _s:
+            vendors = await list_vendors_merged(_s)
             acc_res = await _s.execute(select(ModelAccount.vendor, ModelAccount.model_name))
             _vendor_models = [(r[0] or '', r[1]) for r in acc_res.all()]
+        state = {'selected': vendors[0] if vendors else None}   # 默认选中第一个厂商
 
         def vendor_connected(v):
             return any(vendor_matches(vn, v['id']) for vn, _ in _vendor_models)
@@ -385,12 +386,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 # ── 右：详情 / 配置区（独立滚动）──
                 with ui.column().classes('flex-1 min-w-0 gap-2 max-h-[calc(200vh-270px)] overflow-y-auto pr-1'):
                     @ui.refreshable
-                    def detail():
+                    async def detail():
                         v = state['selected']
                         if not v:
                             with ui.card().classes('w-full shadow p-8'):
                                 ui.label('👈 点击左侧卡片选择一个厂商').classes('text-gray-400 text-center py-16 w-full')
                             return
+                        async with AsyncSessionLocal() as ds:
+                            full = await get_vendor_merged(ds, v['id']) or v
                         with ui.card().classes('w-full shadow-lg border-l-4 border-green-500 p-3'):
                             with ui.row().classes('items-center gap-2'):
                                 ui.label(f"{v['icon']} {v['name']}").classes('text-lg font-bold')
@@ -407,7 +410,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                             is_no_key = v.get('no_key', False)
                             if is_no_key:
                                 ui.label('② 准备本地模型（无需 API Key）').classes('text-sm font-bold text-gray-700 mt-2')
-                                for i, step in enumerate(get_vendor(v['id'])['steps'], 1):
+                                for i, step in enumerate(full['steps'], 1):
                                     with ui.row().classes('items-start gap-1.5 w-full'):
                                         ui.label(str(i)).classes('w-5 h-5 rounded-full bg-green-500 text-white text-xs flex items-center justify-center mt-0.5')
                                         ui.label(step).classes('text-x] flex-1 pt-0.5').style('line-height:1.3')
@@ -415,7 +418,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                 api_key_input = None
                             else:
                                 ui.label('② 获取 API Key（只需这一步）').classes('text-sm font-bold text-gray-700 mt-2')
-                                for i, step in enumerate(get_vendor(v['id'])['steps'], 1):
+                                for i, step in enumerate(full['steps'], 1):
                                     with ui.row().classes('items-start gap-1.5 w-full'):
                                         ui.label(str(i)).classes('w-5 h-5 rounded-full bg-green-500 text-white text-xs flex items-center justify-center mt-0.5')
                                         ui.label(step).classes('text-[13px] flex-1 pt-0.5').style('line-height:1.3')
@@ -1054,6 +1057,163 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 with ui.card().classes('w-full text-center p-12'):
                     ui.icon('inbox', size='4rem').classes('text-gray-400')
                     ui.label('暂无日志记录').classes('text-xl text-gray-500 mt-4')
+    @ui.page('/vendors')
+    async def vendors_page():
+        """厂商目录维护页：内置目录 + DB 用户覆盖 = 最终目录（B/C 迭代）"""
+        ui.page_title('WoolGate 智能聚合网关')
+        nav_header('vendors')
+
+        from app.services.free_tier_catalog import _merged_vendors, FREE_TIER_VENDORS
+        from app.models.database import VendorOverride
+
+        def builtin_ids():
+            return {v['id'] for v in FREE_TIER_VENDORS}
+
+        async def set_deleted(vendor_id: str, deleted: bool):
+            async with AsyncSessionLocal() as s:
+                existing = (await s.execute(select(VendorOverride).where(VendorOverride.id == vendor_id))).scalar_one_or_none()
+                if existing:
+                    existing.is_deleted = deleted
+                    existing.enabled = not deleted
+                    await s.commit()
+                else:
+                    # 停用内置厂商：保存一条 is_deleted 标记
+                    from app.services.free_tier_catalog import get_vendor
+                    v = get_vendor(vendor_id)
+                    if v:
+                        s.add(VendorOverride(id=vendor_id, vendor_json=json.dumps(v, ensure_ascii=False), is_deleted=deleted, enabled=not deleted))
+                        await s.commit()
+            vendor_table.refresh()
+            ui.notify('✅ 已更新' if not deleted else '⛔ 已停用', type='positive')
+
+        async def delete_override(vendor_id: str):
+            async with AsyncSessionLocal() as s:
+                row = (await s.execute(select(VendorOverride).where(VendorOverride.id == vendor_id))).scalar_one_or_none()
+                if row:
+                    await s.delete(row)
+                    await s.commit()
+            vendor_table.refresh()
+            ui.notify('🗑 已删除自定义厂商', type='positive')
+
+        def show_edit_dialog(v=None):
+            is_edit = v is not None
+            dialog = ui.dialog().props('max-width=720px')
+            with dialog, ui.card().classes('w-full p-4'):
+                ui.label('✏️ 编辑厂商' if is_edit else '➕ 新增厂商').classes('text-lg font-bold mb-2')
+                f = {}
+                with ui.grid(columns=2).classes('w-full gap-3'):
+                    f['id'] = ui.input('厂商 ID（唯一，如 myvendor）', value=(v or {}).get('id', '')).props('dense outlined').classes('w-full')
+                    f['name'] = ui.input('厂商名称', value=(v or {}).get('name', '')).props('dense outlined').classes('w-full')
+                    f['icon'] = ui.input('图标（emoji）', value=(v or {}).get('icon', '🤖')).props('dense outlined').classes('w-full')
+                    f['tag'] = ui.input('标签（如 国内 · 免费）', value=(v or {}).get('tag', '')).props('dense outlined').classes('w-full')
+                    f['region'] = ui.select({'国内': '国内', '海外': '海外', '本地': '本地'}, label='地域', value=(v or {}).get('region', '国内')).props('dense outlined').classes('w-full')
+                    f['base_url'] = ui.input('Base URL（OpenAI 兼容）', value=(v or {}).get('base_url', '')).props('dense outlined').classes('w-full')
+                    f['signup_url'] = ui.input('注册/拿 Key 链接', value=(v or {}).get('signup_url', '')).props('dense outlined').classes('w-full')
+                    f['quota_note'] = ui.input('额度说明', value=(v or {}).get('quota_note', '')).props('dense outlined').classes('w-full')
+                    f['access_note'] = ui.input('访问提醒（可选，如需要科学上网）', value=(v or {}).get('access_note', '')).props('dense outlined').classes('w-full')
+                with ui.row().classes('items-center gap-4 mt-1'):
+                    f['balance_support'] = ui.switch('支持余额查询', value=(v or {}).get('balance_support', False)).props('dense')
+                    f['no_key'] = ui.switch('无 Key 厂商（本地模型）', value=(v or {}).get('no_key', False)).props('dense')
+                f['models'] = ui.textarea('模型列表（JSON 数组）', value=json.dumps((v or {}).get('models', []), ensure_ascii=False, indent=1)) \
+                    .props('dense outlined autogrow input-style="font-family:monospace;font-size:12px"').classes('w-full mt-1')
+                f['steps'] = ui.textarea('接入步骤（JSON 字符串数组）', value=json.dumps((v or {}).get('steps', []), ensure_ascii=False, indent=1)) \
+                    .props('dense outlined autogrow input-style="font-family:monospace;font-size:12px"').classes('w-full mt-1')
+                with ui.row().classes('items-center justify-end w-full gap-2 mt-2'):
+                    ui.button('取消', on_click=dialog.close).props('outline no-caps')
+                    ui.button('保存', on_click=lambda: save()).props('color=primary no-caps').classes('wg-vendor-save')
+
+            def save():
+                vendor_id = (f['id'].value or '').strip()
+                name = (f['name'].value or '').strip()
+                base_url = (f['base_url'].value or '').strip()
+                if not vendor_id or not name or not base_url:
+                    ui.notify('⚠️ ID / 名称 / Base URL 必填', type='warning')
+                    return
+                try:
+                    models = json.loads(f['models'].value or '[]')
+                    steps = json.loads(f['steps'].value or '[]')
+                except json.JSONDecodeError:
+                    ui.notify('⚠️ 模型列表/接入步骤不是合法 JSON', type='warning')
+                    return
+                if not isinstance(models, list) or not isinstance(steps, list):
+                    ui.notify('⚠️ 模型列表/接入步骤必须是 JSON 数组', type='warning')
+                    return
+                vendor_dict = {
+                    'id': vendor_id,
+                    'name': name,
+                    'icon': (f['icon'].value or '🤖').strip(),
+                    'tag': (f['tag'].value or '').strip(),
+                    'region': f['region'].value or '国内',
+                    'base_url': base_url,
+                    'models': models,
+                    'signup_url': (f['signup_url'].value or '').strip(),
+                    'steps': steps,
+                    'balance_support': f['balance_support'].value,
+                    'quota_note': (f['quota_note'].value or '').strip(),
+                    'no_key': f['no_key'].value,
+                }
+                if f['access_note'].value:
+                    vendor_dict['access_note'] = f['access_note'].value.strip()
+
+                async def persist():
+                    async with AsyncSessionLocal() as s:
+                        existing = (await s.execute(select(VendorOverride).where(VendorOverride.id == vendor_id))).scalar_one_or_none()
+                        if existing:
+                            existing.vendor_json = json.dumps(vendor_dict, ensure_ascii=False)
+                            existing.is_deleted = False
+                            existing.enabled = True
+                        else:
+                            s.add(VendorOverride(id=vendor_id, vendor_json=json.dumps(vendor_dict, ensure_ascii=False), is_deleted=False, enabled=True))
+                        await s.commit()
+                    dialog.close()
+                    vendor_table.refresh()
+                    ui.notify('✅ 已保存（覆盖生效，刷新向导页可见）', type='positive')
+                asyncio.create_task(persist())
+
+            dialog.open()
+
+        @ui.refreshable
+        async def vendor_table():
+            async with AsyncSessionLocal() as s:
+                merged = await _merged_vendors(s)
+                overrides = (await s.execute(select(VendorOverride))).scalars().all()
+            ov_by_id = {o.id: o for o in overrides}
+            b_ids = builtin_ids()
+            with ui.card().classes('w-full shadow-lg p-4'):
+                with ui.row().classes('items-center justify-between w-full'):
+                    ui.label(f'厂商目录（{len(merged)} 家）').classes('text-lg font-bold')
+                    ui.button('➕ 新增厂商', on_click=lambda: show_edit_dialog()).props('color=primary size=md no-caps').classes('wg-vendor-add')
+                ui.label('内置目录随版本发布；此处新增/覆盖/停用即时生效（合并后供免费接入向导使用）').classes('text-xs text-gray-500 mt-1')
+                with ui.column().classes('w-full gap-2 mt-2'):
+                    for v in merged:
+                        o = ov_by_id.get(v['id'])
+                        if o and o.is_deleted:
+                            src_tag, src_color = '⛔ 已停用', 'red'
+                        elif v['id'] not in b_ids:
+                            src_tag, src_color = '🆕 自定义', 'purple'
+                        elif o:
+                            src_tag, src_color = '🖊 已覆盖', 'blue'
+                        else:
+                            src_tag, src_color = '内置', 'grey'
+                        with ui.card().classes('w-full p-3'):
+                            with ui.row().classes('items-center justify-between w-full gap-2'):
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.label(v['icon']).classes('text-xl')
+                                    ui.label(v['name']).classes('font-bold')
+                                    ui.label(src_tag).classes(f'text-xs bg-{src_color}-100 text-{src_color}-700 px-2 py-0.5 rounded font-bold')
+                                    ui.label(f"{len(v['models'])} 模型").classes('text-xs text-gray-500')
+                                with ui.row().classes('gap-1'):
+                                    ui.button('✏️ 编辑', on_click=lambda vv=v: show_edit_dialog(vv)).props('outline size=sm color=primary no-caps').classes('wg-vendor-edit')
+                                    if o and o.is_deleted:
+                                        ui.button('▶️ 恢复', on_click=lambda vid=v['id']: set_deleted(vid, False)).props('outline size=sm color=positive no-caps')
+                                    elif v['id'] in b_ids:
+                                        ui.button('⏸ 停用', on_click=lambda vid=v['id']: set_deleted(vid, True)).props('outline size=sm color=warning no-caps')
+                                    if o and not o.is_deleted and v['id'] not in b_ids:
+                                        ui.button('🗑 删除', on_click=lambda vid=v['id']: delete_override(vid)).props('outline size=sm color=negative no-caps')
+
+        ui.timer(0.01, vendor_table, once=True)
+
+
 
 
 async def sync_model_to_catalog(account, session):

@@ -275,3 +275,92 @@ async def test_auto_configure_dedup_by_alias(db_session, monkeypatch):
 
     accounts = (await db_session.execute(select(ModelAccount))).scalars().all()
     assert len(accounts) == 2  # 原账号 + 1 个新账号
+
+
+# ─────────────── 合并目录（内置 + DB 用户覆盖）───────────────
+
+@pytest.mark.asyncio
+async def test_merged_vendors_no_override(db_session):
+    """无覆盖记录时，合并目录 == 内置目录"""
+    from app.services.free_tier_catalog import _merged_vendors, FREE_TIER_VENDORS
+
+    merged = await _merged_vendors(db_session)
+    assert len(merged) == len(FREE_TIER_VENDORS)
+    assert [v["id"] for v in merged] == [v["id"] for v in FREE_TIER_VENDORS]
+
+
+@pytest.mark.asyncio
+async def test_merged_vendors_add_custom(db_session):
+    """自定义厂商追加到合并目录"""
+    from app.services.free_tier_catalog import _merged_vendors, list_vendors_merged
+    from app.models.database import VendorOverride
+    import json as _json
+
+    custom = {
+        "id": "myvendor",
+        "name": "MyVendor",
+        "icon": "🤖",
+        "tag": "国内 · 自定义",
+        "region": "国内",
+        "base_url": "https://api.myvendor.com/v1",
+        "models": [{"id": "my-model", "display": "My Model", "capability": "测试", "tags": ["chat"], "examples": ["你好"]}],
+        "signup_url": "https://myvendor.com",
+        "steps": ["注册", "拿 Key"],
+        "balance_support": False,
+        "quota_note": "自定义测试",
+    }
+    db_session.add(VendorOverride(id="myvendor", vendor_json=_json.dumps(custom, ensure_ascii=False)))
+    await db_session.commit()
+
+    merged = await _merged_vendors(db_session)
+    ids = [v["id"] for v in merged]
+    assert "myvendor" in ids
+    assert ids[-1] == "myvendor"  # 追加在末尾
+    brief = await list_vendors_merged(db_session)
+    assert any(b["id"] == "myvendor" for b in brief)
+
+
+@pytest.mark.asyncio
+async def test_merged_vendors_override_builtin(db_session):
+    """覆盖内置厂商：名称/额度说明以 DB 为准"""
+    from app.services.free_tier_catalog import _merged_vendors, get_vendor_merged
+    from app.models.database import VendorOverride
+    import json as _json
+
+    override = {
+        "id": "deepseek",
+        "name": "DeepSeek（已覆盖）",
+        "icon": "🐋",
+        "tag": "国内 · 极低价",
+        "region": "国内",
+        "base_url": "https://api.deepseek.com/v1",
+        "models": [{"id": "deepseek-chat", "display": "V3", "capability": "c", "tags": ["chat"], "examples": ["hi"]}],
+        "signup_url": "https://platform.deepseek.com/",
+        "steps": ["s1"],
+        "balance_support": True,
+        "quota_note": "覆盖后的额度说明",
+    }
+    db_session.add(VendorOverride(id="deepseek", vendor_json=_json.dumps(override, ensure_ascii=False)))
+    await db_session.commit()
+
+    merged = await _merged_vendors(db_session)
+    ds = next(v for v in merged if v["id"] == "deepseek")
+    assert ds["name"] == "DeepSeek（已覆盖）"
+    assert ds["quota_note"] == "覆盖后的额度说明"
+    assert len(merged) == len(__import__("app.services.free_tier_catalog", fromlist=["FREE_TIER_VENDORS"]).FREE_TIER_VENDORS)
+
+    full = await get_vendor_merged(db_session, "deepseek")
+    assert full["name"] == "DeepSeek（已覆盖）"
+
+
+@pytest.mark.asyncio
+async def test_merged_vendors_disable_builtin(db_session):
+    """停用标记（is_deleted=True）从合并目录隐藏内置厂商"""
+    from app.services.free_tier_catalog import _merged_vendors
+    from app.models.database import VendorOverride
+
+    db_session.add(VendorOverride(id="groq", vendor_json="{}", is_deleted=True))
+    await db_session.commit()
+
+    merged = await _merged_vendors(db_session)
+    assert all(v["id"] != "groq" for v in merged)

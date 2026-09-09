@@ -145,8 +145,8 @@ def create_ui():
         ('📋 请求日志', '/logs', 'logs'),
     ]
 
-    def nav_header(current: str):
-        """顶部导航栏（tab 效果：当前页白色背景高亮，其他页透明）"""
+    def page_head():
+        """全局 head：品牌图标 + 全局样式"""
         ui.colors(primary='#667eea', secondary='#764ba2')
         ui.add_head_html('''
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐑%3C/text%3E%3C/svg%3E">
@@ -161,6 +161,10 @@ def create_ui():
 body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', Roboto, sans-serif; }
 </style>
 ''')
+
+    def nav_header(current: str):
+        """独立页面顶部导航（vendors 等保留整页跳转）"""
+        page_head()
         with ui.header().classes('header-gradient items-center justify-between px-6 shadow-lg'):
             with ui.row().classes('items-center gap-4'):
                 ui.label('🐑').classes('text-4xl')
@@ -176,13 +180,54 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         ui.button(label, on_click=lambda p=path: ui.navigate.to(p)) \
                             .props('flat no-caps text-color=white')
 
+    # SPA 路由映射：路由路径 ↔ tab key
+    PATH_TO_KEY = {'/': 'home', '/wizard': 'wizard', '/accounts': 'accounts', '/config': 'config', '/pipeline': 'pipeline', '/logs': 'logs'}
+    KEY_TO_PATH = {v: k for k, v in PATH_TO_KEY.items()}
+
+    def nav_tabs(active_key: str):
+        """SPA 顶部导航 tabs：点击仅前端切换面板，无整页刷新"""
+        page_head()
+        with ui.header().classes('header-gradient items-center justify-between px-6 shadow-lg'):
+            with ui.row().classes('items-center gap-4'):
+                ui.label('🐑').classes('text-4xl')
+                ui.label('WoolGate').classes('text-2xl font-bold text-white')
+            with ui.tabs().props('dense active-color=white indicator-color=white text-color=white').classes('gap-1') as tabs:
+                for label, path, key in NAV_PAGES:
+                    ui.tab(name=key, label=label)
+        return tabs
+
+    async def build_spa(active_key: str):
+        """SPA 根：导航 tabs + 内容面板，导航切换零刷新（URL 用 history.replaceState 同步，刷新后仍停留当前页）"""
+        ui.page_title('WoolGate 智能聚合网关')
+        tabs = nav_tabs(active_key)
+
+        def sync_url(e):
+            path = KEY_TO_PATH.get(e.value, '/')
+            ui.run_javascript(f"history.replaceState(null, '', '/admin{path}')")
+
+        tabs.on_value_change(sync_url)
+
+        with ui.tab_panels(tabs, value=active_key).classes('w-full'):
+            with ui.tab_panel('home'):
+                await home_view()
+            with ui.tab_panel('wizard'):
+                await wizard_view()
+            with ui.tab_panel('accounts'):
+                await accounts_view()
+            with ui.tab_panel('config'):
+                await config_view()
+            with ui.tab_panel('pipeline'):
+                await pipeline_view()
+            with ui.tab_panel('logs'):
+                await logs_view()
+
     @ui.page('/')
     async def index():
-        """首页"""
-        ui.page_title('WoolGate 智能聚合网关')
-        
-        # 顶部导航栏
-        nav_header('home')
+        """首页（SPA）"""
+        await build_spa('home')
+
+    async def home_view():
+        """首页视图（SPA tab 面板内容）"""
         
         # 主内容区域
         with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):
@@ -287,8 +332,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
     
     @ui.page('/wizard')
     async def wizard_page():
-        """免费向导（A1+A7）——选厂商 → 看步骤 → 粘 Key → 智能配置（refreshable 局部刷新，无整页跳转）"""
-        ui.page_title('WoolGate 智能聚合网关')
+        """免费向导（SPA）"""
+        await build_spa('wizard')
+
+    async def wizard_view():
+        """免费向导视图（SPA tab 面板内容）"""
         ui.add_head_html('''
         <style>
           .vendor-list .q-card { border: 2px solid transparent; }
@@ -297,7 +345,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
           .vendor-list .q-card.local-card[data-sel="1"] { border-color: #0891b2 !important; }
         </style>
         ''')
-        nav_header('wizard')
 
         from app.services.free_tier_catalog import list_vendors_merged, get_vendor_merged, FreeTierService, vendor_matches
 
@@ -496,11 +543,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
     @ui.page('/accounts')
     async def accounts_page():
-        """账号管理页面"""
-        ui.page_title('WoolGate 智能聚合网关')
-        
-        # 顶部导航栏
-        nav_header('accounts')
+        """账号管理（SPA）"""
+        await build_spa('accounts')
+
+    async def accounts_view():
+        """账号管理视图（SPA tab 面板内容）"""
         
         with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):
 
@@ -681,11 +728,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
     
     @ui.page('/config')
     async def config_page():
-        """系统配置页面"""
-        ui.page_title('WoolGate 智能聚合网关')
-        
-        # 顶部导航栏
-        nav_header('config')
+        """系统配置（SPA）"""
+        await build_spa('config')
+
+    async def config_view():
+        """系统配置视图（SPA tab 面板内容）"""
         
         with ui.column().classes('w-full max-w-4xl mx-auto p-5 gap-4'):
             ui.label('⚙️ 全局系统配置').classes('text-3xl font-bold text-gray-800')
@@ -744,11 +791,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
     @ui.page('/pipeline')
     async def pipeline_page():
-        """管线策略配置页面"""
-        ui.page_title('WoolGate 智能聚合网关')
+        """管线策略（SPA）"""
+        await build_spa('pipeline')
 
-        # 顶部导航栏
-        nav_header('pipeline')
+    async def pipeline_view():
+        """管线策略视图（SPA tab 面板内容）"""
 
         with ui.column().classes('w-full max-w-4xl mx-auto p-5 gap-4'):
             ui.label('🧩 管线策略配置').classes('text-3xl font-bold text-gray-800')
@@ -954,11 +1001,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
     @ui.page('/logs')
     async def logs_page():
-        """请求日志页面"""
-        ui.page_title('WoolGate 智能聚合网关')
-        
-        # 顶部导航栏
-        nav_header('logs')
+        """请求日志（SPA）"""
+        await build_spa('logs')
+
+    async def logs_view():
+        """请求日志视图（SPA tab 面板内容）"""
         
         with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):
             with ui.row().classes('items-center justify-between w-full'):

@@ -351,19 +351,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     ui.label('🐑 WoolGate AI 聚合网关').classes('text-2xl font-bold text-gray-800')
                 ui.label('回答 3 个问题，自动为你配好路由与调度策略——你只管用，配置交给系统。').classes('text-sm text-gray-500 mt-1')
 
-                # 步骤指示器（带序号）
-                with ui.row().classes('gap-2 mt-3 w-full'):
-                    for i, sl in enumerate([s[0] for s in steps]):
-                        active = i == step_idx['v']
-                        done = i < step_idx['v']
-                        ui.label(f'{i + 1}. {sl}').classes(
-                            'text-sm px-3 py-1 rounded-full '
-                            + ('bg-green-100 text-green-700 font-bold' if active
-                               else ('text-gray-400' if done else 'text-gray-500'))
-                        )
-
                 @ui.refreshable
                 async def render_step():
+                    # 步骤指示器（带序号，随步骤切换刷新底色）
+                    with ui.row().classes('gap-2 mt-3 w-full'):
+                        for i, sl in enumerate([s[0] for s in steps]):
+                            active = i == step_idx['v']
+                            done = i < step_idx['v']
+                            ui.label(f'{i + 1}. {sl}').classes(
+                                'text-sm px-3 py-1 rounded-full '
+                                + ('bg-green-100 text-green-700 font-bold' if active
+                                   else ('text-gray-400' if done else 'text-gray-500'))
+                            )
                     ui.separator().classes('my-4')
                     title, desc, opts = steps[step_idx['v']]
                     ui.label(title).classes('text-xl font-bold text-gray-800')

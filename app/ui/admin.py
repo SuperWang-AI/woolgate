@@ -402,6 +402,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                                 ui.label(f"🧩 {v.get('free_count', len(v['models']))} 个免费模型").classes('text-xs text-gray-500')
                                                 if vendor_connected(v):
                                                     ui.label(f'✅ 已接入 {len(vendor_connected_models(v))} 个').classes('text-xs text-green-600 font-bold')
+                                            # 免费模型具体名称（与模型菜单卡片一致；list_vendors_merged 已预计算 free_models）
+                                            free_displays = v.get('free_models', [])
+                                            if free_displays:
+                                                ui.label(f"🧩 {'、'.join(free_displays[:3])}{'…' if len(free_displays) > 3 else ''}").classes('text-[11px] text-green-700')
                                             ui.label(v['quota_note']).classes('text-xs text-gray-500').style('line-height:1.35')
                                             if v.get('access_note'):
                                                 ui.label(f"⚠️ {v['access_note']}").classes('text-xs text-orange-600 font-bold').style('line-height:1.3')

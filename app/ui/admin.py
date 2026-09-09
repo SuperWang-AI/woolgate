@@ -488,8 +488,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                     extra_inputs[f['key']] = ui.input(f['label'], placeholder=f.get('placeholder', '')) \
                                         .props('dense outlined').classes('w-full')
 
-                            ui.button('🚀 一键自动配置', on_click=lambda: run_config(v, api_key_input)) \
-                                .props('color=green size=md no-caps').classes('mt-1 wg-config-btn')
+                            with ui.row().classes('w-full justify-end'):
+                                ui.button('🚀 一键自动配置', on_click=lambda: run_config(v, api_key_input)) \
+                                    .props('color=green size=md no-caps').classes('wg-config-btn')
 
                     ui.timer(0.01, detail, once=True)
 

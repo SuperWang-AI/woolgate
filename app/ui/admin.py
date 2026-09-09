@@ -139,7 +139,6 @@ def create_ui():
     NAV_PAGES = [
         ('🏠 首页', '/', 'home'),
         ('🆓 免费向导', '/wizard', 'wizard'),
-        ('📖 模型菜单', '/vendors', 'vendors'),
         ('👥 账号管理', '/accounts', 'accounts'),
         ('⚙️ 系统配置', '/config', 'config'),
         ('🧩 管线策略', '/pipeline', 'pipeline'),

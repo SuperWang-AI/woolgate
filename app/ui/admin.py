@@ -736,7 +736,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 else:
                     ui.notify('保存失败', type='negative')
 
-            ui.button('💾 保存配置', on_click=save).props('color=primary size=lg').classes('mt-2')
+            with ui.row().classes('w-full justify-end'):
+                ui.button('💾 保存配置', on_click=save).props('color=primary size=lg')
 
 
 
@@ -945,7 +946,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 else:
                     ui.notify('保存失败', type='negative')
 
-            ui.button('💾 保存策略', on_click=save_pipeline).props('color=primary size=lg').classes('mt-2')
+            with ui.row().classes('w-full justify-end'):
+                ui.button('💾 保存策略', on_click=save_pipeline).props('color=primary size=lg')
 
 
 

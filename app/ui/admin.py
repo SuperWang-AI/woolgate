@@ -278,7 +278,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
     async def build_spa(active_key: str, request: Optional[Request] = None):
         """SPA 根：导航 tabs + 内容面板，导航切换零刷新（URL 用 history.replaceState 同步，刷新后仍停留当前页）"""
-        ui.page_title('WoolGate 智能聚合网关')
+        ui.page_title('WoolGate AI 聚合网关')
         tabs = nav_tabs(active_key)
 
         def sync_url(e):
@@ -337,27 +337,26 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         answers: dict = {}
         steps = [
             ("使用方式", "你主要怎么使用 WoolGate？",
-             [("personal", "🙋 个人自用省钱"), ("team", "🏢 团队/企业使用")]),
+             [("personal", "个人自用省钱"), ("team", "团队/企业使用")]),
             ("主要场景", "你最常用来做什么？",
-             [("chat", "💬 通用对话"), ("code", "💻 编程开发"), ("creative", "🎨 创意写作"), ("data", "📊 数据分析")]),
+             [("chat", "通用对话"), ("code", "编程开发"), ("creative", "创意写作"), ("data", "数据分析")]),
             ("模型来源", "你计划接入哪些模型？",
-             [("free", "🆓 只用免费云端"), ("paid", "💳 已有付费账号"), ("local", "🖥️ 本地模型（Ollama）")]),
+             [("free", "只用免费云端"), ("paid", "已有付费账号"), ("local", "本地模型（Ollama）")]),
         ]
         step_keys = ["way", "scene", "source"]
 
         with ui.column().classes('w-full items-center p-6'):
             with ui.card().classes('w-full shadow-lg border-t-4 border-green-500 p-6').style('max-width:760px'):
                 with ui.row().classes('items-center gap-3 w-full'):
-                    ui.label('🦄 欢迎使用 WoolGate 智能聚合网关').classes('text-2xl font-bold text-gray-800')
+                    ui.label('🐑 WoolGate AI 聚合网关').classes('text-2xl font-bold text-gray-800')
                 ui.label('回答 3 个问题，自动为你配好路由与调度策略——你只管用，配置交给系统。').classes('text-sm text-gray-500 mt-1')
 
-                # 步骤指示器
+                # 步骤指示器（带序号）
                 with ui.row().classes('gap-2 mt-3 w-full'):
                     for i, sl in enumerate([s[0] for s in steps]):
                         active = i == step_idx['v']
                         done = i < step_idx['v']
-                        dot = '✅' if done else ('●' if active else '○')
-                        ui.label(f'{dot} {sl}').classes(
+                        ui.label(f'{i + 1}. {sl}').classes(
                             'text-sm px-3 py-1 rounded-full '
                             + ('bg-green-100 text-green-700 font-bold' if active
                                else ('text-gray-400' if done else 'text-gray-500'))
@@ -1312,7 +1311,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
     @ui.page('/vendors')
     async def vendors_page():
         """模型菜单维护页：内置菜单 + DB 用户覆盖 = 最终目录（B/C 迭代）"""
-        ui.page_title('WoolGate 智能聚合网关')
+        ui.page_title('WoolGate AI 聚合网关')
         nav_header('vendors')
 
         from app.services.free_tier_catalog import _merged_vendors, FREE_TIER_VENDORS, vendor_matches

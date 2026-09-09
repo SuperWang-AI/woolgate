@@ -693,58 +693,50 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             # 获取当前配置
             config = await get_system_config()
 
-            # 设置面板（整体 div 块：白底、圆角、边框，分区用分隔线）
-            with ui.element('div').classes('w-full bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden'):
-                with ui.column().classes('w-full p-6 gap-6'):
+            # 额度耗尽策略（卡片样式与管线策略页统一）
+            with ui.card().classes('w-full shadow-lg p-4'):
+                ui.label('额度耗尽策略').classes('text-base font-bold text-gray-700 mb-1')
+                ui.label('账号免费额度用尽后的处理方式').classes('text-xs text-gray-500 mb-3')
+                quota_strategy = ui.select(
+                    {
+                        'auto_switch_next': '自动切换到下一个账号',
+                        'return_warn_error': '返回错误并提醒',
+                        'allow_pay_quota': '允许扣费继续使用',
+                    },
+                    label='策略',
+                    value=config.quota_exhaust_strategy,
+                ).classes('w-full max-w-md')
 
-                    # 额度耗尽策略
-                    with ui.column().classes('w-full gap-3'):
-                        ui.label('额度耗尽策略').classes('text-base font-bold text-gray-800')
-                        quota_strategy = ui.select(
-                            {
-                                'auto_switch_next': '自动切换到下一个账号',
-                                'return_warn_error': '返回错误并提醒',
-                                'allow_pay_quota': '允许扣费继续使用',
-                            },
-                            label='策略',
-                            value=config.quota_exhaust_strategy,
-                        ).classes('w-full max-w-md')
-                        ui.label('账号免费额度用尽后的处理方式').classes('text-xs text-gray-400 -mt-1')
+            # 重试与日志（卡片样式与管线策略页统一）
+            with ui.card().classes('w-full shadow-lg p-4'):
+                ui.label('重试与日志').classes('text-base font-bold text-gray-700 mb-1')
+                ui.label('请求失败重试、故障冷却与日志保留参数').classes('text-xs text-gray-500 mb-3')
+                with ui.grid(columns=3).classes('w-full gap-x-8 gap-y-4'):
+                    with ui.column().classes('gap-1'):
+                        max_retry = ui.number('最大重试次数', value=config.max_retry_count, min=0, max=10).classes('w-full')
+                        ui.label('请求失败后最多重试几次').classes('text-xs text-gray-400')
+                    with ui.column().classes('gap-1'):
+                        cool_down = ui.number('故障冷却（秒）', value=config.cool_down_seconds, min=0).classes('w-full')
+                        ui.label('失败后暂停使用该账号的时长').classes('text-xs text-gray-400')
+                    with ui.column().classes('gap-1'):
+                        log_retention = ui.number('日志保留（天）', value=config.log_retention_days, min=1).classes('w-full')
+                        ui.label('请求日志自动清理周期').classes('text-xs text-gray-400')
 
-                    ui.separator()
+            # 保存按钮
+            async def save():
+                config_data = {
+                    'quota_exhaust_strategy': quota_strategy.value,
+                    'max_retry_count': int(max_retry.value),
+                    'cool_down_seconds': int(cool_down.value),
+                    'log_retention_days': int(log_retention.value),
+                }
+                success = await save_system_config(config_data)
+                if success:
+                    ui.notify('配置已保存', type='positive')
+                else:
+                    ui.notify('保存失败', type='negative')
 
-                    # 重试与日志
-                    with ui.column().classes('w-full gap-3'):
-                        ui.label('重试与日志').classes('text-base font-bold text-gray-800')
-                        with ui.grid(columns=3).classes('w-full gap-x-8 gap-y-4'):
-                            with ui.column().classes('gap-1'):
-                                max_retry = ui.number('最大重试次数', value=config.max_retry_count, min=0, max=10).classes('w-full')
-                                ui.label('请求失败后最多重试几次').classes('text-xs text-gray-400')
-                            with ui.column().classes('gap-1'):
-                                cool_down = ui.number('故障冷却（秒）', value=config.cool_down_seconds, min=0).classes('w-full')
-                                ui.label('失败后暂停使用该账号的时长').classes('text-xs text-gray-400')
-                            with ui.column().classes('gap-1'):
-                                log_retention = ui.number('日志保留（天）', value=config.log_retention_days, min=1).classes('w-full')
-                                ui.label('请求日志自动清理周期').classes('text-xs text-gray-400')
-
-                # 保存按钮
-                async def save():
-                    config_data = {
-                        'quota_exhaust_strategy': quota_strategy.value,
-                        'max_retry_count': int(max_retry.value),
-                        'cool_down_seconds': int(cool_down.value),
-                        'log_retention_days': int(log_retention.value),
-                    }
-                    success = await save_system_config(config_data)
-                    if success:
-                        ui.notify('配置已保存', type='positive')
-                    else:
-                        ui.notify('保存失败', type='negative')
-
-                # 面板底部操作条
-                with ui.row().classes('w-full justify-end items-center gap-3 px-6 py-4 bg-gray-50 border-t border-gray-200'):
-                    ui.label('修改后点击保存生效').classes('text-xs text-gray-400')
-                    ui.button('💾 保存配置', on_click=save).props('color=primary')
+            ui.button('💾 保存配置', on_click=save).props('color=primary size=lg').classes('mt-2')
 
 
 

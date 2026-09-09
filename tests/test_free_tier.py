@@ -364,3 +364,55 @@ async def test_merged_vendors_disable_builtin(db_session):
 
     merged = await _merged_vendors(db_session)
     assert all(v["id"] != "groq" for v in merged)
+
+
+# ───────────────────────── Key 决策（留空沿用 / 填写统一更换） ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_auto_configure_key_reuse_when_blank(db_session, monkeypatch):
+    """留空 Key → 沿用已有 Key：新增模型用旧 Key，已有模型跳过，keys_updated 为空"""
+    state = {"n": 1}
+
+    async def fake_fetch_models(account):
+        # 第一次探测 1 个模型，第二次探测 2 个（模拟用户之后新增了模型）
+        return ["llama-3.3-70b-versatile"] if state["n"] == 1 else ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+
+    monkeypatch.setattr("app.services.balance.fetch_models", fake_fetch_models)
+    monkeypatch.setattr("app.services.embedding.EmbeddingService", FakeEmbed)
+
+    svc = FreeTierService(db_session)
+    res1 = await svc.auto_configure("groq", "sk-old-1")
+    assert len(res1["created_accounts"]) == 1
+
+    state["n"] = 2
+    res2 = await svc.auto_configure("groq", "")
+    assert res2["skipped"] == ["llama-3.3-70b-versatile"]
+    assert res2["created_accounts"] == ["Groq / llama-3.1-8b-instant"]
+    assert res2["keys_updated"] == []
+
+    from app.utils.encryption import encryption_service
+    rows = (await db_session.execute(select(ModelAccount))).scalars().all()
+    keys = {r.model_name: encryption_service.decrypt(r.api_key_encrypted) for r in rows}
+    assert keys == {"llama-3.3-70b-versatile": "sk-old-1", "llama-3.1-8b-instant": "sk-old-1"}
+
+
+@pytest.mark.asyncio
+async def test_auto_configure_key_replace_when_new(db_session, monkeypatch):
+    """填写新 Key → 统一更换该厂商全部已有模型的 Key，新增模型用新 Key"""
+    async def fake_fetch_models(account):
+        return ["llama-3.3-70b-versatile"]
+
+    monkeypatch.setattr("app.services.balance.fetch_models", fake_fetch_models)
+    monkeypatch.setattr("app.services.embedding.EmbeddingService", FakeEmbed)
+
+    svc = FreeTierService(db_session)
+    await svc.auto_configure("groq", "sk-old-1")
+
+    res = await svc.auto_configure("groq", "sk-new-2")
+    assert res["skipped"] == ["llama-3.3-70b-versatile"]
+    assert res["keys_updated"] == ["llama-3.3-70b-versatile"]
+
+    from app.utils.encryption import encryption_service
+    rows = (await db_session.execute(select(ModelAccount))).scalars().all()
+    for r in rows:
+        assert encryption_service.decrypt(r.api_key_encrypted) == "sk-new-2"

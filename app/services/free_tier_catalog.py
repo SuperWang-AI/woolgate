@@ -821,9 +821,7 @@ class FreeTierService:
             if not (extra.get(req_key) or "").strip():
                 raise ValueError(f"{vendor['name']} 需要填写 {req_label}")
 
-        # no_key 厂商（本地 Ollama）：跳过 API Key 校验
-        if not vendor.get("no_key") and (not api_key or not api_key.strip()):
-            raise ValueError("API Key 不能为空")
+        # no_key 厂商（本地 Ollama）：跳过 API Key 校验；云厂商留空时若已有 Key 可沿用（见下方 Key 决策段）
 
         # 处理 base_url 模板（Cloudflare 需要 account_id 填入 URL）
         base_url = vendor["base_url"]
@@ -853,6 +851,7 @@ class FreeTierService:
                     "created_accounts": [],
                     "skipped": [],
                     "models_synced": [],
+                    "keys_updated": [],
                     "balance": None,
                     "errors": ["未检测到本地 Ollama 服务或模型，请先安装 Ollama 并执行 ollama pull 拉取模型"],
                 }
@@ -869,27 +868,45 @@ class FreeTierService:
             models = catalog_model_ids
         logger.info(f"[向导] {vendor['name']} 模型清单: {models}（真实探测 {len(real_models)} 个）")
 
-        # 2. 逐个模型建账号 + 同步目录 + 计算向量
+        # 2. Key 决策：留空 = 沿用该厂商已有 Key（新增模型同样沿用）；填写 = 统一更换该厂商全部模型的 Key
+        key_input = (api_key or "").strip()
+        vendor_accs = (
+            await self.db.execute(select(ModelAccount))
+        ).scalars().all()
+        vendor_accs = [a for a in vendor_accs if vendor_matches(a.vendor or "", vendor["id"])]
+        keys_updated = []
+        if key_input:
+            key_enc = encryption_service.encrypt(key_input)
+            for a in vendor_accs:
+                if a.api_key_encrypted and a.api_key_encrypted != key_enc:
+                    a.api_key_encrypted = key_enc
+                    keys_updated.append(a.model_name)
+        else:
+            key_enc = next((a.api_key_encrypted for a in vendor_accs if a.api_key_encrypted), None)
+        if key_enc is None:
+            if vendor.get("no_key"):
+                key_enc = encryption_service.encrypt("")   # 本地模型无 Key
+            else:
+                raise ValueError("该厂商尚未配置 Key，请先粘贴 API Key（或前往账号管理配置）")
+        logger.info(
+            f"[向导] {vendor['name']} Key 决策: "
+            + ("统一更换 " + str(len(keys_updated)) + " 个模型" if keys_updated else ("沿用已有 Key" if not key_input and vendor_accs else "新建"))
+        )
+
+        # 3. 逐个模型建账号 + 同步目录 + 计算向量
         result = {
             "vendor": vendor["name"],
             "created_accounts": [],
             "skipped": [],
             "models_synced": [],
+            "keys_updated": keys_updated,
             "balance": None,
             "errors": [],
         }
 
         for model_id in models:
             try:
-                # 查重：同厂商（别名匹配）同模型已存在则跳过，避免重复建号
-                existing_result = await self.db.execute(
-                    select(ModelAccount).where(ModelAccount.model_name == model_id)
-                )
-                duplicated = None
-                for acc in existing_result.scalars().all():
-                    if vendor_matches(acc.vendor or "", vendor["id"]):
-                        duplicated = acc
-                        break
+                duplicated = next((a for a in vendor_accs if a.model_name == model_id), None)
                 if duplicated:
                     result["skipped"].append(model_id)
                     continue
@@ -897,7 +914,7 @@ class FreeTierService:
                 account = ModelAccountProxy.to_model(
                     vendor_name=vendor["name"],
                     model_name=model_id,
-                    api_key_encrypted=encryption_service.encrypt(api_key.strip()),
+                    api_key_encrypted=key_enc,
                     base_url=base_url,
                 )
                 self.db.add(account)

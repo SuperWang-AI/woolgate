@@ -335,8 +335,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             nonlocal _vendor_models
             key = (api_key_input.value or '') if api_key_input else ''
             if not v.get('no_key') and not key:
-                ui.notify('请先粘贴 API Key', type='warning')
-                return
+                # 留空 = 沿用该厂商已有 Key（auto_configure 内决策）；从未配置过才拦截
+                has_key = False
+                async with AsyncSessionLocal() as _s:
+                    for _a in (await _s.execute(select(ModelAccount).where(ModelAccount.api_key_encrypted.isnot(None)))).scalars().all():
+                        if _a.api_key_encrypted and vendor_matches(_a.vendor or '', v['id']):
+                            has_key = True
+                            break
+                if not has_key:
+                    ui.notify('请先粘贴 API Key（该厂商尚未配置过）', type='warning')
+                    return
             try:
                 extra = {k: inp.value for k, inp in extra_inputs.items()}
                 async with AsyncSessionLocal() as session:
@@ -351,6 +359,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     parts.append(f"余额 {res['balance'][1]:.2f} {res['balance'][0]}")
                 if res['skipped']:
                     parts.append(f"跳过 {len(res['skipped'])} 个已存在")
+                if res.get('keys_updated'):
+                    parts.append(f"统一更新 {len(res['keys_updated'])} 个模型 Key")
                 if res['errors']:
                     parts.append(f"错误 {len(res['errors'])} 个: {'; '.join(res['errors'][:2])}")
                 ui.notify("✅ " + res['vendor'] + " 配置完成 " + " | ".join(parts), type='positive', timeout=6000)
@@ -463,7 +473,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                             except Exception:
                                                 pass
                                 if key_tail:
-                                    ui.label(f'🔑 已配置 Key：****{key_tail}（可留空沿用；填新 Key 仅用于新增模型）') \
+                                    ui.label(f'🔑 已配置 Key：****{key_tail}（留空沿用旧 Key；填新 Key 将统一更换该厂商所有模型的 Key）') \
                                         .classes('text-xs text-green-700 bg-green-50 border border-green-200 px-2 py-1 rounded w-full mt-1')
                                 key_ph = f"已配置 Key（…{key_tail}），可留空沿用" if key_tail else "粘贴你的 API Key"
                                 api_key_input = ui.input('API Key', password=True, password_toggle_button=True, placeholder=key_ph) \

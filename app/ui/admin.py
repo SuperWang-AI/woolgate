@@ -138,7 +138,7 @@ def create_ui():
     # 导航页面定义（label, path, key）
     NAV_PAGES = [
         ('🏠 首页', '/', 'home'),
-        ('🆓 免费接入', '/wizard', 'wizard'),
+        ('🆓 免费向导', '/wizard', 'wizard'),
         ('📖 模型菜单', '/vendors', 'vendors'),
         ('👥 账号管理', '/accounts', 'accounts'),
         ('🧠 模型能力', '/models', 'models'),
@@ -281,7 +281,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             # 快速操作
             ui.label('⚡ 快速操作').classes('text-2xl font-bold text-gray-800 mt-4')
             with ui.row().classes('gap-3'):
-                ui.button('🆓 免费接入向导', on_click=lambda: ui.navigate.to('/wizard')).props('color=green size=lg')
+                ui.button('🆓 免费向导', on_click=lambda: ui.navigate.to('/wizard')).props('color=green size=lg')
                 ui.button('➕ 新增账号', on_click=lambda: ui.navigate.to('/accounts')).props('color=primary size=lg')
                 ui.button('⚙️ 系统配置', on_click=lambda: ui.navigate.to('/config')).props('color=secondary size=lg outline')
                 ui.button('📋 查看日志', on_click=lambda: ui.navigate.to('/logs')).props('color=accent size=lg outline')
@@ -289,7 +289,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
     
     @ui.page('/wizard')
     async def wizard_page():
-        """免费接入向导（A1+A7）——选厂商 → 看步骤 → 粘 Key → 自动配置（refreshable 局部刷新，无整页跳转）"""
+        """免费向导（A1+A7）——选厂商 → 看步骤 → 粘 Key → 自动配置（refreshable 局部刷新，无整页跳转）"""
         ui.page_title('WoolGate 智能聚合网关')
         ui.add_head_html('''
         <style>
@@ -310,7 +310,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             vendors = await list_vendors_merged(_s)
             acc_res = await _s.execute(select(ModelAccount.vendor, ModelAccount.model_name))
             _vendor_models = [(r[0] or '', r[1]) for r in acc_res.all()]
-        state = {'selected': vendors[0] if vendors else None}   # 默认选中第一个厂商
+        state = {'selected': (vendors[1] if len(vendors) > 1 else (vendors[0] if vendors else None))}   # 默认选中第二个厂商（右侧详情同步打开）
 
         def vendor_connected(v):
             return any(vendor_matches(vn, v['id']) for vn, _ in _vendor_models)
@@ -364,7 +364,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 ui.notify(f'配置失败: {str(e)[:150]}', type='negative')
 
         with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):
-            ui.label('🆓 免费模型接入向导').classes('text-3xl font-bold text-gray-800')
+            ui.label('🆓 免费向导').classes('text-3xl font-bold text-gray-800')
             ui.label('选一个厂商 → 按步骤拿到 API Key → 粘贴后自动完成建账号、能力描述、向量计算、启用。全程 10 分钟以内，无需理解任何底层概念').classes('text-[13px] text-gray-500 -mt-2')
 
             with ui.row().classes('w-full gap-6 items-start'):
@@ -454,7 +454,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                             ui.button('🚀 一键自动配置', on_click=lambda: run_config(v, api_key_input)) \
                                 .props('color=green size=md no-caps').classes('mt-1 wg-config-btn')
 
-                    detail()
+                    ui.timer(0.01, detail, once=True)
 
     @ui.page('/accounts')
     async def accounts_page():
@@ -1209,40 +1209,42 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 with ui.row().classes('items-center justify-between w-full'):
                     ui.label(f'模型菜单（{len(merged)} 家）').classes('text-lg font-bold')
                     ui.button('➕ 新增厂商', on_click=lambda: show_edit_dialog()).props('color=primary size=md no-caps').classes('wg-vendor-add')
-                ui.label('内置菜单随版本发布；此处新增/覆盖/停用即时生效（合并后供免费接入向导使用）').classes('text-xs text-gray-500 mt-1')
-                with ui.row().classes('w-full gap-3 flex-wrap mt-3'):
-                    for v in merged:
-                        o = ov_by_id.get(v['id'])
-                        if o and o.is_deleted:
-                            src_tag, src_color = '⛔ 已停用', 'red'
-                        elif v['id'] not in b_ids:
-                            src_tag, src_color = '🆕 自定义', 'purple'
-                        elif o:
-                            src_tag, src_color = '🖊 已覆盖', 'blue'
-                        else:
-                            src_tag, src_color = '内置', 'grey'
-                        connected = _connected_models(v)
-                        with ui.card().classes('flex-1 min-w-[240px] max-w-[330px] p-3 shadow-md'):
-                            with ui.row().classes('items-center gap-2 w-full'):
-                                ui.html(vendor_icon_html(v.get('icon', ''), 'w-8 h-8 rounded object-contain'))
-                                ui.label(v['name']).classes('font-bold text-sm flex-1 min-w-0')
-                                ui.label(src_tag).classes(f'text-xs bg-{src_color}-100 text-{src_color}-700 px-2 py-0.5 rounded font-bold shrink-0')
-                            with ui.row().classes('items-center gap-1.5 w-full mt-1.5'):
-                                ui.label(f"🧩 {len(v['models'])} 模型").classes('text-xs text-gray-500')
-                                if connected:
-                                    ui.label(f'✅ 已接入 {len(connected)}').classes('text-xs text-green-600 font-bold')
-                                else:
-                                    ui.label('未接入').classes('text-xs text-gray-400')
-                            if v.get('quota_note'):
-                                ui.label(v['quota_note']).classes('text-xs text-gray-500 mt-1').style('line-height:1.35')
-                            with ui.row().classes('gap-1 mt-2 w-full flex-wrap'):
-                                ui.button('✏️ 编辑', on_click=lambda vv=v: show_edit_dialog(vv)).props('outline size=sm color=primary no-caps').classes('wg-vendor-edit')
+                ui.label('内置菜单随版本发布；此处新增/覆盖/停用即时生效（合并后供免费向导使用）').classes('text-xs text-gray-500 mt-1')
+                with ui.row().classes('w-full items-start gap-3 mt-3'):
+                    for col_vendors in (merged[::2], merged[1::2]):
+                        with ui.column().classes('flex-1 min-w-0 gap-3'):
+                            for v in col_vendors:
+                                o = ov_by_id.get(v['id'])
                                 if o and o.is_deleted:
-                                    ui.button('▶️ 恢复', on_click=lambda vid=v['id']: set_deleted(vid, False)).props('outline size=sm color=positive no-caps')
-                                elif v['id'] in b_ids:
-                                    ui.button('⏸ 停用', on_click=lambda vid=v['id']: set_deleted(vid, True)).props('outline size=sm color=warning no-caps')
-                                if o and not o.is_deleted and v['id'] not in b_ids:
-                                    ui.button('🗑 删除', on_click=lambda vid=v['id']: delete_override(vid)).props('outline size=sm color=negative no-caps')
+                                    src_tag, src_color = '⛔ 已停用', 'red'
+                                elif v['id'] not in b_ids:
+                                    src_tag, src_color = '🆕 自定义', 'purple'
+                                elif o:
+                                    src_tag, src_color = '🖊 已覆盖', 'blue'
+                                else:
+                                    src_tag, src_color = '内置', 'grey'
+                                connected = _connected_models(v)
+                                with ui.card().classes('w-full p-3 shadow-md'):
+                                    with ui.row().classes('items-center gap-2 w-full'):
+                                        ui.html(vendor_icon_html(v.get('icon', ''), 'w-8 h-8 rounded object-contain'))
+                                        ui.label(v['name']).classes('font-bold text-sm flex-1 min-w-0')
+                                        ui.label(src_tag).classes(f'text-xs bg-{src_color}-100 text-{src_color}-700 px-2 py-0.5 rounded font-bold shrink-0')
+                                    with ui.row().classes('items-center gap-1.5 w-full mt-1.5'):
+                                        ui.label(f"🧩 {len(v['models'])} 模型").classes('text-xs text-gray-500')
+                                        if connected:
+                                            ui.label(f'✅ 已接入 {len(connected)}').classes('text-xs text-green-600 font-bold')
+                                        else:
+                                            ui.label('未接入').classes('text-xs text-gray-400')
+                                    if v.get('quota_note'):
+                                        ui.label(v['quota_note']).classes('text-xs text-gray-500 mt-1').style('line-height:1.35')
+                                    with ui.row().classes('gap-1 mt-2 w-full flex-wrap'):
+                                        ui.button('✏️ 编辑', on_click=lambda vv=v: show_edit_dialog(vv)).props('outline size=sm color=primary no-caps').classes('wg-vendor-edit')
+                                        if o and o.is_deleted:
+                                            ui.button('▶️ 恢复', on_click=lambda vid=v['id']: set_deleted(vid, False)).props('outline size=sm color=positive no-caps')
+                                        elif v['id'] in b_ids:
+                                            ui.button('⏸ 停用', on_click=lambda vid=v['id']: set_deleted(vid, True)).props('outline size=sm color=warning no-caps')
+                                        if o and not o.is_deleted and v['id'] not in b_ids:
+                                            ui.button('🗑 删除', on_click=lambda vid=v['id']: delete_override(vid)).props('outline size=sm color=negative no-caps')
 
         ui.timer(0.01, vendor_table, once=True)
 

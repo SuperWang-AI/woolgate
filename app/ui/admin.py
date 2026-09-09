@@ -542,14 +542,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
         def select_vendor(v):
             state['selected'] = v
-            # 只刷新详情，左侧卡片区不重绘（避免滚动位置重置）；选中高亮用 JS 切换
+            # 只刷新详情，左侧卡片区不重绘（避免滚动位置重置）；选中高亮用 JS 按唯一 data-vendor-id 切换
             detail.refresh()
             ui.run_javascript(f"""
                 const list = document.querySelector('.vendor-list');
                 if (!list) return;
                 list.querySelectorAll('.q-card').forEach(c => c.removeAttribute('data-sel'));
-                const cards = [...list.querySelectorAll('.q-card')];
-                const cur = cards.find(c => c.textContent.includes({v['name']!r}));
+                const cur = list.querySelector('.q-card[data-vendor-id="{v['id']}"]');
                 if (cur) cur.setAttribute('data-sel', '1');
             """)
 

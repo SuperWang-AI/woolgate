@@ -462,6 +462,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                                     break
                                             except Exception:
                                                 pass
+                                if key_tail:
+                                    ui.label(f'🔑 已配置 Key：****{key_tail}（可留空沿用；填新 Key 仅用于新增模型）') \
+                                        .classes('text-xs text-green-700 bg-green-50 border border-green-200 px-2 py-1 rounded w-full mt-1')
                                 key_ph = f"已配置 Key（…{key_tail}），可留空沿用" if key_tail else "粘贴你的 API Key"
                                 api_key_input = ui.input('API Key', password=True, password_toggle_button=True, placeholder=key_ph) \
                                     .props('dense outlined').classes('w-full')
@@ -1137,7 +1140,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             is_edit = v is not None
             dialog = ui.dialog().props('max-width=720px')
             with dialog, ui.card().classes('w-full p-4'):
-                ui.label('✏️ 编辑厂商' if is_edit else '➕ 新增厂商').classes('text-lg font-bold mb-2')
+                ui.label('✏️ 编辑模型' if is_edit else '➕ 新增模型').classes('text-lg font-bold mb-2')
                 f = {}
                 with ui.grid(columns=2).classes('w-full gap-3'):
                     f['id'] = ui.input('厂商 ID（唯一，如 myvendor）', value=(v or {}).get('id', '')).props('dense outlined').classes('w-full')
@@ -1205,7 +1208,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         await s.commit()
                     dialog.close()
                     vendor_table.refresh()
-                    ui.notify('✅ 已保存（覆盖生效，刷新向导页可见）', type='positive')
+                    ui.notify('✅ 已保存（修改已生效，刷新向导页可见）', type='positive')
                 asyncio.create_task(persist())
 
             dialog.open()
@@ -1223,26 +1226,52 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 return [mn for vn, mn in _acc_models if vendor_matches(vn, v['id'])]
 
             b_ids = builtin_ids()
+            _filter_state = {'kw': '', 'src': 'all'}
+
+            def apply_filter():
+                st = _filter_state['src']
+                ui.run_javascript(f"""
+                    let _v = 0;
+                    const _kw = (document.querySelector('.wg-vendor-search input')?.value || '').toLowerCase();
+                    document.querySelectorAll('.vendor-menu-card').forEach(c => {{
+                        let show = true;
+                        if (_kw && !(c.textContent||'').toLowerCase().includes(_kw)) show = false;
+                        const src = c.getAttribute('data-src') || '';
+                        if ({st!r} !== 'all' && src !== {st!r}) show = false;
+                        c.style.display = show ? '' : 'none';
+                        if (show) _v++;
+                    }});
+                    const _n = document.getElementById('vendor-menu-count');
+                    if (_n) _n.textContent = '模型菜单（' + _v + '/{len(merged)} 家）';
+                """)
+
             with ui.card().classes('w-full shadow-lg p-4'):
                 with ui.row().classes('items-center justify-between w-full'):
-                    ui.label(f'模型菜单（{len(merged)} 家）').classes('text-lg font-bold')
-                    ui.button('➕ 新增厂商', on_click=lambda: show_edit_dialog()).props('color=primary size=md no-caps').classes('wg-vendor-add')
-                ui.label('内置菜单随版本发布；此处新增/覆盖/停用即时生效（合并后供免费向导使用）').classes('text-xs text-gray-500 mt-1')
+                    ui.label(f'模型菜单（{len(merged)} 家）').classes('text-lg font-bold').props('id=vendor-menu-count')
+                    ui.button('➕ 新增模型', on_click=lambda: show_edit_dialog()).props('color=primary size=md no-caps').classes('wg-vendor-add')
+                ui.label('内置菜单随版本发布；此处新增/修改/停用即时生效（合并后供免费向导使用）').classes('text-xs text-gray-500 mt-1')
+                with ui.row().classes('items-center gap-2 mt-2 w-full flex-wrap'):
+                    ui.input('🔍 搜索厂商/模型', on_change=lambda e: (_filter_state.__setitem__('kw', e.value or ''), apply_filter())) \
+                        .props('dense outlined clearable').classes('w-72 wg-vendor-search')
+                    ui.select(
+                        {'all': '全部来源', 'builtin': '内置', 'custom': '自定义', 'deleted': '已停用'},
+                        value='all', label='来源',
+                        on_change=lambda e: (_filter_state.__setitem__('src', e.value or 'all'), apply_filter()),
+                    ).props('dense outlined').classes('w-48')
                 with ui.element('div').style('display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;align-items:stretch').classes('w-full mt-3'):
                     for v in merged:
                         o = ov_by_id.get(v['id'])
                         if o and o.is_deleted:
-                            src_tag, src_color = '⛔ 已停用', 'red'
+                            src_tag, src_color, src_key = '⛔ 已停用', 'red', 'deleted'
                         elif v['id'] not in b_ids:
-                            src_tag, src_color = '🆕 自定义', 'purple'
-                        elif o:
-                            src_tag, src_color = '🖊 已覆盖', 'blue'
+                            src_tag, src_color, src_key = '🆕 自定义', 'purple', 'custom'
                         else:
-                            src_tag, src_color = '内置', 'grey'
+                            # 内置（含被编辑过的内置：修改已生效，不额外标"已覆盖"等技术内部状态）
+                            src_tag, src_color, src_key = '内置', 'grey', 'builtin'
                         connected = _connected_models(v)
                         free_cnt = sum(1 for m in v['models'] if isinstance(m, dict) and m.get('free'))
                         free_displays = [m['display'] for m in v['models'] if isinstance(m, dict) and m.get('free')]
-                        with ui.card().classes('w-full p-3 shadow-md flex flex-col'):
+                        with ui.card().classes('w-full p-3 shadow-md flex flex-col vendor-menu-card').props(f'data-src={src_key} data-vendor-id={v["id"]}'):
                             with ui.row().classes('items-center gap-2 w-full'):
                                 ui.html(vendor_icon_html(v.get('icon', ''), 'w-8 h-8 rounded object-contain'))
                                 ui.label(v['name']).classes('font-bold text-sm flex-1 min-w-0')

@@ -456,12 +456,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                 api_key_input = None
                             else:
                                 ui.label('② 获取 API Key（只需这一步）').classes('text-sm font-bold text-gray-700 mt-2')
+                                # 注册链接放在步骤上方，与步骤①"打开上方链接"文案一致
+                                ui.link(f'🔗 前往 {v["name"]} 获取 API Key', v['signup_url'], new_tab=True) \
+                                    .classes('text-blue-600 underline text-[13px] mt-0.5')
                                 for i, step in enumerate(full['steps'], 1):
                                     with ui.row().classes('items-start gap-1.5 w-full'):
                                         ui.label(str(i)).classes('w-5 h-5 rounded-full bg-green-500 text-white text-xs flex items-center justify-center mt-0.5')
                                         ui.label(step).classes('text-[13px] flex-1 pt-0.5').style('line-height:1.3')
-                                ui.link(f'🔗 前往 {v["name"]} 获取 API Key', v['signup_url'], new_tab=True) \
-                                    .classes('text-blue-600 underline text-[13px] mt-0.5')
                                 ui.label('③ 粘贴 API Key，一键自动配置').classes('text-sm font-bold text-gray-700 mt-2')
                                 key_tail = None
                                 async with AsyncSessionLocal() as _ds2:

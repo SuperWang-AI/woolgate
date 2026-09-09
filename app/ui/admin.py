@@ -391,7 +391,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                                 ui.label(v['name']).classes('text-base font-bold')
                                             ui.label(v['tag']).classes(('text-xs text-cyan-600 font-bold' if is_local else 'text-xs text-green-600 font-bold'))
                                             with ui.row().classes('items-center gap-1 w-full'):
-                                                ui.label(f"🧩 {len(v['models'])} 个免费模型").classes('text-xs text-gray-500')
+                                                ui.label(f"🧩 {v.get('free_count', len(v['models']))} 个免费模型").classes('text-xs text-gray-500')
                                                 if vendor_connected(v):
                                                     ui.label(f'✅ 已接入 {len(vendor_connected_models(v))} 个').classes('text-xs text-green-600 font-bold')
                                             ui.label(v['quota_note']).classes('text-xs text-gray-500').style('line-height:1.35')
@@ -422,10 +422,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                             if v.get('access_note'):
                                 ui.label(f"⚠️ {v['access_note']}").classes('text-xs text-orange-600 font-bold mt-0.5')
                             connected_models = vendor_connected_models(v)
+                            free_cnt = v.get('free_count', 0)
+                            total_cnt = len(v['models'])
                             if connected_models:
-                                ui.label(
-                                    f"ℹ️ 已接入 {len(connected_models)} 个模型（{', '.join(connected_models[:3])}{'…' if len(connected_models) > 3 else ''}），只补充未接入的免费模型"
-                                ).classes('text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded mt-0.5')
+                                if total_cnt > 0 and len(connected_models) >= total_cnt:
+                                    ui.label('✅ 该厂商免费模型已全部接入，无需重复配置；如需更换 Key 请到账号管理编辑').classes('text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded mt-0.5')
+                                else:
+                                    ui.label(f"ℹ️ 已接入 {len(connected_models)}/{total_cnt} 个，只补充未接入的免费模型").classes('text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded mt-0.5')
+                            free_displays = v.get('free_models', [])
+                            if free_displays:
+                                ui.label(f"🧩 免费模型：{'、'.join(free_displays[:4])}{'…' if len(free_displays) > 4 else ''}").classes('text-xs text-gray-600 mt-0.5')
 
                             is_no_key = v.get('no_key', False)
                             if is_no_key:
@@ -445,7 +451,19 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                 ui.link(f'🔗 前往 {v["name"]} 获取 API Key', v['signup_url'], new_tab=True) \
                                     .classes('text-blue-600 underline text-[13px] mt-0.5')
                                 ui.label('③ 粘贴 API Key，一键自动配置').classes('text-sm font-bold text-gray-700 mt-2')
-                                api_key_input = ui.input('API Key', password=True, password_toggle_button=True) \
+                                key_tail = None
+                                async with AsyncSessionLocal() as _ds2:
+                                    for a in (await _ds2.execute(select(ModelAccount).where(ModelAccount.api_key_encrypted.isnot(None)))).scalars().all():
+                                        if a.api_key_encrypted and vendor_matches(a.vendor or '', v['id']):
+                                            try:
+                                                k = encryption_service.decrypt(a.api_key_encrypted)
+                                                if k:
+                                                    key_tail = k[-4:]
+                                                    break
+                                            except Exception:
+                                                pass
+                                key_ph = f"已配置 Key（…{key_tail}），可留空沿用" if key_tail else "粘贴你的 API Key"
+                                api_key_input = ui.input('API Key', password=True, password_toggle_button=True, placeholder=key_ph) \
                                     .props('dense outlined').classes('w-full')
                                 for f in v.get('extra_fields', []):
                                     extra_inputs[f['key']] = ui.input(f['label'], placeholder=f.get('placeholder', '')) \
@@ -1134,7 +1152,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 with ui.row().classes('items-center gap-4 mt-1'):
                     f['balance_support'] = ui.switch('支持余额查询', value=(v or {}).get('balance_support', False)).props('dense')
                     f['no_key'] = ui.switch('无 Key 厂商（本地模型）', value=(v or {}).get('no_key', False)).props('dense')
-                f['models'] = ui.textarea('模型列表（JSON 数组）', value=json.dumps((v or {}).get('models', []), ensure_ascii=False, indent=1)) \
+                f['models'] = ui.textarea('模型列表（JSON 数组，模型对象可加 "free": true 标记为免费）', value=json.dumps((v or {}).get('models', []), ensure_ascii=False, indent=1)) \
                     .props('dense outlined autogrow input-style="font-family:monospace;font-size:12px"').classes('w-full mt-1')
                 f['steps'] = ui.textarea('接入步骤（JSON 字符串数组）', value=json.dumps((v or {}).get('steps', []), ensure_ascii=False, indent=1)) \
                     .props('dense outlined autogrow input-style="font-family:monospace;font-size:12px"').classes('w-full mt-1')
@@ -1210,40 +1228,43 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     ui.label(f'模型菜单（{len(merged)} 家）').classes('text-lg font-bold')
                     ui.button('➕ 新增厂商', on_click=lambda: show_edit_dialog()).props('color=primary size=md no-caps').classes('wg-vendor-add')
                 ui.label('内置菜单随版本发布；此处新增/覆盖/停用即时生效（合并后供免费向导使用）').classes('text-xs text-gray-500 mt-1')
-                with ui.row().classes('w-full items-start gap-3 mt-3'):
-                    for col_vendors in (merged[::2], merged[1::2]):
-                        with ui.column().classes('flex-1 min-w-0 gap-3'):
-                            for v in col_vendors:
-                                o = ov_by_id.get(v['id'])
-                                if o and o.is_deleted:
-                                    src_tag, src_color = '⛔ 已停用', 'red'
-                                elif v['id'] not in b_ids:
-                                    src_tag, src_color = '🆕 自定义', 'purple'
-                                elif o:
-                                    src_tag, src_color = '🖊 已覆盖', 'blue'
+                with ui.element('div').style('display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;align-items:stretch').classes('w-full mt-3'):
+                    for v in merged:
+                        o = ov_by_id.get(v['id'])
+                        if o and o.is_deleted:
+                            src_tag, src_color = '⛔ 已停用', 'red'
+                        elif v['id'] not in b_ids:
+                            src_tag, src_color = '🆕 自定义', 'purple'
+                        elif o:
+                            src_tag, src_color = '🖊 已覆盖', 'blue'
+                        else:
+                            src_tag, src_color = '内置', 'grey'
+                        connected = _connected_models(v)
+                        free_cnt = sum(1 for m in v['models'] if isinstance(m, dict) and m.get('free'))
+                        free_displays = [m['display'] for m in v['models'] if isinstance(m, dict) and m.get('free')]
+                        with ui.card().classes('w-full p-3 shadow-md flex flex-col'):
+                            with ui.row().classes('items-center gap-2 w-full'):
+                                ui.html(vendor_icon_html(v.get('icon', ''), 'w-8 h-8 rounded object-contain'))
+                                ui.label(v['name']).classes('font-bold text-sm flex-1 min-w-0')
+                                ui.label(src_tag).classes(f'text-xs bg-{src_color}-100 text-{src_color}-700 px-2 py-0.5 rounded font-bold shrink-0')
+                            with ui.row().classes('items-center gap-1.5 w-full mt-1.5'):
+                                ui.label(f"🧩 {free_cnt} 免费模型").classes('text-xs text-gray-500')
+                                if connected:
+                                    ui.label(f'✅ 已接入 {len(connected)}').classes('text-xs text-green-600 font-bold')
                                 else:
-                                    src_tag, src_color = '内置', 'grey'
-                                connected = _connected_models(v)
-                                with ui.card().classes('w-full p-3 shadow-md'):
-                                    with ui.row().classes('items-center gap-2 w-full'):
-                                        ui.html(vendor_icon_html(v.get('icon', ''), 'w-8 h-8 rounded object-contain'))
-                                        ui.label(v['name']).classes('font-bold text-sm flex-1 min-w-0')
-                                        ui.label(src_tag).classes(f'text-xs bg-{src_color}-100 text-{src_color}-700 px-2 py-0.5 rounded font-bold shrink-0')
-                                    with ui.row().classes('items-center gap-1.5 w-full mt-1.5'):
-                                        ui.label(f"🧩 {len(v['models'])} 模型").classes('text-xs text-gray-500')
-                                        if connected:
-                                            ui.label(f'✅ 已接入 {len(connected)}').classes('text-xs text-green-600 font-bold')
-                                        else:
-                                            ui.label('未接入').classes('text-xs text-gray-400')
-                                    if v.get('quota_note'):
-                                        ui.label(v['quota_note']).classes('text-xs text-gray-500 mt-1').style('line-height:1.35')
-                                    with ui.row().classes('gap-1 mt-2 w-full flex-wrap'):
-                                        ui.button('✏️ 编辑', on_click=lambda vv=v: show_edit_dialog(vv)).props('outline size=sm color=primary no-caps').classes('wg-vendor-edit')
-                                        if o and o.is_deleted:
-                                            ui.button('▶️ 恢复', on_click=lambda vid=v['id']: set_deleted(vid, False)).props('outline size=sm color=positive no-caps')
-                                        elif v['id'] in b_ids:
-                                            ui.button('⏸ 停用', on_click=lambda vid=v['id']: set_deleted(vid, True)).props('outline size=sm color=warning no-caps')
-                                        if o and not o.is_deleted and v['id'] not in b_ids:
+                                    ui.label('未接入').classes('text-xs text-gray-400')
+                            with ui.column().classes('flex-1 w-full gap-0'):
+                                if v.get('quota_note'):
+                                    ui.label(v['quota_note']).classes('text-xs text-gray-500 mt-1').style('line-height:1.35')
+                                if free_displays:
+                                    ui.label(f"🧩 {'、'.join(free_displays[:3])}{'…' if len(free_displays) > 3 else ''}").classes('text-[11px] text-green-700 mt-1')
+                            with ui.row().classes('gap-1 mt-2 w-full flex-wrap'):
+                                ui.button('✏️ 编辑', on_click=lambda vv=v: show_edit_dialog(vv)).props('outline size=sm color=primary no-caps').classes('wg-vendor-edit')
+                                if o and o.is_deleted:
+                                    ui.button('▶️ 恢复', on_click=lambda vid=v['id']: set_deleted(vid, False)).props('outline size=sm color=positive no-caps')
+                                elif v['id'] in b_ids:
+                                    ui.button('⏸ 停用', on_click=lambda vid=v['id']: set_deleted(vid, True)).props('outline size=sm color=warning no-caps')
+                                if o and not o.is_deleted and v['id'] not in b_ids:
                                             ui.button('🗑 删除', on_click=lambda vid=v['id']: delete_override(vid)).props('outline size=sm color=negative no-caps')
 
         ui.timer(0.01, vendor_table, once=True)

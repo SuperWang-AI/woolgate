@@ -45,6 +45,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "llama3.1",
+                "free": True,
                 "display": "Llama 3.1（示例）",
                 "capability": "Meta 开源旗舰，通用对话、写作、代码均衡，本地运行隐私安全。",
                 "tags": ["chat", "code", "writing"],
@@ -54,6 +55,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "qwen2.5",
+                "free": True,
                 "display": "Qwen2.5（示例）",
                 "capability": "通义千问开源模型，中文能力强，本地运行速度快。",
                 "tags": ["chat", "writing"],
@@ -63,6 +65,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "deepseek-r1",
+                "free": True,
                 "display": "DeepSeek-R1（示例）",
                 "capability": "深度求索开源推理模型，数学、逻辑、代码推理出色。",
                 "tags": ["reasoning", "code", "math"],
@@ -91,6 +94,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "glm-4-flash",
+                "free": True,
                 "display": "GLM-4-Flash（官方免费）",
                 "capability": "智谱官方免费模型，通用对话、写作、问答，国内直连速度快。",
                 "tags": ["chat", "writing", "fast"],
@@ -118,6 +122,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "Qwen/Qwen2.5-7B-Instruct",
+                "free": True,
                 "display": "Qwen2.5 7B（免费）",
                 "capability": "通义千问开源模型，通用对话、写作，国内直连。",
                 "tags": ["chat", "writing"],
@@ -127,6 +132,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "THUDM/glm-4-9b-chat",
+                "free": True,
                 "display": "GLM-4 9B（免费）",
                 "capability": "智谱开源模型，中文理解与对话能力好。",
                 "tags": ["chat", "writing"],
@@ -153,6 +159,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "moonshot-v1-8k",
+                "free": False,
                 "display": "Moonshot V1 8K",
                 "capability": "Kimi 基础版，长文本理解与中文对话出色。",
                 "tags": ["chat", "long-context", "writing"],
@@ -162,6 +169,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "kimi-k2.6",
+                "free": False,
                 "display": "Kimi K2.6（长上下文旗舰）",
                 "capability": "Kimi 旗舰模型，超长上下文（256K），创意写作、文档分析、翻译。",
                 "tags": ["creative", "writing", "long-context", "translation"],
@@ -190,6 +198,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "deepseek-chat",
+                "free": False,
                 "display": "DeepSeek-V3（通用）",
                 "capability": "深度求索旗舰通用模型，代码、推理、写作全面，价格极低。",
                 "tags": ["chat", "code", "reasoning"],
@@ -199,6 +208,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "deepseek-reasoner",
+                "free": False,
                 "display": "DeepSeek-R1（推理）",
                 "capability": "深度推理模型，数学、逻辑、复杂分析能力强。",
                 "tags": ["reasoning", "math", "code"],
@@ -226,6 +236,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "qwen-turbo",
+                "free": True,
                 "display": "Qwen-Turbo（赠送）",
                 "capability": "通义千问轻量模型，速度快，日常对话、写作、问答免费额度大。",
                 "tags": ["chat", "writing", "fast"],
@@ -235,6 +246,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "qwen-plus",
+                "free": False,
                 "display": "Qwen-Plus（增强）",
                 "capability": "通义千问增强模型，理解与生成质量更高，通用场景。",
                 "tags": ["chat", "writing", "reasoning"],
@@ -262,6 +274,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "hunyuan-turbos-latest",
+                "free": True,
                 "display": "混元 TurboS（免费）",
                 "capability": "腾讯混元旗舰，中文对话、写作、代码均衡，TurboS 系列免费。",
                 "tags": ["chat", "code", "writing"],
@@ -271,6 +284,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "hunyuan-turbo",
+                "free": False,
                 "display": "混元 Turbo",
                 "capability": "混元标准模型，速度快成本低，日常问答够用。",
                 "tags": ["chat", "fast"],
@@ -298,6 +312,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "doubao-seed-1-6-lite",
+                "free": True,
                 "display": "Doubao Seed 1.6 Lite（示例）",
                 "capability": "豆包轻量模型，速度快，日常对话、写作免费额度大。",
                 "tags": ["chat", "fast", "writing"],
@@ -307,6 +322,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "doubao-1-5-pro",
+                "free": False,
                 "display": "Doubao 1.5 Pro（示例）",
                 "capability": "豆包旗舰模型，理解与生成质量高，支持长上下文。",
                 "tags": ["chat", "reasoning", "long-context"],
@@ -338,6 +354,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "ernie-speed-8k",
+                "free": True,
                 "display": "ERNIE Speed（免费）",
                 "capability": "百度文心轻量模型，速度快，日常问答、写作免费。",
                 "tags": ["chat", "fast", "writing"],
@@ -347,6 +364,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "ernie-4.0-turbo-8k",
+                "free": False,
                 "display": "ERNIE 4.0 Turbo",
                 "capability": "文心 4.0 轻量旗舰，理解与推理质量高。",
                 "tags": ["chat", "reasoning"],
@@ -374,6 +392,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "llama-3.3-70b-versatile",
+                "free": True,
                 "display": "Llama 3.3 70B（通用）",
                 "capability": "通用对话能力强，推理、写作、翻译、代码问答均擅长，响应速度极快。",
                 "tags": ["chat", "code", "reasoning"],
@@ -384,6 +403,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "llama-3.1-8b-instant",
+                "free": True,
                 "display": "Llama 3.1 8B（轻量）",
                 "capability": "轻量快速，适合简单问答、文本分类、摘要等低延迟任务。",
                 "tags": ["chat", "fast", "classification"],
@@ -411,6 +431,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "llama-3.3-70b",
+                "free": True,
                 "display": "Llama 3.3 70B（极速版）",
                 "capability": "世界最快推理的 Llama 3.3 70B，通用对话、代码、分析均出色，延迟极低。",
                 "tags": ["chat", "code", "reasoning"],
@@ -439,6 +460,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "open-mistral-nemo",
+                "free": True,
                 "display": "Mistral Nemo 12B（免费）",
                 "capability": "免费小模型，多语言能力强，适合日常对话、摘要、分类等常规任务。",
                 "tags": ["chat", "multilingual", "fast"],
@@ -448,6 +470,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "mistral-small-latest",
+                "free": False,
                 "display": "Mistral Small（轻量旗舰）",
                 "capability": "轻量级旗舰模型，代码、推理、多语言兼顾，速度快成本低。",
                 "tags": ["chat", "code", "reasoning"],
@@ -475,6 +498,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "gemini-2.0-flash",
+                "free": True,
                 "display": "Gemini 2.0 Flash",
                 "capability": "免费额度大的多模态模型，支持文本/图像输入，速度快，综合能力强。",
                 "tags": ["chat", "multimodal", "fast", "reasoning"],
@@ -485,6 +509,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "gemini-2.5-flash",
+                "free": True,
                 "display": "Gemini 2.5 Flash（思考型）",
                 "capability": "带思考能力的 Flash 模型，复杂推理、数学、编程表现更好。",
                 "tags": ["reasoning", "code", "math"],
@@ -512,6 +537,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "meta-llama/llama-3.3-70b-instruct:free",
+                "free": True,
                 "display": "Llama 3.3 70B（:free）",
                 "capability": "OpenRouter 免费路由的 Llama 3.3 70B，通用对话能力强。",
                 "tags": ["chat", "code", "reasoning"],
@@ -521,6 +547,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "deepseek/deepseek-chat-v3-0324:free",
+                "free": True,
                 "display": "DeepSeek V3（:free）",
                 "capability": "DeepSeek V3 免费路由版，代码与推理能力突出。",
                 "tags": ["code", "reasoning", "chat"],
@@ -548,6 +575,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "gpt-4o-mini",
+                "free": True,
                 "display": "GPT-4o mini",
                 "capability": "OpenAI 轻量模型，速度快，通用对话与代码辅助都够用。",
                 "tags": ["chat", "code", "fast"],
@@ -557,6 +585,7 @@ FREE_TIER_VENDORS: List[dict] = [
             },
             {
                 "id": "gpt-4.1-mini",
+                "free": True,
                 "display": "GPT-4.1 mini",
                 "capability": "GPT-4.1 轻量版，代码与长上下文能力更强。",
                 "tags": ["chat", "code", "reasoning"],
@@ -584,6 +613,7 @@ FREE_TIER_VENDORS: List[dict] = [
         "models": [
             {
                 "id": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+                "free": True,
                 "display": "Llama 3.3 70B（Workers AI）",
                 "capability": "Cloudflare 边缘推理的 Llama 3.3 70B，通用对话与代码能力均衡。",
                 "tags": ["chat", "code", "reasoning"],
@@ -663,6 +693,8 @@ def list_vendors() -> List[dict]:
             "tag": v["tag"],
             "region": v["region"],
             "models": [m["id"] for m in v["models"]],
+            "free_count": sum(1 for m in v["models"] if m.get("free")),
+            "free_models": [m["display"] for m in v["models"] if m.get("free")],
             "signup_url": v["signup_url"],
             "balance_support": v["balance_support"],
             "quota_note": v["quota_note"],
@@ -717,6 +749,8 @@ async def list_vendors_merged(db: Optional[AsyncSession] = None) -> List[dict]:
             "tag": v["tag"],
             "region": v["region"],
             "models": [m["id"] for m in v["models"]],
+            "free_count": sum(1 for m in v["models"] if m.get("free")),
+            "free_models": [m["display"] for m in v["models"] if m.get("free")],
             "signup_url": v["signup_url"],
             "balance_support": v["balance_support"],
             "quota_note": v["quota_note"],

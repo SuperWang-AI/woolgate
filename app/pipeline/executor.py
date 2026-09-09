@@ -17,6 +17,7 @@
 import json
 import time
 import logging
+import asyncio
 from typing import AsyncGenerator, Union
 
 from fastapi import HTTPException
@@ -275,6 +276,7 @@ class Executor:
         error_message = None
         full_content = ""  # 累加输出内容，用于估算 token
         produced_any = False  # A3: 本账号是否已产出内容（判定 stream_interrupted 信号）
+        cancelled = False  # A3: 客户端主动断开（asyncio.CancelledError）
 
         try:
             async for chunk in llm_client.chat_completion_stream(
@@ -300,6 +302,15 @@ class Executor:
                     pass
                 
                 yield chunk
+
+        except asyncio.CancelledError:
+            # A3: 客户端主动断开/取消流（CancelledError 继承 BaseException，需单独捕获）
+            # 无论是否已产出内容，一律记为「输出中断」信号
+            error_occurred = True
+            cancelled = True
+            error_message = "客户端中断"
+            logger.info(f"账号 {account.id} 流被客户端中断")
+            raise
 
         except Exception as e:
             error_occurred = True
@@ -329,9 +340,9 @@ class Executor:
                 other_chars = len(full_content) - chinese_chars
                 completion_tokens = int(chinese_chars / 1.5 + other_chars / 4)
 
-            # A3: 隐式信号——输出后中断 vs 输出前失败（由外层决定是否切换）
+            # A3: 隐式信号——客户端中断/输出后中断 vs 输出前失败（由外层决定是否切换）
             implicit_signal = None
-            if error_occurred and produced_any:
+            if error_occurred and (cancelled or produced_any):
                 implicit_signal = "stream_interrupted"
             elif error_occurred:
                 implicit_signal = "switch_retry"

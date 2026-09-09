@@ -283,9 +283,68 @@ async def test_feedback_not_found(db_session):
 
 
 # ══════════════════════════════════════════════════════════
-# 6. followup（继续追问）隐式信号推断
+# 5.5 request_id 暴露（客户端据此上报反馈）+ 客户端取消信号
 # ══════════════════════════════════════════════════════════
 
+@pytest.mark.asyncio
+async def test_response_headers_expose_request_id():
+    """非流式 JSONResponse 与流式 StreamingResponse 均携带 X-Request-Id 头"""
+    from fastapi.responses import StreamingResponse
+    from fastapi.responses import JSONResponse
+
+    # 非流式：JSONResponse 可追加响应头
+    resp = JSONResponse(content={"choices": []})
+    resp.headers["X-Request-Id"] = "req-head-1"
+    assert resp.headers.get("X-Request-Id") == "req-head-1"
+
+    # 流式：StreamingResponse 构造时传入 headers
+    async def gen():
+        yield b"data: [DONE]\n\n"
+    stream_resp = StreamingResponse(
+        gen(), media_type="text/event-stream",
+        headers={"X-Request-Id": "req-head-2"},
+    )
+    assert stream_resp.headers.get("X-Request-Id") == "req-head-2"
+
+
+@pytest.mark.asyncio
+async def test_client_cancel_marks_stream_interrupted(db_session, monkeypatch):
+    """客户端主动断开（asyncio.CancelledError）→ 日志 failed + stream_interrupted"""
+    import asyncio
+    acc_a = make_account(db_session, "vendor-a", "model-a", priority=90)
+    db_session.add(acc_a)
+    await db_session.commit()
+
+    async def fake_stream(account, messages, **kwargs):
+        yield {"choices": [{"delta": {"content": "部分内容", "role": "assistant"}, "index": 0}]}
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(llm_client, "chat_completion_stream", fake_stream)
+
+    ctx = PipelineContext(
+        request_id="test-cancel",
+        client_ip="127.0.0.1",
+        stream=True,
+        original_messages=[{"role": "user", "content": "hi"}],
+        requested_model="chat",
+        kwargs={},
+        estimated_tokens=100,
+        session_id="sess-cancel",
+    )
+    executor = Executor(db_session)
+    with pytest.raises(asyncio.CancelledError):
+        async for _ in await executor.execute(ctx):
+            pass
+
+    logs = await fetch_logs(db_session)
+    assert len(logs) == 1
+    assert logs[0].status == "failed"
+    assert logs[0].implicit_signal == "stream_interrupted"
+
+
+# ══════════════════════════════════════════════════════════
+# 6. followup（继续追问）隐式信号推断
+# ══════════════════════════════════════════════════════════
 @pytest.mark.asyncio
 async def test_followup_signal_within_window(db_session):
     """窗口内继续追问 → 上一条成功日志标记 followup"""

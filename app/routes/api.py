@@ -311,7 +311,14 @@ async def chat_completions(
     result = await executor.execute(ctx)
 
     if req.stream:
-        return StreamingResponse(result, media_type="text/event-stream")
+        # A3: 流式响应头携带 request_id，客户端据此调用 POST /v1/feedback 上报质量反馈
+        return StreamingResponse(
+            result,
+            media_type="text/event-stream",
+            headers={"X-Request-Id": ctx.request_id},
+        )
+    # A3: 非流式同样在响应头暴露 request_id（不侵入 OpenAI 兼容响应体）
+    result.headers["X-Request-Id"] = ctx.request_id
     return result
 
 

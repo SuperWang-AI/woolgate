@@ -909,6 +909,17 @@ class FreeTierService:
                 duplicated = next((a for a in vendor_accs if a.model_name == model_id), None)
                 if duplicated:
                     result["skipped"].append(model_id)
+                    # 防 catalog 缺失：已有账号但目录无该模型记录 → 补同步（能力描述+向量）
+                    try:
+                        from app.models.database import ModelCatalog
+                        cat = (await self.db.execute(
+                            select(ModelCatalog).where(ModelCatalog.model_name == model_id)
+                        )).scalar_one_or_none()
+                        if cat is None:
+                            await self._sync_model(duplicated, vendor, model_id)
+                            result["models_synced"].append(model_id)
+                    except Exception as e:
+                        logger.warning(f"[向导] 补目录 {model_id} 失败: {e}")
                     continue
 
                 account = ModelAccountProxy.to_model(

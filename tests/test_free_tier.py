@@ -248,7 +248,7 @@ def test_vendor_matches_alias():
 @pytest.mark.asyncio
 async def test_auto_configure_dedup_by_alias(db_session, monkeypatch):
     """真实场景：库里已有 '月之暗面 (Moonshot)' 账号 → 向导配置 moonshot 不重复建号"""
-    # 预置已有账号（模拟账号管理里的月之暗面）
+    # 预置已有账号（模拟账号管理里的月之暗面）+ 对应 catalog（正常生产账号都有能力记录）
     existing = ModelAccount(
         vendor="月之暗面 (Moonshot)",
         model_name="kimi-k2.6",
@@ -257,6 +257,15 @@ async def test_auto_configure_dedup_by_alias(db_session, monkeypatch):
         is_enable=True,
     )
     db_session.add(existing)
+    db_session.add(ModelCatalog(
+        vendor="月之暗面 (Moonshot)",
+        model_name="kimi-k2.6",
+        display_name="Kimi K2.6",
+        capability_description="月之暗面对话模型",
+        capability_tags=["chat"],
+        examples=["你好"],
+        is_active=True,
+    ))
     await db_session.commit()
 
     async def fake_fetch_models(account):

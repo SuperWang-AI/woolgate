@@ -510,11 +510,19 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 for catalog in catalog_result.scalars().all():
                     model_display_map[catalog.model_name] = catalog.display_name or catalog.model_name
             
-            # 按厂商分组，并查询每个厂商下的模型能力
+            # 按厂商分组：先用别名匹配归一为目录规范名，避免历史命名差异把同一厂商拆成多组
             from collections import defaultdict
+            from app.services.free_tier_catalog import FREE_TIER_VENDORS, vendor_matches
+
+            def _canon_vendor(name):
+                for v in FREE_TIER_VENDORS:
+                    if vendor_matches(name or '', v['id']):
+                        return v['name']
+                return name
+
             vendor_groups = defaultdict(list)
             for acc in accounts:
-                vendor_groups[acc.vendor].append(acc)
+                vendor_groups[_canon_vendor(acc.vendor)].append(acc)
             
             # 建立 model_name -> account 的映射
             model_to_account = {a.model_name: a for a in accounts}

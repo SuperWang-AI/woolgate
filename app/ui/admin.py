@@ -3,6 +3,7 @@ NiceGUI管理界面
 提供网页端账号管理、配置、统计等功能
 """
 from nicegui import ui, app
+from fastapi import Request
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta
@@ -131,6 +132,85 @@ async def save_system_config(config_data: dict):
         return False
 
 
+# ── A2 启动意图引导：3 问 → 推荐策略模板 ──
+ONBOARD_ANSWERS_CN = {
+    "way": {"personal": "个人省钱", "team": "企业使用"},
+    "scene": {"chat": "通用对话", "code": "编程开发", "creative": "创意写作", "data": "数据分析"},
+    "source": {"free": "免费云端", "paid": "付费账号", "local": "本地模型"},
+}
+
+def build_onboard_data(answers: dict):
+    """
+    A2 引导映射（纯函数，便于测试）：3 个回答 → 推荐策略配置数据。
+
+    设计原则（消灭用户侧配置）：
+    - 路由统一 hybrid（智能路由：向量快速路径 + LLM 兜底），不让用户理解路由概念
+    - 选号：个人 → 免费额度优先；企业 → 成本优先（付费为主）
+    - 上下文：编程 → 摘要压缩（长会话）；创意/数据 → 窗口截断；通用 → 直传
+    - 本地模型来源 → 强制开启 Ollama 调度
+
+    Returns:
+        (config_data, profile_name)
+    """
+    way = answers.get("way", "personal")
+    scene = answers.get("scene", "chat")
+    source = answers.get("source", "free")
+
+    router = "hybrid"
+    selector = "free-first" if way == "personal" else "cost-first"
+
+    if scene == "code":
+        context = "summary"
+        context_config = {
+            "summary_provider": "cloud",
+            "summary_model": "glm-4-flash",
+            "summary_trigger_turns": 20,
+            "summary_trigger_tokens": 4000,
+            "summary_window_turns": 3,
+        }
+    elif scene in ("creative", "data"):
+        context = "window"
+        context_config = {"window_turns": 10}
+    else:
+        context = "passthrough"
+        context_config = {}
+
+    data = {
+        "router_strategy": router,
+        "router_config_json": {"threshold_high": 0.65, "threshold_low": 0.55},
+        "selector_strategy": selector,
+        "context_strategy": context,
+        "context_config_json": context_config,
+        "onboarded": True,
+    }
+    if source == "local":
+        data["ollama_enabled"] = True
+
+    profile_name = "·".join([
+        ONBOARD_ANSWERS_CN["way"].get(way, "个人省钱"),
+        ONBOARD_ANSWERS_CN["scene"].get(scene, "通用对话"),
+        ONBOARD_ANSWERS_CN["source"].get(source, "免费云端"),
+    ])
+    data["onboard_profile"] = profile_name
+    return data, profile_name
+
+
+async def apply_onboard_profile(answers: dict):
+    """
+    A2 启动意图引导：根据 3 个回答自动套用推荐策略模板。
+
+    Returns:
+        (success, profile_name)
+    """
+    data, profile_name = build_onboard_data(answers)
+    ok = await save_system_config(data)
+    if ok:
+        # 使管线配置缓存失效，新策略立即生效
+        from app.pipeline.config import PipelineConfig
+        PipelineConfig.invalidate_cache()
+    return ok, profile_name
+
+
 def create_ui():
     """创建UI"""
     
@@ -196,7 +276,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     ui.tab(name=key, label=label)
         return tabs
 
-    async def build_spa(active_key: str):
+    async def build_spa(active_key: str, request: Optional[Request] = None):
         """SPA 根：导航 tabs + 内容面板，导航切换零刷新（URL 用 history.replaceState 同步，刷新后仍停留当前页）"""
         ui.page_title('WoolGate 智能聚合网关')
         tabs = nav_tabs(active_key)
@@ -209,7 +289,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
         with ui.tab_panels(tabs, value=active_key).classes('w-full'):
             with ui.tab_panel('home'):
-                await home_view()
+                await home_view(request)
             with ui.tab_panel('wizard'):
                 await wizard_view()
             with ui.tab_panel('accounts'):
@@ -222,12 +302,111 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 await logs_view()
 
     @ui.page('/')
-    async def index():
+    async def index(request: Request):
         """首页（SPA）"""
-        await build_spa('home')
+        await build_spa('home', request)
 
-    async def home_view():
-        """首页视图（SPA tab 面板内容）"""
+    async def home_view(request: Optional[Request] = None):
+        """首页视图（SPA tab 面板内容）——未完成 A2 启动引导时先展示引导，完成后显示仪表盘"""
+        @ui.refreshable
+        async def render():
+            if await _needs_onboard(request):
+                await _render_onboard(on_done=render.refresh)
+            else:
+                await _render_dashboard()
+        await render()
+
+    async def _needs_onboard(request: Optional[Request] = None) -> bool:
+        """A2 引导触发条件：未完成引导 且（全新安装无账号 或 URL 带 ?onboard=1 强制预览）；
+        预览模式仅在尚未完成引导时生效——应用成功后即使 URL 仍带 onboard=1 也进入仪表盘"""
+        preview = bool(request and request.query_params.get('onboard') == '1')
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemConfig).where(SystemConfig.id == 1))
+            config = result.scalar_one_or_none()
+            onboarded = bool(config and getattr(config, "onboarded", False))
+            if onboarded:
+                return False
+            if not preview:
+                cnt = (await session.execute(select(func.count(ModelAccount.id)))).scalar() or 0
+                return cnt == 0
+            return True
+
+    async def _render_onboard(on_done):
+        """A2 启动引导面板：3 个问题 → 自动应用推荐策略模板（无整页刷新）"""
+        step_idx = {"v": 0}
+        answers: dict = {}
+        steps = [
+            ("使用方式", "你主要怎么使用 WoolGate？",
+             [("personal", "🙋 个人自用省钱"), ("team", "🏢 团队/企业使用")]),
+            ("主要场景", "你最常用来做什么？",
+             [("chat", "💬 通用对话"), ("code", "💻 编程开发"), ("creative", "🎨 创意写作"), ("data", "📊 数据分析")]),
+            ("模型来源", "你计划接入哪些模型？",
+             [("free", "🆓 只用免费云端"), ("paid", "💳 已有付费账号"), ("local", "🖥️ 本地模型（Ollama）")]),
+        ]
+        step_keys = ["way", "scene", "source"]
+
+        with ui.column().classes('w-full items-center p-6'):
+            with ui.card().classes('w-full shadow-lg border-t-4 border-green-500 p-6').style('max-width:760px'):
+                with ui.row().classes('items-center gap-3 w-full'):
+                    ui.label('🦄 欢迎使用 WoolGate 智能聚合网关').classes('text-2xl font-bold text-gray-800')
+                ui.label('回答 3 个问题，自动为你配好路由与调度策略——你只管用，配置交给系统。').classes('text-sm text-gray-500 mt-1')
+
+                # 步骤指示器
+                with ui.row().classes('gap-2 mt-3 w-full'):
+                    for i, sl in enumerate([s[0] for s in steps]):
+                        active = i == step_idx['v']
+                        done = i < step_idx['v']
+                        dot = '✅' if done else ('●' if active else '○')
+                        ui.label(f'{dot} {sl}').classes(
+                            'text-sm px-3 py-1 rounded-full '
+                            + ('bg-green-100 text-green-700 font-bold' if active
+                               else ('text-gray-400' if done else 'text-gray-500'))
+                        )
+
+                @ui.refreshable
+                async def render_step():
+                    ui.separator().classes('my-4')
+                    title, desc, opts = steps[step_idx['v']]
+                    ui.label(title).classes('text-xl font-bold text-gray-800')
+                    ui.label(desc).classes('text-sm text-gray-500 mb-3')
+                    choices = {k: v for k, v in opts}
+                    key = step_keys[step_idx['v']]
+                    ui.radio(
+                        choices,
+                        value=answers.get(key),
+                        on_change=lambda e, k=key: answers.update({k: e.value}),
+                    ).props('stack').classes('gap-1')
+
+                    async def next_step():
+                        if step_idx['v'] < 2:
+                            await go(1)
+                        else:
+                            await finish()
+
+                    with ui.row().classes('w-full justify-between mt-6'):
+                        if step_idx['v'] > 0:
+                            ui.button('← 上一步', on_click=lambda: go(-1)).props('outline color=grey')
+                        if step_idx['v'] < 2:
+                            ui.button('下一步 →', on_click=next_step).props('color=primary size=lg')
+                        else:
+                            ui.button('✅ 完成并应用', on_click=finish).props('color=green size=lg')
+
+                async def go(delta: int):
+                    step_idx['v'] += delta
+                    await render_step.refresh()
+
+                async def finish():
+                    ok, profile = await apply_onboard_profile(answers)
+                    if ok:
+                        ui.notify(f'已应用智能配置：{profile}。可在「管线策略」页随时微调。', type='positive', position='top')
+                        await on_done()
+                    else:
+                        ui.notify('应用失败，请重试', type='negative')
+
+                await render_step()
+
+    async def _render_dashboard():
+        """首页仪表盘（引导完成后显示）"""
         
         # 主内容区域
         with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):

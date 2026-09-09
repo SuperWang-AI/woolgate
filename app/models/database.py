@@ -65,6 +65,10 @@ class SystemConfig(Base):
     edition = Column(String(20), default="opensource",
                      comment="opensource/enterprise（决定哪些策略可用）")
 
+    # ── A2 启动意图引导（消灭用户侧配置）──
+    onboarded = Column(Boolean, default=False, comment="是否完成启动引导")
+    onboard_profile = Column(String(100), nullable=True, comment="引导应用的推荐配置模板名")
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

@@ -62,6 +62,8 @@ async def _ensure_columns(conn):
         ("tenant_enabled", "BOOLEAN DEFAULT 0"),
         ("budget_enabled", "BOOLEAN DEFAULT 0"),
         ("edition", "VARCHAR(20) DEFAULT 'opensource'"),
+        ("onboarded", "BOOLEAN DEFAULT 0"),
+        ("onboard_profile", "VARCHAR(100)"),
     ]
     for col, coltype in sys_migrations:
         if col not in cols:

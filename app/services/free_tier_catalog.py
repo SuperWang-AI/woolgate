@@ -1,8 +1,8 @@
 """
 免费模型目录（A7）+ 免费 tier 向导服务（A1）
 
-内置主流厂商的免费 API 额度信息，引导用户「选厂商 → 看获取步骤 → 粘 Key → 自动配置」，
-全程无需理解底层概念（建账号/同步模型/能力描述/计算向量/启用 全自动完成）。
+内置主流厂商的免费 API 额度信息，引导用户「选厂商 → 看获取步骤 → 粘 Key → 智能配置」，
+全程无需理解底层概念（建账号/同步模型/能力描述/计算向量/启用 全程智能完成）。
 
 目录覆盖 ≥8 家厂商。额度信息为定性描述，具体数字以各厂商官网实时为准（不虚标）。
 """
@@ -776,8 +776,8 @@ async def get_vendor_merged(db: Optional[AsyncSession], vendor_id: str) -> Optio
 
 class FreeTierService:
     """
-    向导自动配置：给定厂商 + API Key（+额外字段如 account_id），
-    自动完成 建账号 → 同步模型 → 能力描述 → 计算向量 → 启用。
+    向导智能配置：给定厂商 + API Key（+额外字段如 account_id），
+    智能完成 建账号 → 同步模型 → 能力描述 → 计算向量 → 启用。
     """
 
     def __init__(self, db: AsyncSession):
@@ -790,7 +790,7 @@ class FreeTierService:
         extra: Optional[dict] = None,
     ) -> dict:
         """
-        执行自动配置。
+        执行智能配置。
 
         Args:
             vendor_id: 厂商 id（FREE_TIER_VENDORS）

@@ -3,8 +3,8 @@
 
 负责：
 - 模型能力描述的 CRUD
-- 能力描述的自动生成（预置模板 + LLM 生成草稿）
-- 能力向量的自动计算（embedding）
+- 能力描述的智能生成（预置模板 + LLM 生成草稿）
+- 能力向量的智能计算（embedding）
 - 预置主流模型的能力描述模板
 """
 import logging
@@ -142,7 +142,7 @@ class ModelCatalogService:
         """
         existing = await self.get_by_model_name(model_name)
         if existing:
-            # 已存在但 examples 为空，且预置模板中有 examples，自动补充
+            # 已存在但 examples 为空，且预置模板中有 examples，智能补充
             if not existing.examples:
                 preset = PRESET_MODEL_DESCRIPTIONS.get(model_name)
                 if preset and preset.get("examples"):

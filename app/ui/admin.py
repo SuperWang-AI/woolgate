@@ -287,7 +287,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
     
     @ui.page('/wizard')
     async def wizard_page():
-        """免费向导（A1+A7）——选厂商 → 看步骤 → 粘 Key → 自动配置（refreshable 局部刷新，无整页跳转）"""
+        """免费向导（A1+A7）——选厂商 → 看步骤 → 粘 Key → 智能配置（refreshable 局部刷新，无整页跳转）"""
         ui.page_title('WoolGate 智能聚合网关')
         ui.add_head_html('''
         <style>
@@ -455,7 +455,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                     with ui.row().classes('items-start gap-1.5 w-full'):
                                         ui.label(str(i)).classes('w-5 h-5 rounded-full bg-green-500 text-white text-xs flex items-center justify-center mt-0.5')
                                         ui.label(step).classes('text-x] flex-1 pt-0.5').style('line-height:1.3')
-                                ui.label('③ 一键自动配置（自动探测本地已安装模型）').classes('text-sm font-bold text-gray-700 mt-2')
+                                ui.label('③ 一键智能配置（自动探测本地已安装模型）').classes('text-sm font-bold text-gray-700 mt-2')
                                 api_key_input = None
                             else:
                                 ui.label('② 获取 API Key（只需这一步）').classes('text-sm font-bold text-gray-700 mt-2')
@@ -466,7 +466,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                     with ui.row().classes('items-start gap-1.5 w-full'):
                                         ui.label(str(i)).classes('w-5 h-5 rounded-full bg-green-500 text-white text-xs flex items-center justify-center mt-0.5')
                                         ui.label(step).classes('text-[13px] flex-1 pt-0.5').style('line-height:1.3')
-                                ui.label('③ 粘贴 API Key，一键自动配置').classes('text-sm font-bold text-gray-700 mt-2')
+                                ui.label('③ 粘贴 API Key，一键智能配置').classes('text-sm font-bold text-gray-700 mt-2')
                                 key_tail = None
                                 async with AsyncSessionLocal() as _ds2:
                                     for a in (await _ds2.execute(select(ModelAccount).where(ModelAccount.api_key_encrypted.isnot(None)))).scalars().all():
@@ -489,7 +489,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                         .props('dense outlined').classes('w-full')
 
                             with ui.row().classes('w-full justify-end'):
-                                ui.button('🚀 一键自动配置', on_click=lambda: run_config(v, api_key_input)) \
+                                ui.button('🚀 一键智能配置', on_click=lambda: run_config(v, api_key_input)) \
                                     .props('color=green size=md no-caps').classes('wg-config-btn')
 
                     ui.timer(0.01, detail, once=True)
@@ -505,7 +505,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):
 
             async def sync_account_models():
-                """从启用账号同步模型到目录（自动补充能力描述与向量）"""
+                """从启用账号智能同步模型到目录（智能补充能力描述与向量）"""
                 try:
                     async with AsyncSessionLocal() as session:
                         from app.services.model_catalog_service import ModelCatalogService
@@ -1350,7 +1350,7 @@ def toggle_account_enable(account_id: int, enable: bool):
             await session.commit()
             
             if enable:
-                # 启用时自动同步模型并计算向量
+                # 启用时智能同步模型并计算向量
                 try:
                     model_display, is_new = await sync_model_to_catalog(account, session)
                     if is_new:
@@ -1502,7 +1502,7 @@ def show_account_dialog(account_id: Optional[int] = None):
 
             with ui.row().classes('gap-4 w-full items-center'):
                 balance_unit = ui.select(['token', 'currency'], label='额度单位', value=initial['balance_unit']).classes('w-44')
-                balance_remaining = ui.number('初始额度（厂商余额自动同步；手动维护/充值请在此重置）', value=initial['balance_remaining'], min=0).classes('flex-1')
+                balance_remaining = ui.number('初始额度（厂商余额智能同步；手动维护/充值请在此重置）', value=initial['balance_remaining'], min=0).classes('flex-1')
             currency_rate = ui.number('厂商结算单价（元/1M token，currency 单位时用于估算金额消耗）', value=initial['currency_rate'], min=0).classes('w-full')
 
             async def save():
@@ -1562,7 +1562,7 @@ def show_account_dialog(account_id: Optional[int] = None):
 
                         await session.commit()
                         
-                        # 保存后如果账号启用，自动同步模型并计算向量
+                        # 保存后如果账号启用，智能同步模型并计算向量
                         saved_account = account if account_id else new_account
                         if saved_account.is_enable:
                             try:
@@ -1666,7 +1666,7 @@ def show_model_capability_dialog(model_id: int):
 
 
 def auto_config_account(account_id: int, fetch_balance: bool = False):
-    """自动配置账号（补 base_url/模型；fetch_balance=True 时同时拉取厂商真实余额）"""
+    """智能配置账号（补 base_url/模型；fetch_balance=True 时同时拉取厂商真实余额）"""
     async def config():
         async with AsyncSessionLocal() as session:
             result = await session.execute(
@@ -1677,7 +1677,7 @@ def auto_config_account(account_id: int, fetch_balance: bool = False):
                 ui.notify('账号不存在', type='negative')
                 return
             
-            # 根据厂商名称自动配置
+            # 根据厂商名称智能配置
             vendor_lower = account.vendor.lower()
             config_map = {
                 '智谱': {
@@ -1754,7 +1754,7 @@ def auto_config_account(account_id: int, fetch_balance: bool = False):
                     break
             
             if not config:
-                ui.notify(f'未找到 "{account.vendor}" 的自动配置，请手动编辑', type='warning')
+                ui.notify(f'未找到 "{account.vendor}" 的智能配置，请手动编辑', type='warning')
                 return
             
             # 更新账号

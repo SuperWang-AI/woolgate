@@ -26,11 +26,17 @@ jobs:
       - name: 运行 pytest 回归
         run: python -m pytest tests/ -q --disable-warnings
 
-      - name: 检查敏感信息
-        run: |
-          set -e
-          echo "== 检查仓库内是否含 API Key/私钥痕迹 =="
-          if git grep -nE '(sk-[A-Za-z0-9]{20,}|ark-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----)' -- ':!*.md' ':!*.html' ':!tests/*' || true; then
-            echo "::warning::检测到疑似敏感信息，请人工确认是否应提交"
-          fi
-          echo "检查完成"
+  secret-scan:
+    name: 密钥泄漏扫描
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码（含完整历史）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks 密钥扫描
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}

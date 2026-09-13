@@ -5,6 +5,13 @@ pytest配置文件
 async 测试与 async fixture 由插件统一管理，无需自定义 event_loop。
 """
 
+import os
+
+# 测试专用环境变量：config.py 强制校验无默认凭据（安全设计），
+# CI / 纯净环境无 .env 时注入测试值，保证测试可独立运行。
+os.environ.setdefault("GATEWAY_BEARER_TOKEN", "test-token")
+os.environ.setdefault("ENCRYPTION_KEY", "ZBaeSb4SFK0I7h61sFUS7oaCSpkNTGe-8xf-zh2phZg=")
+
 
 async def seed_account(db, vendor, model_name, **extra):
     """主从语义测试预置：账号行 + 对应 ModelCatalog 行（挂 account_id）

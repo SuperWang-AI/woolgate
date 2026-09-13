@@ -21,7 +21,9 @@ jobs:
           cache: pip
 
       - name: 安装依赖
-        run: pip install --no-cache-dir -r requirements.txt
+        run: |
+          pip install --no-cache-dir -r requirements.txt
+          pip install pytest
 
       - name: 运行 pytest 回归
         run: python -m pytest tests/ -q --disable-warnings

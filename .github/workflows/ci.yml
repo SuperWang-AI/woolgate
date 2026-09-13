@@ -70,6 +70,7 @@ jobs:
         with:
           context: .
           push: true
+          # GHCR 要求仓库名全小写（github.repository 含大写，需显式小写）
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/superwang-ai/woolgate:${{ github.ref_name }}
+            ghcr.io/superwang-ai/woolgate:latest

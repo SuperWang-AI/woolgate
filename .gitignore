@@ -63,3 +63,5 @@ htmlcov/
 migrate_*.py
 scripts/archive/
 _fs_test.txt
+CHECKLIST.md
+PROJECT_SUMMARY.md

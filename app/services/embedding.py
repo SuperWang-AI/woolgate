@@ -28,6 +28,8 @@ class EmbeddingService:
         self.config = config
         self.db = db
         self.timeout = httpx.Timeout(30.0, connect=10.0)
+        # 复用连接（单进程单事件循环下安全）
+        self._client = httpx.AsyncClient(timeout=self.timeout)
 
     async def embed(self, text: str) -> List[float]:
         """将文本转为向量"""
@@ -45,12 +47,12 @@ class EmbeddingService:
     async def _embed_cloud(self, text: str) -> List[float]:
         """云端 embedding（根据ModelCatalog中的embedding模型配置）"""
         from app.models.database import ModelCatalog, ModelAccount
-        
-        api_key = self.config.embedding_cloud_api_key
+
+        api_key = ""
         base_url = self.config.embedding_cloud_base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         model = self.config.embedding_cloud_model or "text-embedding-v3"
 
-        # 优先使用embedding_model_id指定的模型
+        # 使用embedding_model_id指定的模型（自动使用该模型所属账号的API Key）
         model_id = getattr(self.config, 'embedding_model_id', 0)
         if model_id and model_id > 0 and self.db is not None:
             result = await self.db.execute(
@@ -73,13 +75,9 @@ class EmbeddingService:
                         except Exception:
                             pass
 
-        # 兼容旧配置：用embedding_account_id
-        if not api_key and self.db is not None:
-            account_id = getattr(self.config, 'embedding_account_id', 0)
-            if account_id and account_id > 0:
-                api_key = await self._find_api_key_by_account(account_id)
-            if not api_key:
-                api_key = await self._find_aliyun_api_key()
+        # 兜底：自动选用第一个启用账号的阿里百炼 Key
+        if not api_key:
+            api_key = await self._find_aliyun_api_key()
 
         if not api_key:
             raise RuntimeError(
@@ -94,10 +92,9 @@ class EmbeddingService:
         }
         payload = {"model": model, "input": text}
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        resp = await self._client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
 
         # 解析向量（OpenAI 兼容格式：data[0].embedding）
         try:
@@ -130,31 +127,15 @@ class EmbeddingService:
         url = f"{ollama_url.rstrip('/')}/api/embeddings"
         payload = {"model": model, "prompt": text}
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+        resp = await self._client.post(url, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
 
         try:
             return [float(x) for x in data["embedding"]]
         except (KeyError, TypeError) as e:
             logger.error(f"本地 embedding 响应解析失败: {data}, 错误: {e}")
             raise RuntimeError(f"本地 embedding 响应格式异常: {e}")
-
-    async def _find_api_key_by_account(self, account_id: int) -> str:
-        """根据账号ID获取API Key"""
-        if self.db is None or not account_id:
-            return ""
-        result = await self.db.execute(
-            select(ModelAccount).where(ModelAccount.id == account_id)
-        )
-        account = result.scalar_one_or_none()
-        if account and account.is_enable:
-            try:
-                return encryption_service.decrypt(account.api_key_encrypted)
-            except Exception:
-                return ""
-        return ""
 
     async def _find_aliyun_api_key(self) -> str:
         """从账号池找阿里百炼/通义千问的启用账号，借用其 API Key"""

@@ -1,15 +1,13 @@
 """
-核心路由调度算法
-实现优先级排序、额度预判、账号筛选、轮询/顺序策略
+账号路由调度器——可用账号过滤、额度预判、会话粘性、失败冷却
+（账号选择策略由 Executor 委托 AccountSelector 策略类执行）
 """
 from typing import List, Optional, Tuple
 from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models.database import ModelAccount, SystemConfig, RequestLog
-from app.pipeline.selector import FreeFirstSelector, RoundRobinSelector
+from app.models.database import ModelAccount, ModelCatalog, SystemConfig, RequestLog
 import logging
-import random
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +17,6 @@ class AccountRouter:
     
     def __init__(self, session: AsyncSession):
         self.session = session
-        self._round_robin_index = {}  # 轮询索引缓存（保留兼容，实际委托给 RoundRobinSelector）
-        # M1: 委托给 Selector 策略类（行为与现有完全一致）
-        self._free_first_selector = FreeFirstSelector()
-        self._round_robin_selector = RoundRobinSelector()
     
     async def get_system_config(self) -> SystemConfig:
         """获取系统配置"""
@@ -34,75 +28,32 @@ class AccountRouter:
             await self.session.commit()
         return config
     
-    async def select_account(
-        self,
-        model_name: str,
-        estimated_tokens: int = 1000,
-        strategy: Optional[str] = None,
-        messages: Optional[list] = None
-    ) -> Optional[ModelAccount]:
-        """
-        选择最优账号
-        
-        Args:
-            model_name: 模型名称
-            estimated_tokens: 预估Token数（用于额度预判）
-            strategy: 路由策略，None时使用全局默认
-            messages: 消息历史（用于会话粘性）
-        
-        Returns:
-            选中的账号，无可用账号返回None
-        """
-        # 1. 会话粘性：尝试推断之前使用的账号
-        if messages:
-            prev_account = await self._infer_previous_account(messages, model_name, estimated_tokens)
-            if prev_account:
-                logger.info(f"会话粘性：继续使用账号 {prev_account.id} ({prev_account.vendor})")
-                return prev_account
-        
-        # 2. 获取系统配置
-        config = await self.get_system_config()
-        if strategy is None:
-            strategy = config.default_route_strategy
-        
-        # 3. 筛选可用账号
-        accounts = await self._filter_available_accounts(model_name, estimated_tokens)
-        
-        if not accounts:
-            logger.warning(f"没有可用账号用于模型: {model_name}")
-            return None
-        
-        # 4. 根据策略选择账号
-        if strategy == "sequential":
-            return await self._select_sequential(accounts)
-        elif strategy == "round_robin":
-            return await self._select_round_robin(accounts, model_name)
-        else:
-            logger.error(f"未知路由策略: {strategy}")
-            return accounts[0] if accounts else None
-    
     async def _filter_available_accounts(
         self,
-        model_name: str,
+        model_name: Optional[str],
         estimated_tokens: int
     ) -> List[ModelAccount]:
         """
         筛选可用账号
-        
+
         筛选条件：
         1. 启用状态
-        2. 匹配模型名称
+        2. 匹配模型名称（model_name 为 None 时跳过，用于"对外入口名"全量候选）
         3. 未在冷却中
         4. 额度充足（Ollama除外）
         """
         now = datetime.utcnow()
         
-        # 查询所有启用且匹配虚拟模型的账号
-        result = await self.session.execute(
+        # 查询所有启用且提供该模型的账号（主从后：模型→账号映射走 ModelCatalog）
+        query = (
             select(ModelAccount)
-            .where(ModelAccount.is_enable == True)
-            .where(ModelAccount.virtual_model == model_name)
+            .join(ModelCatalog, ModelCatalog.account_id == ModelAccount.id)
+            .where(ModelAccount.is_enable == True)  # noqa: E712
         )
+        if model_name:
+            query = query.where(ModelCatalog.model_name == model_name)
+        query = query.where(ModelCatalog.is_active == True)  # noqa: E712
+        result = await self.session.execute(query)
         accounts = result.scalars().all()
         
         available = []
@@ -178,10 +129,7 @@ class AccountRouter:
                 select(RequestLog)
                 .where(RequestLog.created_at > cutoff)
                 .where(RequestLog.status == 'success')
-                .where(RequestLog.model_name.in_(
-                    select(ModelAccount.model_name)
-                    .where(ModelAccount.virtual_model == model_name)
-                ))
+                .where(RequestLog.model_name == model_name)
                 .order_by(RequestLog.created_at.desc())
                 .limit(1)
             )
@@ -219,26 +167,6 @@ class AccountRouter:
         except Exception as e:
             logger.warning(f"推断之前账号失败: {e}")
             return None
-    
-    async def _select_sequential(self, accounts: List[ModelAccount]) -> Optional[ModelAccount]:
-        """
-        顺序耗尽策略（委托给 FreeFirstSelector）
-        按优先级降序排序，选择第一个可用账号
-        """
-        # M1: 委托给 Selector 策略类，行为与原实现完全一致
-        return self._free_first_selector.select(accounts)
-    
-    async def _select_round_robin(
-        self,
-        accounts: List[ModelAccount],
-        model_name: str
-    ) -> Optional[ModelAccount]:
-        """
-        轮询策略（委托给 RoundRobinSelector）
-        轮流选择账号，忽略优先级
-        """
-        # M1: 委托给 Selector 策略类，行为与原实现完全一致
-        return self._round_robin_selector.select(accounts, model_name=model_name)
     
     async def mark_account_failed(self, account_id: int):
         """标记账号失败，进入冷却"""

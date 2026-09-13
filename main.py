@@ -20,6 +20,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 版本号（统一入口，开源发布前确定正式版本）
+VERSION = "1.0.0"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -56,10 +59,10 @@ async def lifespan(app: FastAPI):
             )
             accounts = result.scalars().all()
             for account in accounts:
-                await catalog_svc.ensure_model(account.model_name, account.vendor)
+                await catalog_svc.ensure_model(account.model_name, account.vendor, account_id=account.id)
             logger.info(f"模型能力清单初始化完成: {len(accounts)} 个模型")
 
-            # 异步触发模型能力向量重算（不阻塞启动）
+            # 异步触发模型能力向量重算（不阻塞启动；仅重算缺失向量的模型，避免每次启动全量白烧外部 API 额度）
             try:
                 import asyncio
 
@@ -69,12 +72,12 @@ async def lifespan(app: FastAPI):
                             cfg = await PipelineConfig.load(s)
                             embed_svc = EmbeddingService(cfg.router_config, db=s)
                             cs = ModelCatalogService(s)
-                            await cs.recompute_all_embeddings(embed_svc)
+                            await cs.recompute_missing_embeddings(embed_svc)
                     except Exception as e:
                         logger.warning(f"模型能力向量重算失败: {e}")
 
                 asyncio.create_task(_recompute_model_embeddings_async())
-                logger.info("模型能力向量重算任务已启动")
+                logger.info("模型能力向量增量重算任务已启动（仅缺失向量）")
             except Exception as e:
                 logger.warning(f"模型能力向量重算启动失败（不影响启动）: {e}")
     except Exception as e:
@@ -122,15 +125,15 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="WoolGate",
     description="LLM多账号免费额度智能调度网关",
-    version="1.0.0",
+    version=VERSION,
     lifespan=lifespan
 )
 
-# CORS配置（仅内网使用）
+# CORS配置（仅内网使用；不带凭证，避免 * + credentials 组合不规范）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -147,7 +150,7 @@ async def root():
     """根路径"""
     return {
         "service": "WoolGate",
-        "version": "1.0.0",
+        "version": VERSION,
         "description": "LLM多账号免费额度智能调度网关",
         "endpoints": {
             "chat": "/v1/chat/completions",

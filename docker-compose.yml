@@ -11,6 +11,8 @@ services:
       - ./logs:/app/logs
     env_file:
       - .env
+    environment:
+      - TZ=Asia/Shanghai
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

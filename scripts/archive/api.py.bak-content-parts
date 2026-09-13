@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
-from typing import List, Optional, Union
+from typing import List, Optional
 import time
 import logging
 import asyncio
@@ -36,8 +36,7 @@ FOLLOWUP_WINDOW_SECONDS = 300
 
 class Message(BaseModel):
     role: str
-    # OpenAI 兼容 content parts 数组（如 [{"type":"text","text":"..."}]）与纯字符串均接受
-    content: Union[str, List[dict], None] = None
+    content: str
 
 
 class ChatCompletionRequest(BaseModel):
@@ -47,33 +46,6 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     top_p: Optional[float] = None
-
-
-def _normalize_content(content: Union[str, List[dict], None]) -> str:
-    """
-    将 OpenAI 兼容 content parts 数组规范化为纯字符串。
-    客户端（OpenClaw/Dify 等）可能发送 content 数组（新版 OpenAI 格式），
-    而上游厂商（如 Moonshot/kimi）要求 content 为字符串。
-    数组 → 拼接所有 text 块；多模态块（图片/音频）暂以占位标注，不丢弃。
-    """
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, dict):
-                if item.get("type") == "text" and item.get("text"):
-                    parts.append(str(item["text"]))
-                elif item.get("text"):
-                    parts.append(str(item["text"]))
-                elif item.get("type") in ("image_url", "input_audio"):
-                    parts.append(f"[{item['type']}]")
-            elif item is not None:
-                parts.append(str(item))
-        return "\n".join(parts)
-    return str(content)
 
 
 class FeedbackRequest(BaseModel):
@@ -150,18 +122,10 @@ async def _parse_slash_command(
     return None, messages
 
 
-# 每日余额同步防重入标志（并发请求时避免重复同步同一批账号）
-_syncing_balances = False
-
-
 async def _sync_daily_balances():
     """
     每日首次请求时，异步同步各启用账号的厂商真实余额，并重置当日用量。
     """
-    global _syncing_balances
-    if _syncing_balances:
-        return
-    _syncing_balances = True
     today = get_today_str()
     try:
         async with AsyncSessionLocal() as session:
@@ -191,8 +155,6 @@ async def _sync_daily_balances():
                 await session.commit()
     except Exception as e:
         logger.warning(f'每日余额同步任务异常: {e}')
-    finally:
-        _syncing_balances = False
 
 
 async def _mark_followup_signal(session_id: str, _session=None):
@@ -283,8 +245,8 @@ async def chat_completions(
     # 每日首次请求时后台异步同步一次厂商余额
     asyncio.create_task(_sync_daily_balances())
 
-    # 构建消息（content parts 数组 → 字符串，兼容要求字符串的上游厂商）
-    messages = [{"role": msg.role, "content": _normalize_content(msg.content)} for msg in req.messages]
+    # 构建消息
+    messages = [{"role": msg.role, "content": msg.content} for msg in req.messages]
 
     # 动态读取有效模型列表（用于斜杠命令解析）
     from app.models.database import ModelCatalog
@@ -306,8 +268,8 @@ async def chat_completions(
             logger.info(f"API Key: id={api_key.id} name={api_key.name} default_model={default_model}")
 
     # 预估Token数
-    from app.utils.token_estimator import estimate_messages_tokens
-    estimated_tokens = max(estimate_messages_tokens(messages), 100)
+    estimated_tokens = sum(len(msg.get("content", "")) for msg in messages) * 0.5
+    estimated_tokens = max(int(estimated_tokens), 100)
 
     # 额外参数
     kwargs = {}

@@ -1,0 +1,30 @@
+# ── 环境与密钥（严禁进镜像）──
+.env
+.env.*
+!.env.example
+
+# ── 数据与日志（运行时挂载卷）──
+data/
+logs/
+
+# ── 依赖与缓存 ──
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ── 测试与开发 ──
+tests/
+scripts/
+pytest.ini
+requirements-dev.txt
+*.sh
+*.bak
+*.bak-*
+PROJECT_SUMMARY.md
+CHECKLIST.md
+ARCHITECTURE_mobile.html
+
+# ── VCS ──
+.git
+.gitignore

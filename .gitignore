@@ -56,3 +56,8 @@ htmlcov/
 # Docker
 *.log
 *.backup
+
+# 开发备份与临时脚本
+*.backup*
+*.bak
+migrate_*.py

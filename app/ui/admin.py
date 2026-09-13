@@ -6,7 +6,7 @@ from nicegui import ui, app
 from fastapi import Request
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import asyncio
 import json
@@ -17,6 +17,23 @@ from app.utils.encryption import encryption_service
 from app.config import settings
 import html as _html
 import urllib.parse as _up
+from pathlib import Path
+
+# 数据库时间统一以 UTC 存储，展示层转换为本地时区（Asia/Shanghai）
+CN_TZ = timezone(timedelta(hours=8))
+
+def local_fmt(dt):
+    """UTC naive datetime → 本地时区展示字符串"""
+    if not dt:
+        return '未知'
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(CN_TZ).strftime('%Y-%m-%d %H:%M:%S')
+
+def today_start_utc():
+    """本地今天 00:00 对应的 UTC 时间（naive），用于按本地日统计"""
+    local_midnight = datetime.now(CN_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_midnight.astimezone(timezone.utc).replace(tzinfo=None)
 
 # 默认厂商图标兜底（找不到原厂图标时显示「AI」字母图标）
 AI_FALLBACK = "data:image/svg+xml," + _up.quote(
@@ -34,19 +51,6 @@ def vendor_icon_html(icon, cls='w-8 h-8 rounded object-contain'):
         return f"<img src='{src}' class='{cls}' alt='AI'>"
     return f"<img src='{src}' class='{cls}' alt='AI' loading='lazy' onerror=\"this.onerror=null;this.src='{AI_FALLBACK}'\">"
 
-# 默认市场行情价（2026年基准价）
-DEFAULT_MARKET_PRICES = {
-    "deepseek-v4-flash": (1.0, 2.0),
-    "deepseek-v4-pro": (3.2, 6.4),
-    "qwen3.7-max": (12.0, 36.0),
-    "qwen3.7-plus": (2.0, 8.0),
-    "qwen3.5-flash": (0.2, 2.0),
-    "kimi-k2.6": (6.5, 27.0),
-    "glm-5.2": (8.0, 28.0),
-    "hunyuan-t1": (1.0, 4.0),
-}
-
-
 async def get_stats():
     """获取首页统计数据"""
     async with AsyncSessionLocal() as session:
@@ -61,7 +65,7 @@ async def get_stats():
         enabled_accounts = result.scalar() or 0
         
         # 今日请求量
-        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = today_start_utc()
         result = await session.execute(
             select(func.count(RequestLog.id))
             .where(RequestLog.created_at >= today_start)
@@ -100,7 +104,7 @@ async def get_accounts():
     """获取所有账号列表（启用的排在前面）"""
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(ModelAccount).order_by(desc(ModelAccount.is_enable), desc(ModelAccount.priority))
+            select(ModelAccount).order_by(desc(ModelAccount.is_enable), desc(ModelAccount.id))
         )
         return result.scalars().all()
 
@@ -133,33 +137,46 @@ async def save_system_config(config_data: dict):
 
 
 # ── A2 启动意图引导：3 问 → 推荐策略模板 ──
+# v2.1（09-11 重设计）：
+# 1) 使用方式：个人自用省钱 / 团队企业私有化部署 —— 突出各自核心价值（免费薅羊毛 / 数据不出域）
+# 2) 省钱方式：免费云端模型优先 / 本地模型优先 —— 智能均衡（LLM 判题+上下文压缩）是默认常开的底座，不参与选择
+# 3) 已有资源：本地大模型就绪 / 已有厂商 API Key / 都还没有 —— 资源盘点+指引，完成统一走免费向导
 ONBOARD_ANSWERS_CN = {
-    "way": {"personal": "个人省钱", "team": "企业使用"},
-    "scene": {"chat": "通用对话", "code": "编程开发", "creative": "创意写作", "data": "数据分析"},
-    "source": {"free": "免费云端", "paid": "付费账号", "local": "本地模型"},
+    "way": {"personal": "个人自用省钱", "team": "企业私有化部署"},
+    "saving": {"free": "免费模型优先", "local": "本地模型优先"},
+    "resource": {"local": "本地大模型就绪", "key": "已有API Key", "none": "都还没有"},
 }
 
 def build_onboard_data(answers: dict):
     """
-    A2 引导映射（纯函数，便于测试）：3 个回答 → 推荐策略配置数据。
+    A2 引导映射 v2.1（纯函数，便于测试）：3 个回答 → 推荐策略配置数据。
 
-    设计原则（消灭用户侧配置）：
-    - 路由统一 hybrid（智能路由：向量快速路径 + LLM 兜底），不让用户理解路由概念
+    设计原则（消灭用户侧配置，贴合省钱机制）：
+    - 路由统一 hybrid（智能路由：向量快速路径 + LLM 兜底），LLM 智能判题 + 上下文压缩默认开启
     - 选号：个人 → 免费额度优先；企业 → 成本优先（付费为主）
-    - 上下文：编程 → 摘要压缩（长会话）；创意/数据 → 窗口截断；通用 → 直传
-    - 本地模型来源 → 强制开启 Ollama 调度
+    - 省钱方式：免费云端模型优先 → 摘要压缩走云端免费模型（glm-4-flash）；
+                本地模型优先 → 开启 Ollama，判题/压缩/简单问答走本地（零成本、数据不出域）
+    - 已有资源：本地大模型就绪 → 顺带开启 Ollama 调度；否则不强制。完成引导后统一跳转免费向导（向导回显/新增/本地首个卡片）
 
     Returns:
         (config_data, profile_name)
     """
     way = answers.get("way", "personal")
-    scene = answers.get("scene", "chat")
-    source = answers.get("source", "free")
+    saving = answers.get("saving", "free")
+    resource = answers.get("resource", "none")
 
     router = "hybrid"
     selector = "free-first" if way == "personal" else "cost-first"
 
-    if scene == "code":
+    if saving == "local":
+        context = "summary"
+        context_config = {
+            "summary_provider": "local",
+            "summary_trigger_turns": 20,
+            "summary_trigger_tokens": 4000,
+            "summary_window_turns": 3,
+        }
+    else:
         context = "summary"
         context_config = {
             "summary_provider": "cloud",
@@ -168,12 +185,6 @@ def build_onboard_data(answers: dict):
             "summary_trigger_tokens": 4000,
             "summary_window_turns": 3,
         }
-    elif scene in ("creative", "data"):
-        context = "window"
-        context_config = {"window_turns": 10}
-    else:
-        context = "passthrough"
-        context_config = {}
 
     data = {
         "router_strategy": router,
@@ -183,13 +194,13 @@ def build_onboard_data(answers: dict):
         "context_config_json": context_config,
         "onboarded": True,
     }
-    if source == "local":
+    if saving == "local" or resource == "local":
         data["ollama_enabled"] = True
 
     profile_name = "·".join([
-        ONBOARD_ANSWERS_CN["way"].get(way, "个人省钱"),
-        ONBOARD_ANSWERS_CN["scene"].get(scene, "通用对话"),
-        ONBOARD_ANSWERS_CN["source"].get(source, "免费云端"),
+        ONBOARD_ANSWERS_CN["way"].get(way, "个人自用省钱"),
+        ONBOARD_ANSWERS_CN["saving"].get(saving, "免费模型优先"),
+        ONBOARD_ANSWERS_CN["resource"].get(resource, "都还没有"),
     ])
     data["onboard_profile"] = profile_name
     return data, profile_name
@@ -217,12 +228,12 @@ def create_ui():
     
     # 导航页面定义（label, path, key）
     NAV_PAGES = [
-        ('🏠 首页', '/', 'home'),
+        ('首页', '/', 'home'),
         ('🆓 免费向导', '/wizard', 'wizard'),
-        ('👥 账号管理', '/accounts', 'accounts'),
-        ('⚙️ 系统配置', '/config', 'config'),
-        ('🧩 管线策略', '/pipeline', 'pipeline'),
-        ('📋 请求日志', '/logs', 'logs'),
+        ('账号管理', '/accounts', 'accounts'),
+        ('系统配置', '/config', 'config'),
+        ('管线策略', '/pipeline', 'pipeline'),
+        ('请求日志', '/logs', 'logs'),
     ]
 
     def page_head():
@@ -337,13 +348,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         answers: dict = {}
         steps = [
             ("使用方式", "你主要怎么使用 WoolGate？",
-             [("personal", "个人自用省钱"), ("team", "团队/企业使用")]),
-            ("主要场景", "你最常用来做什么？",
-             [("chat", "通用对话"), ("code", "编程开发"), ("creative", "创意写作"), ("data", "数据分析")]),
-            ("模型来源", "你计划接入哪些模型？",
-             [("free", "只用免费云端"), ("paid", "已有付费账号"), ("local", "本地模型（Ollama）")]),
+             [("personal", "个人自用省钱（免费薅羊毛，几乎零成本）"),
+              ("team", "团队/企业私有化部署（数据不出域，预算可控）")]),
+            ("省钱方式", "智能路由（LLM 智能判题 + 上下文压缩）系统默认开启，为你省 token。你希望优先用哪种资源来跑这些省钱动作？",
+             [("free", "免费云端模型（推荐：免费额度足够，无需额外配置）"),
+              ("local", "本地模型（Ollama：数据不出域，判题/压缩/简单问答零成本）")]),
+            ("已有资源", "你手头已有哪些资源？",
+             [("local", "本地大模型（Ollama）已就绪"),
+              ("key", "已有厂商 API Key"),
+              ("none", "都还没有")]),
         ]
-        step_keys = ["way", "scene", "source"]
+        step_keys = ["way", "saving", "resource"]
 
         with ui.column().classes('w-full items-center p-6'):
             with ui.card().classes('w-full shadow-lg border-t-4 border-green-500 p-6').style('max-width:760px'):
@@ -387,7 +402,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         if step_idx['v'] < 2:
                             ui.button('下一步 →', on_click=next_step).props('color=primary size=lg')
                         else:
-                            ui.button('✅ 完成并应用', on_click=finish).props('color=green size=lg')
+                            ui.button('完成并应用', on_click=finish).props('color=green size=lg')
 
                 async def go(delta: int):
                     step_idx['v'] += delta
@@ -397,7 +412,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     ok, profile = await apply_onboard_profile(answers)
                     if ok:
                         ui.notify(f'已应用智能配置：{profile}。可在「管线策略」页随时微调。', type='positive', position='top')
-                        await on_done()
+                        # 统一走免费向导：本地大模型→向导首个卡片；已有 Key→向导粘贴/回显新增；都没有→向导领取免费额度
+                        ui.navigate.to('/wizard')
                     else:
                         ui.notify('应用失败，请重试', type='negative')
 
@@ -407,7 +423,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         """首页仪表盘（引导完成后显示）"""
         
         # 主内容区域
-        with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):
+        with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
             # 欢迎标题
             ui.label('AI 羊毛聚合网关').classes('text-4xl font-bold text-gray-800')
             ui.label('智能调度多平台免费额度，自动切换账号').classes('text-lg text-gray-500 -mt-4')
@@ -415,7 +431,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             # 统计数据
             stats = await get_stats()
             
-            ui.label('📊 实时统计').classes('text-2xl font-bold text-gray-800 mt-4')
+            ui.label('实时统计').classes('text-2xl font-bold text-gray-800 mt-4')
             
             # 统一统计卡片模板：图标 + 标题 + 大数字主值 + 小字副行（支持多行），固定高度完全等高
             def stat_card(icon, icon_color, title, value, sub=None):
@@ -452,7 +468,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                            f"输出 {stats['total_completion_tokens'] / 1_000_000:.4f}M"])
             
             # API 配置信息卡片
-            ui.label('📡 API 配置信息').classes('text-2xl font-bold text-gray-800 mt-4')
+            ui.label('API 配置信息').classes('text-2xl font-bold text-gray-800 mt-4')
             with ui.card().classes('w-full shadow-lg border-l-4 border-purple-500'):
                 with ui.grid(columns=2).classes('w-full gap-4'):
                     # API Base URL
@@ -479,16 +495,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 ui.separator()
                 
                 # Dify 配置示例
-                ui.label('🔧 Dify 配置示例').classes('text-lg font-bold text-gray-700 mt-4 mb-2')
+                ui.label('Dify 配置示例').classes('text-lg font-bold text-gray-700 mt-4 mb-2')
+                _dash_cfg = await get_system_config()
+                _entry_name = getattr(_dash_cfg, 'virtual_entry_name', 'woolgate') or 'woolgate'
                 with ui.column().classes('gap-3 bg-blue-50 p-4 rounded'):
-                    dify_base = f"http://localhost:8765/v1"
                     config_items = [
-                        ('模型供应商', '自定义模型'),
-                        ('模型名称', 'chat'),
+                        ('模型供应商', 'OpenAI-API-compatible'),
+                        ('模型名称', _entry_name),
                         ('模型类型', '文本生成 / LLM'),
-                        ('API Base URL', dify_base),
+                        ('API Base URL（Dify容器内）', 'http://host.docker.internal:8765/v1'),
+                        ('API Base URL（宿主机客户端）', 'http://localhost:8765/v1'),
                         ('API Key', settings.GATEWAY_BEARER_TOKEN),
                     ]
+                    ui.label(f'模型名称填「{_entry_name}」= 网关智能路由，自动选择最合适的真实模型（可修改：系统配置 → 对外模型名）').classes(
+                        'text-xs text-blue-700 font-medium'
+                    )
                     for label, value in config_items:
                         with ui.row().classes('items-center gap-2'):
                             ui.label(f'{label}:').classes('text-sm font-bold text-gray-600 w-32')
@@ -499,12 +520,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                             ]).props('flat dense size=sm color=primary').tooltip('复制')
             
             # 快速操作
-            ui.label('⚡ 快速操作').classes('text-2xl font-bold text-gray-800 mt-4')
+            ui.label('快速操作').classes('text-2xl font-bold text-gray-800 mt-4')
             with ui.row().classes('gap-3'):
                 ui.button('🆓 免费向导', on_click=lambda: ui.navigate.to('/wizard')).props('color=green size=lg')
-                ui.button('➕ 新增账号', on_click=lambda: ui.navigate.to('/accounts')).props('color=primary size=lg')
-                ui.button('⚙️ 系统配置', on_click=lambda: ui.navigate.to('/config')).props('color=secondary size=lg outline')
-                ui.button('📋 查看日志', on_click=lambda: ui.navigate.to('/logs')).props('color=accent size=lg outline')
+                ui.button('新增账号', on_click=lambda: ui.navigate.to('/accounts')).props('color=primary size=lg')
+                ui.button('系统配置', on_click=lambda: ui.navigate.to('/config')).props('color=secondary size=lg outline')
+                ui.button('查看日志', on_click=lambda: ui.navigate.to('/logs')).props('color=accent size=lg outline')
+                ui.button('▶ 路由省钱演示', on_click=lambda: ui.run_javascript("window.open('/admin/static/wg_routing_demo.html', '_blank')")).props('color=orange size=lg')
     
     
     @ui.page('/wizard')
@@ -520,10 +542,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
           .vendor-list .q-card[data-sel="1"] { border: 2px solid #52c41a !important; }
           .vendor-list .q-card.local-card { border: 2px solid #22d3ee !important; background: linear-gradient(135deg, #f0fdff 0%, #ffffff 60%); }
           .vendor-list .q-card.local-card[data-sel="1"] { border-color: #0891b2 !important; }
+          .vendor-list .q-card.custom-card { border: 2px dashed #fb923c !important; background: linear-gradient(135deg, #fffaf5 0%, #ffffff 70%); }
+          .vendor-list .q-card.custom-card[data-sel="1"] { border-color: #ea580c !important; background: #fff3e6; }
         </style>
         ''')
 
         from app.services.free_tier_catalog import list_vendors_merged, get_vendor_merged, FreeTierService, vendor_matches
+        from app.services.model_catalog_service import ModelCatalogService
+        from app.utils.encryption import encryption_service
 
         extra_inputs = {}            # extra 字段输入框引用（detail 重建后重填）
 
@@ -549,6 +575,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 if (!list) return;
                 list.querySelectorAll('.q-card').forEach(c => c.removeAttribute('data-sel'));
                 const cur = list.querySelector('.q-card[data-vendor-id="{v['id']}"]');
+                if (cur) cur.setAttribute('data-sel', '1');
+            """)
+
+        def select_custom():
+            """选择自定义厂商入口（虚线卡片）"""
+            state['selected'] = {'id': '__custom__', 'name': '其他厂商（自定义接入）'}
+            detail.refresh()
+            ui.run_javascript("""
+                const list = document.querySelector('.vendor-list');
+                if (!list) return;
+                list.querySelectorAll('.q-card').forEach(c => c.removeAttribute('data-sel'));
+                const cur = list.querySelector('.q-card[data-vendor-id="__custom__"]');
                 if (cur) cur.setAttribute('data-sel', '1');
             """)
 
@@ -584,7 +622,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     parts.append(f"统一更新 {len(res['keys_updated'])} 个模型 Key")
                 if res['errors']:
                     parts.append(f"错误 {len(res['errors'])} 个: {'; '.join(res['errors'][:2])}")
-                ui.notify("✅ " + res['vendor'] + " 配置完成 " + " | ".join(parts), type='positive', timeout=6000)
+                ui.notify(res['vendor'] + " 配置完成 " + " | ".join(parts), type='positive', timeout=6000)
                 # 重新查询已接入信息并局部刷新
                 async with AsyncSessionLocal() as session:
                     acc_res = await session.execute(select(ModelAccount.vendor, ModelAccount.model_name))
@@ -594,7 +632,45 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             except Exception as e:
                 ui.notify(f'配置失败: {str(e)[:150]}', type='negative')
 
-        with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):
+        async def run_custom_config(name_input, key_input, model_input):
+            """自定义厂商一键接入：幂等（同 key 密文判重）→ 建账号 → 智能开通模型"""
+            nonlocal _vendor_models
+            name = (name_input.value or '').strip()
+            key = (key_input.value or '').strip()
+            model = (model_input.value or '').strip() or 'chat'
+            if not name:
+                ui.notify('请填写厂商名称', type='warning')
+                return
+            if not key:
+                ui.notify('请粘贴 API 密钥', type='warning')
+                return
+            try:
+                enc = encryption_service.encrypt(key)
+                async with AsyncSessionLocal() as session:
+                    exists = (await session.execute(
+                        select(ModelAccount).where(ModelAccount.api_key_encrypted == enc)
+                    )).scalar_one_or_none()
+                    if exists:
+                        ui.notify(f'该 Key 已接入（厂商「{exists.vendor} · {exists.model_name}」），无需重复配置；如需加模型请到账号管理编辑', type='warning')
+                        return
+                    acc = ModelAccount(vendor=name, api_key_encrypted=enc, model_name=model, is_enable=True)
+                    session.add(acc)
+                    await session.commit()
+                    await session.refresh(acc)
+                    svc = ModelCatalogService(session)
+                    await svc.ensure_model(model, name, account_id=acc.id)
+                    await session.commit()
+                # 刷新已接入标记
+                async with AsyncSessionLocal() as session:
+                    acc_res = await session.execute(select(ModelAccount.vendor, ModelAccount.model_name))
+                    _vendor_models = [(r[0] or '', r[1]) for r in acc_res.all()]
+                ui.notify(f'已接入「{name} · {model}」，向量/能力已智能计算', type='positive', timeout=5000)
+                cards.refresh()
+                detail.refresh()
+            except Exception as e:
+                ui.notify(f'接入失败: {str(e)[:150]}', type='negative')
+
+        with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
             ui.label('🆓 免费向导').classes('text-3xl font-bold text-gray-800')
             ui.label('选一个厂商 → 按步骤拿到 API Key → 粘贴后自动完成建账号、能力描述、向量计算、启用。全程 10 分钟以内，无需理解任何底层概念').classes('text-[13px] text-gray-500 -mt-2')
 
@@ -605,41 +681,51 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
             with ui.row().classes('w-full gap-6 items-start'):
                 # ── 左：厂商卡片（列表独立滚动）──
-                with ui.column().classes('w-[540px] min-w-[540px] gap-3 vendor-list'):
+                with ui.column().classes('w-[40%] min-w-[480px] gap-3 vendor-list'):
                     @ui.refreshable
                     def cards():
-                        # 瀑布流：两列各自自适应高度，描述完整显示；整卡可点，点击只 JS 高亮 + 刷详情（不重绘本区，滚动位置保持）
-                        # 左列固定视口内高度 + 内部滚动，与右侧详情完全独立，互不影响
-                        with ui.row().classes('w-full h-[calc(100vh-235px)] overflow-y-auto pr-1 items-start gap-3'):
+                        # 瀑布流：CSS grid 固定两列，各自自适应高度；整卡可点，点击只 JS 高亮 + 刷详情
+                        # 滚动区独立于右侧详情；自定义卡作为最后一行横跨两列
+                        with ui.element('div').classes('w-full h-[calc(100vh-235px)] overflow-y-auto pr-1').style('display:grid;grid-template-columns:1fr 1fr;gap:12px;align-content:start'):
                             for col_vendors in (vendors[::2], vendors[1::2]):
-                                with ui.column().classes('flex-1 min-w-0 gap-3'):
-                                    for v in col_vendors:
-                                        is_sel = state['selected'] and state['selected']['id'] == v['id']
-                                        is_local = v.get('no_key', False)
-                                        card_cls = 'w-full shadow-lg cursor-pointer hover:shadow-xl transition-all p-3' + (' local-card' if is_local else '')
-                                        with ui.card().classes(card_cls).props(
-                                            f'data-sel={"1" if is_sel else "0"} data-vendor-id="{v["id"]}"'
-                                        ).on('click', lambda vv=v: select_vendor(vv)):
-                                            with ui.row().classes('items-center gap-2 w-full'):
-                                                ui.html(vendor_icon_html(v.get('icon', ''), 'w-7 h-7 rounded object-contain'))
-                                                ui.label(v['name']).classes('text-base font-bold')
-                                            ui.label(v['tag']).classes(('text-xs text-cyan-600 font-bold' if is_local else 'text-xs text-green-600 font-bold'))
-                                            with ui.row().classes('items-center gap-1 w-full'):
-                                                ui.label(f"🧩 {v.get('free_count', len(v['models']))} 个免费模型").classes('text-xs text-gray-500')
-                                                if vendor_connected(v):
-                                                    ui.label(f'✅ 已接入 {len(vendor_connected_models(v))} 个').classes('text-xs text-green-600 font-bold')
-                                            # 免费模型具体名称（与模型菜单卡片一致；list_vendors_merged 已预计算 free_models）
-                                            free_displays = v.get('free_models', [])
-                                            if free_displays:
-                                                ui.label(f"🧩 {'、'.join(free_displays[:3])}{'…' if len(free_displays) > 3 else ''}").classes('text-[11px] text-green-700')
-                                            ui.label(v['quota_note']).classes('text-xs text-gray-500').style('line-height:1.35')
-                                            if v.get('access_note'):
-                                                ui.label(f"⚠️ {v['access_note']}").classes('text-xs text-orange-600 font-bold').style('line-height:1.3')
-                                            ui.button('选择', on_click=lambda vv=v: select_vendor(vv)) \
-                                                .props('color=green outline size=sm no-caps').classes('w-full mt-1 wg-select-vendor')
+                                for v in col_vendors:
+                                    is_sel = state['selected'] and state['selected']['id'] == v['id']
+                                    is_local = v.get('no_key', False)
+                                    card_cls = 'w-full shadow-lg cursor-pointer hover:shadow-xl transition-all p-3' + (' local-card' if is_local else '')
+                                    with ui.card().classes(card_cls).props(
+                                        f'data-sel={"1" if is_sel else "0"} data-vendor-id="{v["id"]}"'
+                                    ).on('click', lambda vv=v: select_vendor(vv)):
+                                        with ui.row().classes('items-center gap-2 w-full'):
+                                            ui.html(vendor_icon_html(v.get('icon', ''), 'w-7 h-7 rounded object-contain'), sanitize=False)
+                                            ui.label(v['name']).classes('text-base font-bold')
+                                        ui.label(v['tag']).classes(('text-xs text-cyan-600 font-bold' if is_local else 'text-xs text-green-600 font-bold'))
+                                        with ui.row().classes('items-center gap-1 w-full'):
+                                            ui.label(f"{v.get('free_count', len(v['models']))} 个免费模型").classes('text-xs text-gray-500')
+                                            if vendor_connected(v):
+                                                ui.label(f'已接入 {len(vendor_connected_models(v))} 个').classes('text-xs text-green-600 font-bold')
+                                        # 免费模型具体名称（与模型菜单卡片一致；list_vendors_merged 已预计算 free_models）
+                                        free_displays = v.get('free_models', [])
+                                        if free_displays:
+                                            ui.label(f"{'、'.join(free_displays[:3])}{'…' if len(free_displays) > 3 else ''}").classes('text-[11px] text-green-700')
+                                        ui.label(v['quota_note']).classes('text-xs text-gray-500').style('line-height:1.35')
+                                        if v.get('access_note'):
+                                            ui.label(f"⚠️ {v['access_note']}").classes('text-xs text-orange-600 font-bold').style('line-height:1.3')
+                                        ui.button('选择', on_click=lambda vv=v: select_vendor(vv)) \
+                                            .props('color=green outline size=sm no-caps').classes('w-full mt-1 wg-select-vendor')
+
+                            # 自定义厂商入口：瀑布最后一行，横跨两列（仍在滚动区内）
+                            with ui.column().style('grid-column:1 / -1').classes('w-full min-w-0 gap-1'):
+                                is_custom_sel = state['selected'] and state['selected']['id'] == '__custom__'
+                                with ui.card().classes('w-full custom-card shadow cursor-pointer hover:shadow-xl transition-all p-3').props(
+                                    f'data-sel={"1" if is_custom_sel else "0"} data-vendor-id="__custom__"'
+                                ).on('click', lambda: select_custom()):
+                                    with ui.row().classes('items-center gap-2 w-full'):
+                                        ui.icon('add_circle', size='md').classes('text-orange-500')
+                                        ui.label('其他厂商 · 自定义接入').classes('text-base font-bold text-orange-600')
+                                    ui.label('厂商目录里没有你的厂商？填厂商名 + API Key 即可接入，向量/能力自动计算').classes('text-xs text-gray-500').style('line-height:1.35')
+                                    ui.label('自定义厂商（自由输入，自动创建账号）').classes('text-xs bg-orange-50 text-orange-700 px-2 py-0.5 rounded font-bold')
 
                     cards()
-
                 # ── 右：详情 / 配置区（独立滚动）──
                 with ui.column().classes('flex-1 min-w-0 gap-2 h-[calc(100vh-235px)] overflow-y-auto pr-1'):
                     @ui.refreshable
@@ -647,13 +733,27 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         v = state['selected']
                         if not v:
                             with ui.card().classes('w-full shadow p-8'):
-                                ui.label('👈 点击左侧卡片选择一个厂商').classes('text-gray-400 text-center py-16 w-full')
+                                ui.label('点击左侧卡片选择一个厂商').classes('text-gray-400 text-center py-16 w-full')
+                            return
+                        if v.get('id') == '__custom__':
+                            with ui.card().classes('w-full shadow-lg border-l-4 border-dashed border-l-orange-400 p-3'):
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.icon('add_circle', size='md').classes('text-orange-500')
+                                    ui.label('其他厂商 · 自定义接入').classes('text-lg font-bold text-orange-700')
+                                ui.label('厂商目录里没有你的厂商？直接填厂商名和 API Key，创建账号并自动接入模型（向量/能力智能计算）').classes('text-xs text-gray-500 mt-0.5').style('line-height:1.35')
+                                ui.label('① 填写厂商信息（厂商名 = 你注册的平台名称）').classes('text-sm font-bold text-gray-700 mt-2')
+                                c_name = ui.input('厂商名称（如：某某开放平台）', placeholder='自定义厂商名，保存后自动创建分组').props('dense outlined').classes('w-full')
+                                c_key = ui.input('API 密钥', password=True, password_toggle_button=True, placeholder='粘贴你的 API Key').props('dense outlined').classes('w-full')
+                                c_model = ui.input('默认模型（该 Key 下可调用的模型名）', value='chat', placeholder='如：gpt-4o-mini / deepseek-chat').props('dense outlined').classes('w-full')
+                                with ui.row().classes('w-full justify-end'):
+                                    ui.button('一键智能接入', on_click=lambda: run_custom_config(c_name, c_key, c_model)) \
+                                        .props('color=orange size=md no-caps').classes('wg-custom-config-btn')
                             return
                         async with AsyncSessionLocal() as ds:
                             full = await get_vendor_merged(ds, v['id']) or v
                         with ui.card().classes('w-full shadow-lg border-l-4 border-green-500 p-3'):
                             with ui.row().classes('items-center gap-2'):
-                                ui.html(vendor_icon_html(v.get('icon', ''), 'w-7 h-7 rounded object-contain'))
+                                ui.html(vendor_icon_html(v.get('icon', ''), 'w-7 h-7 rounded object-contain'), sanitize=False)
                                 ui.label(v['name']).classes('text-lg font-bold')
                                 ui.label(v['tag']).classes('text-xs bg-green-50 text-green-700 px-2 py-0.5 rounded font-bold')
                             ui.label(f"额度说明：{v['quota_note']}").classes('text-[13px] text-gray-600 mt-0.5').style('line-height:1.35')
@@ -664,12 +764,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                             total_cnt = len(v['models'])
                             if connected_models:
                                 if total_cnt > 0 and len(connected_models) >= total_cnt:
-                                    ui.label('✅ 该厂商免费模型已全部接入，无需重复配置；如需更换 Key 请到账号管理编辑').classes('text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded mt-0.5')
+                                    ui.label('该厂商免费模型已全部接入，无需重复配置；如需更换 Key 请到账号管理编辑').classes('text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded mt-0.5')
                                 else:
-                                    ui.label(f"ℹ️ 已接入 {len(connected_models)}/{total_cnt} 个，只补充未接入的免费模型").classes('text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded mt-0.5')
+                                    ui.label(f"已接入 {len(connected_models)}/{total_cnt} 个，只补充未接入的免费模型").classes('text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded mt-0.5')
                             free_displays = v.get('free_models', [])
                             if free_displays:
-                                ui.label(f"🧩 免费模型：{'、'.join(free_displays[:4])}{'…' if len(free_displays) > 4 else ''}").classes('text-xs text-gray-600 mt-0.5')
+                                ui.label(f"免费模型：{'、'.join(free_displays[:4])}{'…' if len(free_displays) > 4 else ''}").classes('text-xs text-gray-600 mt-0.5')
 
                             is_no_key = v.get('no_key', False)
                             if is_no_key:
@@ -677,13 +777,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                 for i, step in enumerate(full['steps'], 1):
                                     with ui.row().classes('items-start gap-1.5 w-full'):
                                         ui.label(str(i)).classes('w-5 h-5 rounded-full bg-green-500 text-white text-xs flex items-center justify-center mt-0.5')
-                                        ui.label(step).classes('text-x] flex-1 pt-0.5').style('line-height:1.3')
+                                        ui.label(step).classes('text-[13px] flex-1 pt-0.5').style('line-height:1.3')
                                 ui.label('③ 一键智能配置（自动探测本地已安装模型）').classes('text-sm font-bold text-gray-700 mt-2')
                                 api_key_input = None
                             else:
                                 ui.label('② 获取 API Key（只需这一步）').classes('text-sm font-bold text-gray-700 mt-2')
                                 # 注册链接放在步骤上方，与步骤①"打开上方链接"文案一致
-                                ui.link(f'🔗 前往 {v["name"]} 获取 API Key', v['signup_url'], new_tab=True) \
+                                ui.link(f'前往 {v["name"]} 获取 API Key', v['signup_url'], new_tab=True) \
                                     .classes('text-blue-600 underline text-[13px] mt-0.5')
                                 for i, step in enumerate(full['steps'], 1):
                                     with ui.row().classes('items-start gap-1.5 w-full'):
@@ -702,7 +802,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                             except Exception:
                                                 pass
                                 if key_tail:
-                                    ui.label(f'🔑 已配置 Key：****{key_tail}（留空沿用旧 Key；填新 Key 将统一更换该厂商所有模型的 Key）') \
+                                    ui.label(f'已配置 Key：****{key_tail}（留空沿用旧 Key；填新 Key 将统一更换该厂商所有模型的 Key）') \
                                         .classes('text-xs text-green-700 bg-green-50 border border-green-200 px-2 py-1 rounded w-full mt-1')
                                 key_ph = f"已配置 Key（…{key_tail}），可留空沿用" if key_tail else "粘贴你的 API Key"
                                 api_key_input = ui.input('API Key', password=True, password_toggle_button=True, placeholder=key_ph) \
@@ -712,7 +812,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                         .props('dense outlined').classes('w-full')
 
                             with ui.row().classes('w-full justify-end'):
-                                ui.button('🚀 一键智能配置', on_click=lambda: run_config(v, api_key_input)) \
+                                ui.button('一键智能配置', on_click=lambda: run_config(v, api_key_input)) \
                                     .props('color=green size=md no-caps').classes('wg-config-btn')
 
                     ui.timer(0.01, detail, once=True)
@@ -723,30 +823,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         await build_spa('accounts')
 
     async def accounts_view():
-        """账号管理视图（SPA tab 面板内容）"""
-        
-        with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):
+        """账号管理视图（SPA）——主从结构：厂商 → 账号（主）→ 模型清单（从）"""
 
-            async def sync_account_models():
-                """从启用账号智能同步模型到目录（智能补充能力描述与向量）"""
-                try:
-                    async with AsyncSessionLocal() as session:
-                        from app.services.model_catalog_service import ModelCatalogService
-                        svc = ModelCatalogService(session)
-                        result = await session.execute(
-                            select(ModelAccount).where(ModelAccount.is_enable == True)  # noqa: E712
-                        )
-                        accounts = result.scalars().all()
-                        for account in accounts:
-                            await svc.ensure_model(account.model_name, account.vendor)
-                    ui.notify(f'已同步 {len(accounts)} 个模型的能力记录', type='positive')
-                    ui.navigate.to('/accounts')
-                except Exception as e:
-                    ui.notify(f'同步失败: {e}', type='negative')
+        with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
 
             async def recompute_all_vectors():
-                """重算所有模型能力向量"""
-                recompute_btn.props('loading')
+                """重算所有模型能力向量（高级工具，后续挂入高级设置）"""
                 try:
                     async with AsyncSessionLocal() as session:
                         from app.services.model_catalog_service import ModelCatalogService
@@ -760,27 +842,36 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     ui.navigate.to('/accounts')
                 except Exception as e:
                     ui.notify(f'重算失败: {e}', type='negative')
-                finally:
-                    recompute_btn.props(remove='loading')
 
             with ui.row().classes('items-center justify-between w-full'):
-                ui.label('🎯 模型账号管理').classes('text-3xl font-bold text-gray-800')
+                ui.label('模型账号管理').classes('text-3xl font-bold text-gray-800')
                 with ui.row().classes('gap-2'):
-                    sync_btn = ui.button('🔄 同步账号模型', on_click=sync_account_models).props('outline size=md')
-                    recompute_btn = ui.button('🧮 重算所有能力向量', on_click=recompute_all_vectors).props('outline size=md')
-                    ui.button('➕ 新增账号', on_click=lambda: show_account_dialog()).props('color=primary size=lg')
-            
-            # 获取账号列表
+                    ui.button('新增账号', on_click=lambda: show_account_dialog()).props('color=primary size=lg')
+
             accounts = await get_accounts()
-            
-            # 查询所有模型的 display_name 映射
-            model_display_map = {}
+
+            # 每账号的模型清单（catalog 按 account_id 聚合——主从语义，不再按模型名单映射）
+            account_models = {}
             async with AsyncSessionLocal() as session:
-                catalog_result = await session.execute(select(ModelCatalog))
-                for catalog in catalog_result.scalars().all():
-                    model_display_map[catalog.model_name] = catalog.display_name or catalog.model_name
-            
-            # 按厂商分组：先用别名匹配归一为目录规范名，避免历史命名差异把同一厂商拆成多组
+                cat_result = await session.execute(select(ModelCatalog))
+                for cat in cat_result.scalars().all():
+                    account_models.setdefault(cat.account_id, []).append(cat)
+
+            def mask_key(acc):
+                """密钥脱敏：已配置显示首尾，未配置显示占位"""
+                if not acc.api_key_encrypted:
+                    return '未配置密钥'
+                try:
+                    plain = encryption_service.decrypt(acc.api_key_encrypted)
+                except Exception:
+                    return '密钥不可读'
+                if not plain:
+                    return '未配置密钥'
+                if len(plain) <= 10:
+                    return '******'
+                return f'{plain[:6]}****{plain[-4:]}'
+
+            # 厂商分组：别名归一，避免历史命名差异把同一厂商拆成多组
             from collections import defaultdict
             from app.services.free_tier_catalog import FREE_TIER_VENDORS, vendor_matches
 
@@ -793,115 +884,118 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             vendor_groups = defaultdict(list)
             for acc in accounts:
                 vendor_groups[_canon_vendor(acc.vendor)].append(acc)
-            
-            # 建立 model_name -> account 的映射
-            model_to_account = {a.model_name: a for a in accounts}
-            
-            # 查询每个厂商的模型能力（从ModelCatalog）
-            vendor_models = {}
-            async with AsyncSessionLocal() as session:
-                for vendor in vendor_groups.keys():
-                    cat_result = await session.execute(
-                        select(ModelCatalog).where(ModelCatalog.vendor == vendor)
-                    )
-                    vendor_models[vendor] = cat_result.scalars().all()
-            
-            # 账号列表（按厂商分组显示，可折叠）
+
             if accounts:
-                for vendor, vendor_accounts in vendor_groups.items():
-                    models = vendor_models.get(vendor, [])
-                    
+                # 厂商组固定顺序：内置目录顺序 + 其余按名称（避免随启停状态漂移）
+                _v_index = {v['name']: i for i, v in enumerate(FREE_TIER_VENDORS)}
+                for vendor in sorted(vendor_groups.keys(), key=lambda v: (_v_index.get(v, 999), v)):
+                    vendor_accounts = vendor_groups[vendor]
+                    total_models = sum(len(account_models.get(a.id, [])) for a in vendor_accounts)
+
                     # 厂商分组卡片（可折叠）
                     with ui.card().classes('w-full shadow-md'):
-                        # 标题行（可点击展开/折叠）
-                        with ui.row().classes('items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50') as header_row:
+                        with ui.row().classes('w-full items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-100 transition-colors wg-row-click') as v_header:
                             ui.icon('business', size='md').classes('text-purple-600')
-                            ui.label(f'{vendor}').classes('text-lg font-bold text-gray-800')
-                            ui.badge(f'{len(models)} 个模型', color='purple')
-                            # 显示启用的模型数
-                            active_count = sum(1 for m in models if m.is_active)
-                            ui.badge(f'{active_count} 启用', color='positive')
-                            # 折叠箭头
-                            expand_icon = ui.icon('expand_more', size='md').classes('text-gray-400 ml-auto')
-                        
-                        # 可折叠内容区域
-                        with ui.column().classes('w-full px-4 pb-4 gap-3') as content_area:
-                            content_area.visible = False
-                            
-                            # 模型能力列表（显示全部模型，停用的置灰显示，便于恢复）
-                            models_to_show = models
-                            if models_to_show:
-                                ui.label('📋 模型清单').classes('text-sm font-bold text-gray-600 mt-2')
-                                for model in models_to_show:
-                                    # 获取该模型对应的账号信息
-                                    acc = model_to_account.get(model.model_name)
-                                    acc_id = acc.id if acc else None
-                                    acc_is_enable = acc.is_enable if acc else False
-                                    acc_priority = acc.priority if acc else 0
-                                    acc_total_prompt = acc.total_prompt_tokens or 0 if acc else 0
-                                    acc_total_completion = acc.total_completion_tokens or 0 if acc else 0
-                                    acc_balance = acc.balance_remaining if acc else None
-                                    acc_balance_unit = acc.balance_unit if acc else None
-                                    acc_daily_tokens = acc.daily_used_tokens or 0 if acc else 0
-                                    acc_base_url = acc.base_url if acc else ''
-                                    
-                                    card_cls = 'w-full shadow-sm' + ('' if model.is_active else ' opacity-60')
-                                    with ui.card().classes(card_cls):
-                                        # 标题行
-                                        with ui.row().classes('items-center gap-2 w-full'):
-                                            ui.icon('smart_toy', size='sm').classes('text-blue-500')
-                                            ui.label(model.display_name or model.model_name).classes('text-sm font-bold text-gray-700')
-                                            ui.badge(model.model_type or 'chat', color='blue').classes('text-xs')
-                                            ui.badge(f'优先级 {acc_priority}', color='grey').classes('text-xs')
-                                            if acc_is_enable:
-                                                ui.badge('✅ 启用', color='positive').classes('text-xs')
-                                            else:
-                                                ui.badge('❌ 停用', color='negative').classes('text-xs')
-                                            # 能力向量状态 + 示例数（原模型能力页信息，整合进明细行）
-                                            if model.embedding_vector:
-                                                ui.badge('🧠 向量已计算', color='purple').classes('text-xs')
-                                            else:
-                                                ui.badge('🧠 向量未计算', color='grey').classes('text-xs')
-                                            ui.badge(f'示例 {len(model.examples) if model.examples else 0} 条', color='teal').classes('text-xs')
-                                            ui.space()
-                                            # 操作按钮
-                                            if acc_id:
-                                                if acc_is_enable:
-                                                    ui.button('⏸ 停用', on_click=lambda aid=acc_id: toggle_account_enable(aid, False)).props('outline size=xs color=warning').classes('text-xs')
-                                                else:
-                                                    ui.button('▶️ 启用', on_click=lambda aid=acc_id: toggle_account_enable(aid, True)).props('outline size=xs color=positive').classes('text-xs')
-                                                ui.button('✏️ 编辑', on_click=lambda aid=acc_id: show_account_dialog(account_id=aid)).props('outline size=xs color=primary').classes('text-xs')
-                                                ui.button('🧠 能力', on_click=lambda m=model: show_model_capability_dialog(m.id)).props('outline size=xs color=purple').classes('text-xs')
-                                        
-                                        # 能力描述（截断显示）
-                                        if model.capability_description:
-                                            desc = model.capability_description[:80] + '...' if len(model.capability_description) > 80 else model.capability_description
-                                            ui.label(desc).classes('text-xs text-gray-500 mt-1')
-                                        
-                                        # 用量统计
-                                        with ui.row().classes('items-center gap-4 mt-2 flex-wrap'):
-                                            ui.label(f'📊 累计: 输入{acc_total_prompt/1_000_000:.2f}M / 输出{acc_total_completion/1_000_000:.2f}M tokens').classes('text-xs text-gray-500')
-                                            ui.label(f'📈 当日: {acc_daily_tokens:,} tokens').classes('text-xs text-gray-500')
-                                            if acc_balance is not None and acc_balance_unit:
-                                                if acc_balance_unit == 'token':
-                                                    ui.label(f'💰 余额: {acc_balance:,.0f} tokens').classes('text-xs font-bold text-blue-600')
-                                                else:
-                                                    ui.label(f'💰 余额: ¥{acc_balance:.2f}').classes('text-xs font-bold text-blue-600')
-                                            if acc_base_url:
-                                                ui.label(f'🔗 {acc_base_url[:40]}...').classes('text-xs font-mono text-gray-400')
-                    
-                    # 点击标题行切换展开/折叠
-                    async def toggle_content(area=content_area, icon=expand_icon):
-                        area.visible = not area.visible
-                        icon.props(f'name={"expand_more" if not area.visible else "expand_less"}')
-                    header_row.on('click', toggle_content)
+                            ui.label(vendor).classes('text-lg font-bold text-gray-800')
+                            ui.badge(f'{len(vendor_accounts)} 个账号', color='indigo')
+                            ui.badge(f'{total_models} 个模型', color='purple')
+                            v_icon = ui.icon('expand_more', size='md').classes('text-gray-400 ml-auto')
+
+                        with ui.column().classes('w-full px-4 pb-4 gap-3') as v_area:
+                            v_area.visible = False
+
+                            for acc in vendor_accounts:
+                                models = account_models.get(acc.id, [])
+                                acc_balance = acc.balance_remaining
+                                acc_balance_unit = acc.balance_unit
+                                acc_daily = acc.daily_used_tokens or 0
+                                acc_prompt = acc.total_prompt_tokens or 0
+                                acc_comp = acc.total_completion_tokens or 0
+
+                                # 账号卡片（主行）：key 标识 + 默认模型名（从行模型不再与账号重名）
+                                with ui.card().classes('w-full shadow-sm border-l-4 border-l-blue-500'):
+                                    with ui.row().classes('w-full items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-100 transition-colors flex-wrap wg-row-click') as a_header:
+                                        ui.icon('account_circle', size='md').classes('text-blue-600')
+                                        acc_key = mask_key(acc)
+                                        with ui.column().classes('gap-0'):
+                                            ui.label(acc_key if acc_key else '本地模型（无密钥）').classes('text-sm font-bold text-gray-800 font-mono')
+                                            ui.label(f'默认模型 {acc.model_name or "未命名"}').classes('text-xs text-gray-400')
+                                        ui.badge(f'{len(models)} 个模型', color='purple').classes('text-xs')
+                                        ui.badge('✅ 启用' if acc.is_enable else '❌ 停用',
+                                                 color='positive' if acc.is_enable else 'negative').props(f'data-acc-badge="{acc.id}"').classes('text-xs')
+                                        ui.button('编辑', on_click=lambda aid=acc.id: show_account_dialog(account_id=aid)).props('outline size=xs color=primary').classes('text-xs').on('click', lambda: None, ['stop'])
+                                        ui.button('停用', on_click=lambda aid=acc.id: toggle_account_enable(aid, False)).props(f'outline size=xs color=warning data-acc-btn="{acc.id}" data-acc-action="disable"').classes('text-xs' + ('' if acc.is_enable else ' hidden')).on('click', lambda: None, ['stop'])
+                                        ui.button('启用', on_click=lambda aid=acc.id: toggle_account_enable(aid, True)).props(f'outline size=xs color=positive data-acc-btn="{acc.id}" data-acc-action="enable"').classes('text-xs' + ('' if not acc.is_enable else ' hidden')).on('click', lambda: None, ['stop'])
+                                        a_icon = ui.icon('expand_more', size='sm').classes('text-gray-400 ml-auto')
+
+                                    # 模型清单（从行）
+                                    with ui.column().classes('w-full px-3 pb-3 gap-2') as a_area:
+                                        a_area.visible = False
+                                        if models:
+                                            ui.label('账号已停用：以下模型不参与路由（模型状态保留，重新启用后恢复）') \
+                                                .props(f'data-acc-warn="{acc.id}"').classes('text-xs text-red-500 font-bold' + ('' if not acc.is_enable else ' hidden'))
+                                            with ui.row().classes('items-center w-full mt-1'):
+                                                ui.label('模型清单').classes('text-xs font-bold text-gray-500')
+                                                ui.space()
+                                                ui.button('添加模型', on_click=lambda aid=acc.id: show_account_dialog(account_id=aid)) \
+                                                    .props('outline size=xs color=orange no-caps').classes('text-xs').on('click', lambda: None, ['stop'])
+                                            for model in models:
+                                                m_cls = 'w-full shadow-sm cursor-pointer hover:bg-gray-100 transition-colors wg-row-click' + ('' if model.is_active else ' opacity-60')
+                                                with ui.card().classes(m_cls).props(f'data-model-card="{model.id}"').on('click', lambda mid=model.id: show_model_capability_dialog(mid)):
+                                                    with ui.row().classes('items-center gap-2 w-full flex-wrap'):
+                                                        ui.icon('smart_toy', size='sm').classes('text-blue-500')
+                                                        ui.label(model.display_name or model.model_name).classes('text-sm font-bold text-gray-700')
+                                                        ui.badge(_type_label(model.model_type), color='blue').classes('text-xs')
+                                                        _in_p = model.input_price
+                                                        _out_p = model.output_price
+                                                        if (_in_p is not None and _in_p > 0) or (_out_p is not None and _out_p > 0):
+                                                            ui.badge(f'￥{_in_p or 0:.2f}/{_out_p or 0:.2f} 每1M', color='teal').classes('text-xs')
+                                                        elif _in_p is not None and _out_p is not None:
+                                                            # 两者都有值且都不大于 0 → 确定免费
+                                                            ui.badge('🆓 免费', color='green').classes('text-xs')
+                                                        else:
+                                                            # 价格未知（未获取）
+                                                            ui.badge('单价未获取', color='grey').classes('text-xs')
+                                                        if model.embedding_vector:
+                                                            ui.badge('向量已算', color='purple').classes('text-xs')
+                                                        else:
+                                                            ui.badge('向量未算', color='grey').classes('text-xs')
+                                                        ui.badge(f'示例 {len(model.examples) if model.examples else 0} 条', color='teal').classes('text-xs')
+                                                        ui.button('能力', on_click=lambda mid=model.id: show_model_capability_dialog(mid)).props('outline size=xs color=purple').classes('text-xs').on('click', lambda: None, ['stop'])
+                                                        ui.button('停用', on_click=lambda mid=model.id: toggle_model_active(mid, False)).props(f'outline size=xs color=warning data-model-btn="{model.id}" data-model-action="disable"').classes('text-xs' + ('' if model.is_active else ' hidden')).on('click', lambda: None, ['stop'])
+                                                        ui.button('启用', on_click=lambda mid=model.id: toggle_model_active(mid, True)).props(f'outline size=xs color=positive data-model-btn="{model.id}" data-model-action="enable"').classes('text-xs' + ('' if not model.is_active else ' hidden')).on('click', lambda: None, ['stop'])
+                                                        ui.icon('chevron_right', size='sm').classes('text-gray-300 ml-auto')
+
+                                                    if model.capability_description:
+                                                        desc = model.capability_description[:100] + ('...' if len(model.capability_description) > 100 else '')
+                                                        ui.label(desc).classes('text-xs text-gray-500 mt-1')
+
+                                                    with ui.row().classes('items-center gap-4 mt-1 flex-wrap'):
+                                                        ui.label(f'累计: 输入{acc_prompt / 1_000_000:.2f}M / 输出{acc_comp / 1_000_000:.2f}M tokens').classes('text-xs text-gray-500')
+                                                        ui.label(f'当日: {acc_daily:,} tokens').classes('text-xs text-gray-500')
+                                                        if acc_balance is not None and acc_balance_unit:
+                                                            if acc_balance_unit == 'token':
+                                                                ui.label(f'余额: {acc_balance:,.0f} tokens').classes('text-xs font-bold text-blue-600')
+                                                            else:
+                                                                ui.label(f'余额: ¥{acc_balance:.2f}').classes('text-xs font-bold text-blue-600')
+                                        else:
+                                            ui.label('该账号下暂无模型，点击「编辑」配置模型').classes('text-xs text-gray-400')
+
+                                    async def toggle_a(area=a_area, icon=a_icon):
+                                        area.visible = not area.visible
+                                        icon.props(f'name={"expand_more" if not area.visible else "expand_less"}')
+                                    a_header.on('click', toggle_a)
+
+                        async def toggle_v(area=v_area, icon=v_icon):
+                            area.visible = not area.visible
+                            icon.props(f'name={"expand_more" if not area.visible else "expand_less"}')
+                        v_header.on('click', toggle_v)
             else:
                 with ui.card().classes('w-full text-center p-12'):
                     ui.icon('info', size='4rem').classes('text-gray-400')
                     ui.label('暂无账号').classes('text-xl text-gray-500 mt-4')
                     ui.label('点击右上角"新增账号"按钮添加第一个账号').classes('text-sm text-gray-400')
-    
-    
+
     @ui.page('/config')
     async def config_page():
         """系统配置（SPA）"""
@@ -910,12 +1004,26 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
     async def config_view():
         """系统配置视图（SPA tab 面板内容）"""
         
-        with ui.column().classes('w-full max-w-4xl mx-auto p-5 gap-4'):
-            ui.label('⚙️ 全局系统配置').classes('text-3xl font-bold text-gray-800')
+        with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
+            ui.label('全局系统配置').classes('text-3xl font-bold text-gray-800')
             ui.label('所有配置保存后立即生效，无需重启服务').classes('text-sm text-gray-500 -mt-2')
 
             # 获取当前配置
             config = await get_system_config()
+
+            # 对外模型名（网关统一入口，单一数据源）
+            with ui.card().classes('w-full shadow-lg p-4'):
+                ui.label('对外模型名（网关统一入口）').classes('text-base font-bold text-gray-700 mb-1')
+                ui.label('客户端（Dify/OpenClaw 等）配置模型时统一填这个名字，网关内部智能路由自动映射真实模型').classes('text-xs text-gray-500 mb-3')
+                entry_name = ui.input(
+                    '对外模型名',
+                    value=getattr(config, 'virtual_entry_name', 'woolgate') or 'woolgate',
+                ).classes('w-full max-w-md').props('placeholder=woolgate')
+                ui.label('修改后，首页 Dify 配置示例、/v1/models 模型列表、路由判断将同步生效').classes('text-xs text-amber-600')
+                with ui.expansion('为什么有这个字段？入口名 vs 真实模型名', icon='help').classes('w-full mt-1'):
+                    ui.label('· 入口名（如 woolgate）：客户端只需填一个名字，网关智能路由自动选最合适/最省钱的模型，客户端无需了解后端模型结构').classes('text-xs text-gray-600 mb-1')
+                    ui.label('· 真实模型名（如 deepseek-chat）：点名直走该模型，仍享受多账号比价、故障切换、统一账单').classes('text-xs text-gray-600 mb-1')
+                    ui.label('· 两者都不是：返回明确报错，避免配置错误被静默掩盖').classes('text-xs text-gray-600')
 
             # 额度耗尽策略（卡片样式与管线策略页统一）
             with ui.card().classes('w-full shadow-lg p-4'):
@@ -953,6 +1061,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     'max_retry_count': int(max_retry.value),
                     'cool_down_seconds': int(cool_down.value),
                     'log_retention_days': int(log_retention.value),
+                    'virtual_entry_name': (entry_name.value or 'woolgate').strip(),
                 }
                 success = await save_system_config(config_data)
                 if success:
@@ -961,7 +1070,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     ui.notify('保存失败', type='negative')
 
             with ui.row().classes('w-full justify-end'):
-                ui.button('💾 保存配置', on_click=save).props('color=primary size=lg')
+                ui.button('保存配置', on_click=save).props('color=primary size=lg')
+
+            # 企业版入口（开源版钩子：需要企业级能力时由此进入）
+            with ui.card().classes('w-full shadow-lg p-4 border-t-4 border-indigo-500'):
+                ui.label('企业版（开源版之外的能力）').classes('text-base font-bold text-gray-700 mb-1')
+                ui.label('开源版面向个人与自用场景；团队与组织需要以下能力时，可升级企业版获得支持与部署保障').classes('text-xs text-gray-500 mb-3')
+                with ui.grid(columns=2).classes('w-full gap-x-8 gap-y-2'):
+                    ui.label('· 多租户：团队/项目隔离，独立 Key 与权限').classes('text-xs text-gray-600')
+                    ui.label('· 配额预算：按租户统计用量，超限自动停用').classes('text-xs text-gray-600')
+                    ui.label('· 审计与账单：按租户隔离日志与费用明细').classes('text-xs text-gray-600')
+                    ui.label('· 本地智能省钱模式：本地判题/直答，数据不出域').classes('text-xs text-gray-600')
+                ui.label('企业版计划即将推出，如需提前接入请通过项目主页联系作者').classes('text-xs text-amber-600 mt-2')
 
 
 
@@ -973,8 +1093,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
     async def pipeline_view():
         """管线策略视图（SPA tab 面板内容）"""
 
-        with ui.column().classes('w-full max-w-4xl mx-auto p-5 gap-4'):
-            ui.label('🧩 管线策略配置').classes('text-3xl font-bold text-gray-800')
+        with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
+            ui.label('管线策略配置').classes('text-3xl font-bold text-gray-800')
             ui.label('三层策略串行：模型路由 → 账号调度 → 上下文管理，保存后立即生效').classes('text-sm text-gray-500 -mt-2')
 
             # 获取当前配置
@@ -993,8 +1113,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         'hybrid': '混合（向量高置信直接用，低置信升级大模型）',
                     },
                     label='路由策略',
-                    value=getattr(config, 'router_strategy', 'off'),
+                    value=getattr(config, 'router_strategy', 'hybrid'),
                 ).classes('w-full max-w-md mb-3')
+                ui.label('默认开启智能路由：免费额度优先，自动选择性价比最高的模型').classes('text-xs text-blue-600 -mt-2 mb-2')
 
                 # 加载当前 router_config
                 from app.pipeline.config import PipelineConfig
@@ -1026,24 +1147,31 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     value=getattr(_router_cfg, 'embedding_model_id', 0) or 0,
                 ).classes('w-full max-w-md')
                 if not _embed_models:
-                    ui.label('⚠️ 暂无 Embedding 模型，请先在账号管理中启用').classes('text-xs text-red-500 -mt-1 mb-3')
+                    ui.label('暂无 Embedding 模型，请先在账号管理中启用').classes('text-xs text-red-500 -mt-1 mb-3')
                 else:
                     ui.label('选择后自动使用该模型所属账号的 API Key，无需单独配置').classes('text-xs text-gray-400 -mt-1 mb-3')
 
-                ui.label('滞回阈值（防止频繁切换模型）').classes('text-sm font-bold text-gray-600 mt-2 mb-1')
-                with ui.grid(columns=2).classes('w-full gap-x-8 gap-y-4 max-w-2xl'):
-                    with ui.column().classes('gap-1'):
-                        threshold_high = ui.number(
-                            '切入阈值', value=_router_cfg.threshold_high,
-                            min=0.0, max=1.0, step=0.05,
-                        ).classes('w-full')
-                        ui.label('匹配度高于此值才切换模型').classes('text-xs text-gray-400')
-                    with ui.column().classes('gap-1'):
-                        threshold_low = ui.number(
-                            '保持阈值', value=_router_cfg.threshold_low,
-                            min=0.0, max=1.0, step=0.05,
-                        ).classes('w-full')
-                        ui.label('匹配度低于此值才允许切走，中间区间保持当前模型').classes('text-xs text-gray-400')
+                # edition 分组：opensource 折叠高级参数，enterprise 展开
+                _is_enterprise = getattr(config, 'edition', 'opensource') == 'enterprise'
+
+                with ui.expansion('高级参数（阈值微调 · 上下文细节 · 本地运行时）', icon='tune',
+                                  value=_is_enterprise).classes('w-full'):
+                    ui.label('开源版默认使用智能推荐参数，以下为极客微调项').classes('text-xs text-gray-400 -mt-1 mb-2')
+
+                    ui.label('滞回阈值（防止频繁切换模型）').classes('text-sm font-bold text-gray-600 mt-1 mb-1')
+                    with ui.grid(columns=2).classes('w-full gap-x-8 gap-y-4 max-w-2xl'):
+                        with ui.column().classes('gap-1'):
+                            threshold_high = ui.number(
+                                '切入阈值', value=_router_cfg.threshold_high,
+                                min=0.0, max=1.0, step=0.05,
+                            ).classes('w-full')
+                            ui.label('匹配度高于此值才切换模型').classes('text-xs text-gray-400')
+                        with ui.column().classes('gap-1'):
+                            threshold_low = ui.number(
+                                '保持阈值', value=_router_cfg.threshold_low,
+                                min=0.0, max=1.0, step=0.05,
+                            ).classes('w-full')
+                            ui.label('匹配度低于此值才允许切走，中间区间保持当前模型').classes('text-xs text-gray-400')
 
             # ── ② 账号调度 ──
             with ui.card().classes('w-full shadow-lg p-4'):
@@ -1081,51 +1209,51 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
                 _context_cfg = _pipeline_cfg.context_config
 
-                with ui.grid(columns=2).classes('w-full gap-x-8 gap-y-4 max-w-2xl'):
-                    with ui.column().classes('gap-1'):
-                        window_turns = ui.number(
-                            '保留最近 N 轮对话', value=_context_cfg.window_turns, min=1, max=100
-                        ).classes('w-full')
-                        ui.label('滑动窗口策略下保留的对话轮数').classes('text-xs text-gray-400')
-                    with ui.column().classes('gap-1'):
-                        summary_provider = ui.select(
-                            {'cloud': '云端模型', 'local': '本地模型（Ollama）'},
-                            label='摘要模型来源',
-                            value=_context_cfg.summary_provider,
-                        ).classes('w-full')
-                        ui.label('摘要压缩策略使用哪种模型生成摘要').classes('text-xs text-gray-400')
+                with ui.expansion('上下文细节（窗口轮数 · 摘要参数）', icon='tune',
+                                  value=_is_enterprise).classes('w-full'):
+                    with ui.grid(columns=2).classes('w-full gap-x-8 gap-y-4 max-w-2xl'):
+                        with ui.column().classes('gap-1'):
+                            window_turns = ui.number(
+                                '保留最近 N 轮对话', value=_context_cfg.window_turns, min=1, max=100
+                            ).classes('w-full')
+                            ui.label('滑动窗口策略下保留的对话轮数').classes('text-xs text-gray-400')
+                        with ui.column().classes('gap-1'):
+                            summary_provider = ui.select(
+                                {'cloud': '云端模型', 'local': '本地模型（Ollama）'},
+                                label='摘要模型来源',
+                                value=_context_cfg.summary_provider,
+                            ).classes('w-full')
+                            ui.label('摘要压缩策略使用哪种模型生成摘要').classes('text-xs text-gray-400')
 
-                with ui.grid(columns=2).classes('w-full gap-x-8 gap-y-4 max-w-2xl'):
-                    with ui.column().classes('gap-1'):
-                        summary_model = ui.input(
-                            '摘要模型名', value=_context_cfg.summary_model
-                        ).classes('w-full')
-                        ui.label('云端：从账号池选该模型的启用账号；本地：直接调用').classes('text-xs text-gray-400')
-                    with ui.column().classes('gap-1'):
-                        summary_window_turns = ui.number(
-                            '摘要后保留原文轮数', value=_context_cfg.summary_window_turns, min=0, max=20
-                        ).classes('w-full')
-                        ui.label('触发摘要后，最近 N 轮原文仍完整保留').classes('text-xs text-gray-400')
+                    with ui.grid(columns=2).classes('w-full gap-x-8 gap-y-4 max-w-2xl'):
+                        with ui.column().classes('gap-1'):
+                            summary_model = ui.input(
+                                '摘要模型名', value=_context_cfg.summary_model
+                            ).classes('w-full')
+                            ui.label('云端：从账号池选该模型的启用账号；本地：直接调用').classes('text-xs text-gray-400')
+                        with ui.column().classes('gap-1'):
+                            summary_window_turns = ui.number(
+                                '摘要后保留原文轮数', value=_context_cfg.summary_window_turns, min=0, max=20
+                            ).classes('w-full')
+                            ui.label('触发摘要后，最近 N 轮原文仍完整保留').classes('text-xs text-gray-400')
 
-                with ui.grid(columns=2).classes('w-full gap-x-8 gap-y-4 max-w-2xl'):
-                    with ui.column().classes('gap-1'):
-                        summary_trigger_turns = ui.number(
-                            '触发阈值（对话轮数）', value=_context_cfg.summary_trigger_turns, min=1
-                        ).classes('w-full')
-                        ui.label('对话轮数超过该值且满足 token 阈值时触发').classes('text-xs text-gray-400')
-                    with ui.column().classes('gap-1'):
-                        summary_trigger_tokens = ui.number(
-                            '触发阈值（token 数）', value=_context_cfg.summary_trigger_tokens, min=100
-                        ).classes('w-full')
-                        ui.label('累计 token 超过该值且满足轮数阈值时触发').classes('text-xs text-gray-400')
+                    with ui.grid(columns=2).classes('w-full gap-x-8 gap-y-4 max-w-2xl'):
+                        with ui.column().classes('gap-1'):
+                            summary_trigger_turns = ui.number(
+                                '触发阈值（对话轮数）', value=_context_cfg.summary_trigger_turns, min=1
+                            ).classes('w-full')
+                            ui.label('对话轮数超过该值且满足 token 阈值时触发').classes('text-xs text-gray-400')
+                        with ui.column().classes('gap-1'):
+                            summary_trigger_tokens = ui.number(
+                                '触发阈值（token 数）', value=_context_cfg.summary_trigger_tokens, min=100
+                            ).classes('w-full')
+                            ui.label('累计 token 超过该值且满足轮数阈值时触发').classes('text-xs text-gray-400')
 
-                ui.label('跨模型切换时强制触发摘要，保证上下文不丢失').classes('text-xs text-blue-600 mt-1')
+                    ui.label('跨模型切换时强制触发摘要，保证上下文不丢失').classes('text-xs text-blue-600 mt-1')
 
             # ── ④ 本地模型运行时 ──
-            with ui.card().classes('w-full shadow-lg p-4'):
-                ui.label('④ 本地模型运行时（Ollama）').classes('text-base font-bold text-gray-700 mb-1')
-                ui.label('用于本地 Embedding、摘要等轻量任务，不参与主模型调度').classes('text-xs text-gray-500 mb-3')
-
+            with ui.expansion('本地模型运行时（Ollama，高级）', icon='computer', value=_is_enterprise).classes('w-full'):
+                ui.label('用于本地 Embedding、摘要等轻量任务，不参与主模型调度').classes('text-xs text-gray-500 mb-2')
                 with ui.grid(columns=2).classes('w-full gap-x-8 gap-y-4 max-w-2xl'):
                     with ui.column().classes('gap-1'):
                         ollama_enabled = ui.checkbox('启用 Ollama', value=config.ollama_enabled)
@@ -1171,7 +1299,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     ui.notify('保存失败', type='negative')
 
             with ui.row().classes('w-full justify-end'):
-                ui.button('💾 保存策略', on_click=save_pipeline).props('color=primary size=lg')
+                ui.button('保存策略', on_click=save_pipeline).props('color=primary size=lg')
 
 
 
@@ -1182,130 +1310,136 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
     async def logs_view():
         """请求日志视图（SPA tab 面板内容）"""
+
+        @ui.refreshable
+        async def logs_content():
+            """请求日志视图（SPA tab 面板内容）"""
         
-        with ui.column().classes('w-full max-w-7xl mx-auto p-5 gap-4'):
-            with ui.row().classes('items-center justify-between w-full'):
-                ui.label('📋 请求日志').classes('text-3xl font-bold text-gray-800')
-                ui.button('🔄 刷新', on_click=lambda: ui.run_javascript('window.location.reload()')).props('outline color=primary')
+            with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
+                with ui.row().classes('items-center justify-between w-full'):
+                    ui.label('请求日志').classes('text-3xl font-bold text-gray-800')
+                    ui.button('刷新', on_click=logs_content.refresh).props('outline color=primary')
             
-            # 获取最近 50 条日志
-            async with AsyncSessionLocal() as session:
-                # 查询统计数据（全部）
-                from sqlalchemy import func
-                total_result = await session.execute(select(func.count(RequestLog.id)))
-                total_count = total_result.scalar() or 0
+                # 获取最近 50 条日志
+                async with AsyncSessionLocal() as session:
+                    # 查询统计数据（全部）
+                    from sqlalchemy import func
+                    total_result = await session.execute(select(func.count(RequestLog.id)))
+                    total_count = total_result.scalar() or 0
                 
-                success_result = await session.execute(select(func.count(RequestLog.id)).where(RequestLog.status == 'success'))
-                success_count = success_result.scalar() or 0
+                    success_result = await session.execute(select(func.count(RequestLog.id)).where(RequestLog.status == 'success'))
+                    success_count = success_result.scalar() or 0
                 
-                failed_result = await session.execute(select(func.count(RequestLog.id)).where(RequestLog.status == 'failed'))
-                failed_count = failed_result.scalar() or 0
+                    failed_result = await session.execute(select(func.count(RequestLog.id)).where(RequestLog.status == 'failed'))
+                    failed_count = failed_result.scalar() or 0
                 
-                token_result = await session.execute(
-                    select(func.coalesce(func.sum(RequestLog.prompt_tokens), 0), 
-                           func.coalesce(func.sum(RequestLog.completion_tokens), 0))
-                )
-                total_prompt, total_completion = token_result.first()
+                    token_result = await session.execute(
+                        select(func.coalesce(func.sum(RequestLog.prompt_tokens), 0), 
+                               func.coalesce(func.sum(RequestLog.completion_tokens), 0))
+                    )
+                    total_prompt, total_completion = token_result.first()
                 
-                # 查询最近50条用于显示
-                result = await session.execute(
-                    select(RequestLog)
-                    .order_by(desc(RequestLog.created_at))
-                    .limit(50)
-                )
-                logs = result.scalars().all()
+                    # 查询最近50条用于显示
+                    result = await session.execute(
+                        select(RequestLog)
+                        .order_by(desc(RequestLog.created_at))
+                        .limit(50)
+                    )
+                    logs = result.scalars().all()
             
-            def stat_card(icon, icon_color, title, value, sub=None):
-                with ui.card().classes('flex-1').style('height:120px'):
-                    with ui.column().classes('w-full items-center gap-1 justify-center').style('height:100%'):
-                        ui.label(f'{icon} {title}').classes('text-sm text-gray-600')
-                        ui.label(value).classes('text-3xl font-bold').style('min-height:36px; display:flex; align-items:center; justify-content:center;')
-                        if sub:
-                            lines = sub if isinstance(sub, (list, tuple)) else [sub]
-                            for line in lines:
-                                ui.label(line).classes('text-xs text-gray-500 text-center').style('line-height:1.4')
+                def stat_card(icon, icon_color, title, value, sub=None):
+                    with ui.card().classes('flex-1').style('height:120px'):
+                        with ui.column().classes('w-full items-center gap-1 justify-center').style('height:100%'):
+                            ui.label((icon + ' ') if icon else title).classes('text-sm text-gray-600')
+                            ui.label(value).classes('text-3xl font-bold').style('min-height:36px; display:flex; align-items:center; justify-content:center;')
+                            if sub:
+                                lines = sub if isinstance(sub, (list, tuple)) else [sub]
+                                for line in lines:
+                                    ui.label(line).classes('text-xs text-gray-500 text-center').style('line-height:1.4')
             
-            with ui.row().classes('w-full gap-3'):
-                stat_card('📊', 'text-blue-600', '总请求数', str(total_count))
-                stat_card('✅', 'text-green-600', '成功', str(success_count))
-                stat_card('❌', 'text-red-600', '失败', str(failed_count))
-                stat_card('🐑', 'text-orange-600', '累计Token',
-                          f"{total_prompt + total_completion:,}",
-                          [f'输入 {total_prompt:,}', f'输出 {total_completion:,}'])
+                with ui.row().classes('w-full gap-3'):
+                    stat_card('📊', 'text-blue-600', '总请求数', str(total_count))
+                    stat_card('✅', 'text-green-600', '成功', str(success_count))
+                    stat_card('❌', 'text-red-600', '失败', str(failed_count))
+                    stat_card('🐑', 'text-orange-600', '累计Token',
+                              f"{total_prompt + total_completion:,}",
+                              [f'输入 {total_prompt:,}', f'输出 {total_completion:,}'])
             
-            # 日志列表
-            if logs:
-                for log in logs:
-                    # 提取数据
-                    log_vendor = log.vendor or '未知'
-                    log_model = log.model_name or '未知'
-                    log_status = log.status
-                    log_created = log.created_at.strftime('%Y-%m-%d %H:%M:%S') if log.created_at else '未知'
-                    log_prompt_tokens = log.prompt_tokens or 0
-                    log_completion_tokens = log.completion_tokens or 0
-                    log_total_tokens = log.total_tokens or 0
-                    log_response_time = log.response_time_ms or 0
-                    log_error = log.error_message
-                    log_account_id = log.account_id
-                    log_implicit_signal = log.implicit_signal
-                    log_user_feedback = log.user_feedback
+                # 日志列表
+                if logs:
+                    for log in logs:
+                        # 提取数据
+                        log_vendor = log.vendor or '未知'
+                        log_model = log.model_name or '未知'
+                        log_status = log.status
+                        log_created = local_fmt(log.created_at)
+                        log_prompt_tokens = log.prompt_tokens or 0
+                        log_completion_tokens = log.completion_tokens or 0
+                        log_total_tokens = log.total_tokens or 0
+                        log_response_time = log.response_time_ms or 0
+                        log_error = log.error_message
+                        log_account_id = log.account_id
+                        log_implicit_signal = log.implicit_signal
+                        log_user_feedback = log.user_feedback
                     
-                    # 状态颜色
-                    if log_status == 'success':
-                        status_color = 'positive'
-                        status_icon = 'check_circle'
-                    else:
-                        status_color = 'negative'
-                        status_icon = 'error'
+                        # 状态颜色
+                        if log_status == 'success':
+                            status_color = 'positive'
+                            status_icon = 'check_circle'
+                        else:
+                            status_color = 'negative'
+                            status_icon = 'error'
                     
-                    # A3: 隐式信号/显式反馈徽标映射
-                    signal_badges = {
-                        'switch_retry': ('🔄 切换重试', 'warning'),
-                        'stream_interrupted': ('✂️ 输出中断', 'negative'),
-                        'followup': ('💬 继续追问', 'positive'),
-                    }
-                    feedback_badges = {
-                        'up': ('👍', 'positive'),
-                        'down': ('👎', 'negative'),
-                        'neutral': ('➖', 'info'),
-                    }
+                        # A3: 隐式信号/显式反馈徽标映射
+                        signal_badges = {
+                            'switch_retry': ('切换重试', 'warning'),
+                            'stream_interrupted': ('输出中断', 'negative'),
+                            'followup': ('继续追问', 'positive'),
+                        }
+                        feedback_badges = {
+                            'up': ('👍', 'positive'),
+                            'down': ('👎', 'negative'),
+                            'neutral': ('➖', 'info'),
+                        }
                     
-                    with ui.card().classes('w-full shadow-sm hover:shadow-md transition-shadow'):
-                        with ui.row().classes('w-full items-start justify-between gap-4'):
-                            # 左侧信息
-                            with ui.column().classes('flex-1 gap-2'):
-                                # 标题行
-                                with ui.row().classes('items-center gap-2 flex-wrap'):
-                                    ui.icon(status_icon, size='sm').classes(f'text-{status_color}')
-                                    ui.label(f'账号 {log_account_id}').classes('font-bold text-gray-800')
-                                    ui.label(log_vendor).classes('text-sm bg-blue-100 text-blue-700 px-2 py-1 rounded')
-                                    ui.badge(log_model, color='purple')
-                                    ui.label(log_created).classes('text-xs text-gray-500')
-                                    # A3: 隐式信号 + 显式反馈
-                                    if log_implicit_signal in signal_badges:
-                                        label, color = signal_badges[log_implicit_signal]
-                                        ui.badge(label, color=color).props('outline')
-                                    if log_user_feedback in feedback_badges:
-                                        icon, color = feedback_badges[log_user_feedback]
-                                        ui.badge(icon, color=color).props('outline')
+                        with ui.card().classes('w-full shadow-sm hover:shadow-md transition-shadow'):
+                            with ui.row().classes('w-full items-start justify-between gap-4'):
+                                # 左侧信息
+                                with ui.column().classes('flex-1 gap-2'):
+                                    # 标题行
+                                    with ui.row().classes('items-center gap-2 flex-wrap'):
+                                        ui.icon(status_icon, size='sm').classes(f'text-{status_color}')
+                                        ui.label(f'账号 {log_account_id}').classes('font-bold text-gray-800')
+                                        ui.label(log_vendor).classes('text-sm bg-blue-100 text-blue-700 px-2 py-1 rounded')
+                                        ui.badge(log_model, color='purple')
+                                        ui.label(log_created).classes('text-xs text-gray-500')
+                                        # A3: 隐式信号 + 显式反馈
+                                        if log_implicit_signal in signal_badges:
+                                            label, color = signal_badges[log_implicit_signal]
+                                            ui.badge(label, color=color).props('outline')
+                                        if log_user_feedback in feedback_badges:
+                                            icon, color = feedback_badges[log_user_feedback]
+                                            ui.badge(icon, color=color).props('outline')
                                 
-                                # Token 统计
-                                with ui.row().classes('items-center gap-4 text-sm'):
-                                    ui.label(f'📝 输入: {log_prompt_tokens:,}').classes('text-gray-600')
-                                    ui.label(f'📝 输出: {log_completion_tokens:,}').classes('text-gray-600')
-                                    ui.label(f'📊 总计: {log_total_tokens:,}').classes('text-gray-600 font-bold')
-                                    ui.label(f'⏱️ {log_response_time}ms').classes('text-gray-600')
+                                    # Token 统计
+                                    with ui.row().classes('items-center gap-4 text-sm'):
+                                        ui.label(f'输入: {log_prompt_tokens:,}').classes('text-gray-600')
+                                        ui.label(f'输出: {log_completion_tokens:,}').classes('text-gray-600')
+                                        ui.label(f'总计: {log_total_tokens:,}').classes('text-gray-600 font-bold')
+                                        ui.label(f'{log_response_time}ms').classes('text-gray-600')
                                 
-                                # 错误信息
-                                if log_error:
-                                    ui.separator().classes('my-1')
-                                    with ui.row().classes('items-start gap-2'):
-                                        ui.icon('warning', size='sm').classes('text-red-500')
-                                        ui.label(str(log_error)).classes('text-sm text-red-600 flex-1')
-            else:
-                with ui.card().classes('w-full text-center p-12'):
-                    ui.icon('inbox', size='4rem').classes('text-gray-400')
-                    ui.label('暂无日志记录').classes('text-xl text-gray-500 mt-4')
+                                    # 错误信息
+                                    if log_error:
+                                        ui.separator().classes('my-1')
+                                        with ui.row().classes('items-start gap-2'):
+                                            ui.icon('warning', size='sm').classes('text-red-500')
+                                            ui.label(str(log_error)).classes('text-sm text-red-600 flex-1')
+                else:
+                    with ui.card().classes('w-full text-center p-12'):
+                        ui.icon('inbox', size='4rem').classes('text-gray-400')
+                        ui.label('暂无日志记录').classes('text-xl text-gray-500 mt-4')
+
+        await logs_content()
     @ui.page('/vendors')
     async def vendors_page():
         """模型菜单维护页：内置菜单 + DB 用户覆盖 = 最终目录（B/C 迭代）"""
@@ -1333,7 +1467,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         s.add(VendorOverride(id=vendor_id, vendor_json=json.dumps(v, ensure_ascii=False), is_deleted=deleted, enabled=not deleted))
                         await s.commit()
             vendor_table.refresh()
-            ui.notify('✅ 已更新' if not deleted else '⛔ 已停用', type='positive')
+            ui.notify('已更新' if not deleted else '已停用', type='positive')
 
         async def delete_override(vendor_id: str):
             async with AsyncSessionLocal() as s:
@@ -1342,13 +1476,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     await s.delete(row)
                     await s.commit()
             vendor_table.refresh()
-            ui.notify('🗑 已删除自定义厂商', type='positive')
+            ui.notify('已删除自定义厂商', type='positive')
 
         def show_edit_dialog(v=None):
             is_edit = v is not None
             dialog = ui.dialog().props('max-width=720px')
             with dialog, ui.card().classes('w-full p-4'):
-                ui.label('✏️ 编辑模型' if is_edit else '➕ 新增模型').classes('text-lg font-bold mb-2')
+                ui.label('编辑模型' if is_edit else '新增模型').classes('text-lg font-bold mb-2')
                 f = {}
                 with ui.grid(columns=2).classes('w-full gap-3'):
                     f['id'] = ui.input('厂商 ID（唯一，如 myvendor）', value=(v or {}).get('id', '')).props('dense outlined').classes('w-full')
@@ -1376,16 +1510,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 name = (f['name'].value or '').strip()
                 base_url = (f['base_url'].value or '').strip()
                 if not vendor_id or not name or not base_url:
-                    ui.notify('⚠️ ID / 名称 / Base URL 必填', type='warning')
+                    ui.notify('ID / 名称 / Base URL 必填', type='warning')
                     return
                 try:
                     models = json.loads(f['models'].value or '[]')
                     steps = json.loads(f['steps'].value or '[]')
                 except json.JSONDecodeError:
-                    ui.notify('⚠️ 模型列表/接入步骤不是合法 JSON', type='warning')
+                    ui.notify('模型列表/接入步骤不是合法 JSON', type='warning')
                     return
                 if not isinstance(models, list) or not isinstance(steps, list):
-                    ui.notify('⚠️ 模型列表/接入步骤必须是 JSON 数组', type='warning')
+                    ui.notify('模型列表/接入步骤必须是 JSON 数组', type='warning')
                     return
                 vendor_dict = {
                     'id': vendor_id,
@@ -1416,7 +1550,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         await s.commit()
                     dialog.close()
                     vendor_table.refresh()
-                    ui.notify('✅ 已保存（修改已生效，刷新向导页可见）', type='positive')
+                    ui.notify('已保存（修改已生效，刷新向导页可见）', type='positive')
                 asyncio.create_task(persist())
 
             dialog.open()
@@ -1456,10 +1590,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             with ui.card().classes('w-full shadow-lg p-4'):
                 with ui.row().classes('items-center justify-between w-full'):
                     ui.label(f'模型菜单（{len(merged)} 家）').classes('text-lg font-bold').props('id=vendor-menu-count')
-                    ui.button('➕ 新增模型', on_click=lambda: show_edit_dialog()).props('color=primary size=md no-caps').classes('wg-vendor-add')
+                    ui.button('新增模型', on_click=lambda: show_edit_dialog()).props('color=primary size=md no-caps').classes('wg-vendor-add')
                 ui.label('内置菜单随版本发布；此处新增/修改/停用即时生效（合并后供免费向导使用）').classes('text-xs text-gray-500 mt-1')
                 with ui.row().classes('items-center gap-2 mt-2 w-full flex-wrap'):
-                    ui.input('🔍 搜索厂商/模型', on_change=lambda e: (_filter_state.__setitem__('kw', e.value or ''), apply_filter())) \
+                    ui.input('搜索厂商/模型', on_change=lambda e: (_filter_state.__setitem__('kw', e.value or ''), apply_filter())) \
                         .props('dense outlined clearable').classes('w-72 wg-vendor-search')
                     ui.select(
                         {'all': '全部来源', 'builtin': '内置', 'custom': '自定义', 'deleted': '已停用'},
@@ -1470,7 +1604,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     for v in merged:
                         o = ov_by_id.get(v['id'])
                         if o and o.is_deleted:
-                            src_tag, src_color, src_key = '⛔ 已停用', 'red', 'deleted'
+                            src_tag, src_color, src_key = '已停用', 'red', 'deleted'
                         elif v['id'] not in b_ids:
                             src_tag, src_color, src_key = '🆕 自定义', 'purple', 'custom'
                         else:
@@ -1481,28 +1615,28 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         free_displays = [m['display'] for m in v['models'] if isinstance(m, dict) and m.get('free')]
                         with ui.card().classes('w-full p-3 shadow-md flex flex-col vendor-menu-card').props(f'data-src={src_key} data-vendor-id={v["id"]}'):
                             with ui.row().classes('items-center gap-2 w-full'):
-                                ui.html(vendor_icon_html(v.get('icon', ''), 'w-8 h-8 rounded object-contain'))
+                                ui.html(vendor_icon_html(v.get('icon', ''), 'w-8 h-8 rounded object-contain'), sanitize=False)
                                 ui.label(v['name']).classes('font-bold text-sm flex-1 min-w-0')
                                 ui.label(src_tag).classes(f'text-xs bg-{src_color}-100 text-{src_color}-700 px-2 py-0.5 rounded font-bold shrink-0')
                             with ui.row().classes('items-center gap-1.5 w-full mt-1.5'):
-                                ui.label(f"🧩 {free_cnt} 免费模型").classes('text-xs text-gray-500')
+                                ui.label(f"{free_cnt} 免费模型").classes('text-xs text-gray-500')
                                 if connected:
-                                    ui.label(f'✅ 已接入 {len(connected)}').classes('text-xs text-green-600 font-bold')
+                                    ui.label(f'已接入 {len(connected)}').classes('text-xs text-green-600 font-bold')
                                 else:
                                     ui.label('未接入').classes('text-xs text-gray-400')
                             with ui.column().classes('flex-1 w-full gap-0'):
                                 if v.get('quota_note'):
                                     ui.label(v['quota_note']).classes('text-xs text-gray-500 mt-1').style('line-height:1.35')
                                 if free_displays:
-                                    ui.label(f"🧩 {'、'.join(free_displays[:3])}{'…' if len(free_displays) > 3 else ''}").classes('text-[11px] text-green-700 mt-1')
+                                    ui.label(f"{'、'.join(free_displays[:3])}{'…' if len(free_displays) > 3 else ''}").classes('text-[11px] text-green-700 mt-1')
                             with ui.row().classes('gap-1 mt-2 w-full flex-wrap'):
-                                ui.button('✏️ 编辑', on_click=lambda vv=v: show_edit_dialog(vv)).props('outline size=sm color=primary no-caps').classes('wg-vendor-edit')
+                                ui.button('编辑', on_click=lambda vv=v: show_edit_dialog(vv)).props('outline size=sm color=primary no-caps').classes('wg-vendor-edit')
                                 if o and o.is_deleted:
-                                    ui.button('▶️ 恢复', on_click=lambda vid=v['id']: set_deleted(vid, False)).props('outline size=sm color=positive no-caps')
+                                    ui.button('恢复', on_click=lambda vid=v['id']: set_deleted(vid, False)).props('outline size=sm color=positive no-caps')
                                 elif v['id'] in b_ids:
-                                    ui.button('⏸ 停用', on_click=lambda vid=v['id']: set_deleted(vid, True)).props('outline size=sm color=warning no-caps')
+                                    ui.button('停用', on_click=lambda vid=v['id']: set_deleted(vid, True)).props('outline size=sm color=warning no-caps')
                                 if o and not o.is_deleted and v['id'] not in b_ids:
-                                            ui.button('🗑 删除', on_click=lambda vid=v['id']: delete_override(vid)).props('outline size=sm color=negative no-caps')
+                                            ui.button('删除', on_click=lambda vid=v['id']: delete_override(vid)).props('outline size=sm color=negative no-caps')
 
         ui.timer(0.01, vendor_table, once=True)
 
@@ -1516,7 +1650,7 @@ async def sync_model_to_catalog(account, session):
     from app.pipeline.config import PipelineConfig
     
     svc = ModelCatalogService(session)
-    catalog = await svc.ensure_model(account.model_name, account.vendor)
+    catalog = await svc.ensure_model(account.model_name, account.vendor, account_id=account.id)
     is_new = catalog.examples is None or len(catalog.examples) == 0
     
     # 新模型设置默认示例
@@ -1555,8 +1689,50 @@ async def sync_model_to_catalog(account, session):
     return catalog.display_name or catalog.model_name, is_new
 
 
+def _type_label(t):
+    """模型类型显示汉化"""
+    return {'chat': '对话', 'embedding': '向量', 'image': '图像', 'video': '视频', 'audio': '音频'}.get(t or 'chat', t or 'chat')
+
+
+def toggle_model_active(model_id: int, active: bool):
+    """启用/停用账号下的单个模型（模型级开关，路由过滤含 is_active）"""
+    async def toggle():
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(ModelCatalog).where(ModelCatalog.id == model_id))
+            model = result.scalar_one_or_none()
+            if not model:
+                ui.notify('模型不存在', type='negative')
+                return
+            model.is_active = active
+            await session.commit()
+            ui.notify(f'已{"启用" if active else "停用"}模型 {model.display_name or model.model_name}', type='positive' if active else 'warning')
+            # 局部更新：双按钮 hidden 切换 + 模型卡透明度，不刷新页面
+            ui.run_javascript(f"""
+                (function() {{
+                    const id = {model_id}; const active = {'true' if active else 'false'};
+                    document.querySelectorAll('[data-model-btn="'+id+'"][data-model-action="disable"]').forEach(function(b) {{ b.classList.toggle('hidden', !active); }});
+                    document.querySelectorAll('[data-model-btn="'+id+'"][data-model-action="enable"]').forEach(function(b) {{ b.classList.toggle('hidden', active); }});
+                    const card = document.querySelector('[data-model-card="'+id+'"]');
+                    if (card) card.style.opacity = active ? '' : '0.6';
+                }})();
+            """)
+    ui.timer(0.01, toggle, once=True)
+
+
+
+ui.add_head_html('''
+<script>
+document.addEventListener('click', function(e){
+  var el = e.target.closest && e.target.closest('.wg-row-click');
+  if (!el) return;
+  el.style.transition = 'background-color .3s ease';
+  el.style.backgroundColor = 'rgba(124,58,237,0.12)';
+  setTimeout(function(){ el.style.backgroundColor = ''; }, 320);
+});
+</script>
+''')
 def toggle_account_enable(account_id: int, enable: bool):
-    """启用/停用账号"""
+    """启用/停用账号（账号级总开关；模型级状态由各模型行独立控制）"""
     async def toggle():
         async with AsyncSessionLocal() as session:
             result = await session.execute(
@@ -1567,52 +1743,45 @@ def toggle_account_enable(account_id: int, enable: bool):
                 ui.notify('账号不存在', type='negative')
                 return
             account.is_enable = enable
-            # 重新启用时清除冷却状态，避免残留故障冷却
             if enable:
                 account.cool_down_until = None
             await session.commit()
-            
+
+            # UI 即时反馈：双按钮 hidden 切换 + 徽章/横幅（不依赖后续 sync 完成）
+            ui.run_javascript(f"""
+                (function() {{
+                    const id = {account_id}; const enabling = {'true' if enable else 'false'};
+                    document.querySelectorAll('[data-acc-btn="'+id+'"][data-acc-action="disable"]').forEach(function(b) {{ b.classList.toggle('hidden', !enabling); }});
+                    document.querySelectorAll('[data-acc-btn="'+id+'"][data-acc-action="enable"]').forEach(function(b) {{ b.classList.toggle('hidden', enabling); }});
+                    const badge = document.querySelector('[data-acc-badge="'+id+'"]');
+                    if (badge) {{
+                        badge.textContent = enabling ? '✅ 启用' : '❌ 停用';
+                        badge.classList.toggle('bg-positive', enabling);
+                        badge.classList.toggle('bg-negative', !enabling);
+                    }}
+                    const warn = document.querySelector('[data-acc-warn="'+id+'"]');
+                    if (warn) warn.classList.toggle('hidden', enabling);
+                }})();
+            """)
+
             if enable:
-                # 启用时智能同步模型并计算向量
                 try:
                     model_display, is_new = await sync_model_to_catalog(account, session)
-                    if is_new:
-                        ui.notify(f'已启用 {account.vendor}，新增模型 {model_display} 并计算能力向量', type='positive')
-                    else:
-                        ui.notify(f'已启用 {account.vendor}，模型 {model_display} 能力向量已更新', type='positive')
+                    msg = f'已启用 {account.vendor}，模型 {model_display} 能力已同步' + ('（新增）' if is_new else '')
+                    ui.notify(msg, type='positive')
                 except Exception as e:
                     ui.notify(f'已启用 {account.vendor}，但模型同步失败: {e}', type='warning')
             else:
-                # 停用账号时，检查该模型是否还有其他启用账号
-                from app.services.model_catalog_service import ModelCatalogService
-                result = await session.execute(
-                    select(ModelAccount).where(
-                        ModelAccount.model_name == account.model_name,
-                        ModelAccount.is_enable == True  # noqa: E712
-                    )
-                )
-                remaining = result.scalars().all()
-                if not remaining:
-                    # 没有其他启用账号，标记模型为不可用
-                    catalog_result = await session.execute(
-                        select(ModelCatalog).where(ModelCatalog.model_name == account.model_name)
-                    )
-                    catalog = catalog_result.scalar_one_or_none()
-                    if catalog and catalog.is_active:
-                        catalog.is_active = False
-                        await session.commit()
-                        ui.notify(f'已停用 {account.vendor}，模型 {account.model_name} 无其他启用账号，已从路由池移除', type='warning')
-                    else:
-                        ui.notify(f'已停用 {account.vendor}', type='warning')
-                else:
-                    ui.notify(f'已停用 {account.vendor}（模型 {account.model_name} 仍有 {len(remaining)} 个启用账号）', type='warning')
-            # 刷新页面
-            ui.run_javascript('setTimeout(() => window.location.reload(), 600)')
+                from sqlalchemy import func
+                cnt = (await session.execute(
+                    select(func.count()).select_from(ModelCatalog).where(ModelCatalog.account_id == account_id)
+                )).scalar() or 0
+                ui.notify(f'已停用 {account.vendor}（该账号下 {cnt} 个模型不再参与路由）', type='warning')
     ui.timer(0.01, toggle, once=True)
 
 
 def show_account_dialog(account_id: Optional[int] = None):
-    """显示账号编辑对话框"""
+    """显示账号编辑对话框（主从：账号级信息 + 账号下模型勾选；改密钥一处生效）"""
     async def show():
         # 加载初始数据用于回填（只读，session 用完即关，不跨回调持有）
         initial = {
@@ -1621,12 +1790,12 @@ def show_account_dialog(account_id: Optional[int] = None):
             'model_name': 'chat',
             'endpoint_id': '',
             'base_url': '',
-            'extra_model': '',
-            'priority': 50,
             'is_enable': True,
             'balance_remaining': None,
             'balance_unit': 'currency',
             'currency_rate': 0,
+            'has_key': False,
+            'selected_models': [],
         }
         if account_id:
             async with AsyncSessionLocal() as session:
@@ -1635,12 +1804,6 @@ def show_account_dialog(account_id: Optional[int] = None):
                 )
                 account = result.scalar_one_or_none()
                 if account:
-                    api_key_plain = ''
-                    if account.api_key_encrypted:
-                        try:
-                            api_key_plain = encryption_service.decrypt(account.api_key_encrypted)
-                        except Exception:
-                            api_key_plain = ''
                     extra_model = ''
                     if account.extra_json:
                         try:
@@ -1652,56 +1815,142 @@ def show_account_dialog(account_id: Optional[int] = None):
                             extra_model = ''
                     initial = {
                         'vendor': account.vendor or '',
-                        'api_key': api_key_plain,
+                        'api_key': '',
                         'model_name': account.model_name or 'chat',
                         'endpoint_id': account.endpoint_id or '',
                         'base_url': account.base_url or '',
-                        'extra_model': extra_model,
-                        'priority': account.priority if account.priority is not None else 50,
                         'is_enable': account.is_enable if account.is_enable is not None else True,
                         'balance_remaining': account.balance_remaining,
                         'balance_unit': account.balance_unit or 'currency',
                         'currency_rate': account.currency_rate or 0,
+                        'has_key': bool(account.api_key_encrypted),
+                        'selected_models': [],
                     }
+                    # 该账号已开通模型（catalog 行）
+                    cat_result = await session.execute(
+                        select(ModelCatalog).where(ModelCatalog.account_id == account_id)
+                    )
+                    initial['selected_models'] = [c.model_name for c in cat_result.scalars().all()]
 
+        from app.services.free_tier_catalog import _merged_vendors
+        _merged_vendors_list = await _merged_vendors(None)
         with ui.dialog() as dialog, ui.card().classes('w-full max-w-3xl'):
-            ui.label('✏️ 编辑账号' if account_id else '➕ 新增账号').classes('text-xl font-bold')
+            ui.label('编辑账号' if account_id else '新增账号').classes('text-xl font-bold')
+            ui.label('一个账号 = 一个 API 密钥；密钥下可开通多个模型（主从管理，改密钥一处生效）').classes('text-xs text-gray-400')
 
-            with ui.row().classes('gap-4 w-full'):
-                vendor = ui.input('厂商名称', value=initial['vendor']).classes('flex-1')
-                api_key = ui.input('API Key', value=initial['api_key'], password=True, password_toggle_button=True).classes('flex-1')
-            with ui.row().classes('gap-4 w-full'):
-                model_name = ui.input('模型名称（用于显示和路由匹配）', value=initial['model_name']).classes('flex-1')
-                endpoint_id = ui.input('Endpoint ID（豆包/火山引擎需要，可留空）', value=initial['endpoint_id']).classes('flex-1')
-            base_url = ui.input('API Base URL', value=initial['base_url']).classes('w-full')
+            # ── 卡 1：基本信息 ──
+            with ui.card().classes('w-full shadow-sm p-4'):
+                ui.label('基本信息').classes('text-sm font-bold text-purple-700')
+                with ui.row().classes('gap-4 w-full items-start'):
+                    with ui.column().classes('flex-1 gap-2'):
+                        ui.label('厂商').classes('text-xs text-gray-500 font-bold')
+                        merged_vendor_names = [vv['name'] for vv in _merged_vendors_list]
+                        initial_vendor = initial['vendor'] or ''
+                        vendor_sel = ui.select(
+                            merged_vendor_names + ['自定义新厂商'],
+                            value=initial_vendor if initial_vendor in merged_vendor_names else '自定义新厂商',
+                        ).classes('w-full')
+                        custom_vendor = ui.input('自定义厂商名称', value=initial_vendor if initial_vendor not in merged_vendor_names else '')
+                        custom_vendor.set_visibility(initial_vendor not in merged_vendor_names)
 
-            # 实际模型名已由 model_name/endpoint_id 决定，不再提供独立字段（避免写入 extra_json.model 污染调用）
-            balance_info_label = ui.label('💰 厂商余额: 未获取').classes('text-sm text-gray-600')
+                        def _on_vendor_change():
+                            custom_vendor.set_visibility(vendor_sel.value == '自定义新厂商')
+                        vendor_sel.on_value_change(_on_vendor_change)
+
+                        def vendor_val():
+                            if vendor_sel.value == '自定义新厂商':
+                                return (custom_vendor.value or '').strip()
+                            return vendor_sel.value or ''
+                    with ui.column().classes('flex-1 gap-2'):
+                        key_hint = '已配置密钥（留空则沿用）' if (account_id and initial['has_key']) else ('未配置密钥' if account_id else '粘贴 API 密钥')
+                        ui.label('API 密钥').classes('text-xs text-gray-500 font-bold')
+                        api_key = ui.input('', value='', password=True, password_toggle_button=True, placeholder=key_hint).classes('w-full')
+                with ui.row().classes('gap-4 w-full items-start'):
+                    with ui.column().classes('flex-1 gap-2'):
+                        ui.label('默认模型').classes('text-xs text-gray-500 font-bold')
+                        model_name = ui.input('用于路由展示的账号主名', value=initial['model_name']).classes('w-full')
+                    with ui.column().classes('flex-1 gap-2'):
+                        ui.label('Endpoint ID（豆包/火山引擎专用，可留空）').classes('text-xs text-gray-500 font-bold')
+                        endpoint_id = ui.input('', value=initial['endpoint_id']).classes('w-full')
+                base_url = ui.input('接口地址（Base URL，留空自动获取）', value=initial['base_url']).classes('w-full')
+                with ui.row().classes('items-center gap-4 w-full'):
+                    is_enable = ui.checkbox('启用该账号（停用后其模型不参与路由，模型状态保留）', value=initial['is_enable'])
+
+            # ── 卡 2：额度与计费 ──
+            with ui.card().classes('w-full shadow-sm p-4'):
+                with ui.row().classes('items-center gap-2 w-full'):
+                    ui.label('额度与计费').classes('text-sm font-bold text-purple-700')
+                    ui.space()
+                    balance_info_label = ui.label('余额：未获取').classes('text-sm text-gray-600')
+                with ui.row().classes('gap-4 w-full items-center'):
+                    balance_unit = ui.select(
+                        {'token': 'Tokens 额度（免费）', 'currency': '金额（元）'},
+                        label='额度单位',
+                        value=initial['balance_unit'],
+                    ).classes('w-56')
+                    balance_remaining = ui.number('初始额度（自动同步厂商余额；手动充值请在此重置）', value=initial['balance_remaining'], min=0).classes('flex-1')
+                currency_rate = ui.number('结算单价（元/1M tokens，估算消耗用）', value=initial['currency_rate'], min=0).classes('w-full')
+
+            # ── 卡 3：开通模型 ──
+            with ui.card().classes('w-full shadow-sm p-4'):
+                with ui.row().classes('items-center gap-2 w-full'):
+                    ui.label('开通模型（勾选后保存生效）').classes('text-sm font-bold text-purple-700')
+                    ui.space()
+                    ui.button('自动获取', on_click=lambda: asyncio.create_task(auto_fetch())).props('color=orange outline').classes('w-36')
+                model_area = ui.column().classes('w-full gap-1 mt-2')
+                model_checkboxes = {}  # model_name -> checkbox
+
+                def render_models(models: list):
+                    """渲染模型勾选列表（默认全选新增；编辑回显已开通）"""
+                    model_area.clear()
+                    model_checkboxes.clear()
+                    if not models:
+                        with model_area:
+                            ui.label('未发现可用模型；可直接填写默认模型后保存').classes('text-xs text-gray-400')
+                        return
+                    with model_area:
+                        for m in models:
+                            if isinstance(m, str):
+                                name, display = m, m
+                                checked = True
+                            else:
+                                name = m.model_name
+                                display = m.display_name or m.model_name
+                                checked = name in initial['selected_models']
+                            model_checkboxes[name] = ui.checkbox(f'{display}', value=checked)
+
+                if account_id:
+                    # 编辑：回显已开通模型（可继续追加）
+                    render_models(initial['selected_models'])
+                else:
+                    with model_area:
+                        ui.label('点击「自动获取」拉取该厂商可用模型；也可直接填写默认模型后保存').classes('text-xs text-gray-400')
 
             async def auto_fetch():
                 """自动获取：补 base_url、拉可用模型列表、拉厂商真实余额，实时填入表单"""
                 try:
                     from app.services.balance import fetch_balance, fetch_models
-                    if not vendor.value:
+                    if not vendor_val():
                         ui.notify('请先填写厂商名称', type='warning')
                         return
                     if not api_key.value:
-                        ui.notify('请先填写 API Key', type='warning')
+                        ui.notify('请先填写 API 密钥', type='warning')
                         return
                     ui.notify('正在自动获取...', type='info')
                     # 构造临时账号对象（仅用于探测）
                     tmp = ModelAccount(
-                        vendor=vendor.value,
+                        vendor=vendor_val(),
                         api_key_encrypted=encryption_service.encrypt(api_key.value),
                         base_url=base_url.value or None,
                     )
                     # 1. 拉模型列表
                     models = await fetch_models(tmp)
                     if models:
-                        ui.notify(f'发现 {len(models)} 个可用模型', type='info')
+                        render_models(models)
+                        ui.notify(f'发现 {len(models)} 个可用模型，已默认勾选', type='info')
                     # 2. 拉余额
                     unit, bal = await fetch_balance(tmp)
-                    balance_info_label.set_text(f'💰 厂商余额: {bal:.2f}（{unit}）')
+                    balance_info_label.set_text(f'厂商余额: {bal:.2f}（{unit}）')
                     balance_unit.value = unit  # 额度单位跟随厂商余额单位
                     # 3. 补 base_url（用默认映射）
                     if not base_url.value:
@@ -1709,37 +1958,16 @@ def show_account_dialog(account_id: Optional[int] = None):
                         guess = LLMClient()._get_api_url(tmp)
                         if guess:
                             base_url.value = guess
-                    ui.notify(f'✅ 已获取余额: {unit} {bal}，模型 {len(models)} 个', type='positive')
+                    ui.notify(f'已获取余额: {unit} {bal}，模型 {len(models)} 个', type='positive')
                 except Exception as e:
                     ui.notify(f'自动获取失败: {str(e)[:120]}', type='negative')
-
-            with ui.row().classes('items-center gap-3 w-full'):
-                ui.button('🔄 自动获取', on_click=auto_fetch).props('color=orange outline').classes('w-44')
-                balance_info_label.classes('text-sm text-gray-600 flex-1')
-
-            with ui.row().classes('items-center gap-4 w-full'):
-                priority = ui.number('优先级', value=initial['priority'], min=0, max=100).classes('w-40')
-                is_enable = ui.checkbox('启用', value=initial['is_enable'])
-
-            ui.separator()
-
-            with ui.row().classes('gap-4 w-full items-center'):
-                balance_unit = ui.select(['token', 'currency'], label='额度单位', value=initial['balance_unit']).classes('w-44')
-                balance_remaining = ui.number('初始额度（厂商余额智能同步；手动维护/充值请在此重置）', value=initial['balance_remaining'], min=0).classes('flex-1')
-            currency_rate = ui.number('厂商结算单价（元/1M token，currency 单位时用于估算金额消耗）', value=initial['currency_rate'], min=0).classes('w-full')
-
             async def save():
                 try:
-                    # 保留原 extra_json 其他键（不再写 model，模型由 model_name/endpoint_id 决定）
-                    orig_extra = {}
-                    if account_id:
-                        async with AsyncSessionLocal() as _s:
-                            _r = await _s.execute(select(ModelAccount).where(ModelAccount.id == account_id))
-                            _acc = _r.scalar_one_or_none()
-                            if _acc and isinstance(_acc.extra_json, dict):
-                                orig_extra = dict(_acc.extra_json)
-                    parsed_extra = dict(orig_extra)
-                    parsed_extra.pop('model', None)
+                    selected = [name for name, cb in model_checkboxes.items() if cb.value]
+                    final_model = selected[0] if selected else (model_name.value or 'chat')
+                    if not account_id and not api_key.value:
+                        ui.notify('请填写 API 密钥', type='warning')
+                        return
 
                     # 独立打开新 session 写库，避免复用已关闭的旧 session
                     async with AsyncSessionLocal() as session:
@@ -1752,30 +1980,25 @@ def show_account_dialog(account_id: Optional[int] = None):
                             if not account:
                                 ui.notify('账号不存在', type='negative')
                                 return
-                            account.vendor = vendor.value
+                            account.vendor = vendor_val()
                             if api_key.value:
                                 account.api_key_encrypted = encryption_service.encrypt(api_key.value)
-                            account.model_name = model_name.value
+                            account.model_name = final_model
                             account.endpoint_id = endpoint_id.value if endpoint_id.value else None
                             account.base_url = base_url.value
-                            if parsed_extra:
-                                account.extra_json = parsed_extra
-                            account.priority = int(priority.value)
                             account.is_enable = is_enable.value
                             account.balance_unit = balance_unit.value
                             if balance_remaining.value is not None:
                                 account.balance_remaining = float(balance_remaining.value)
                             account.currency_rate = float(currency_rate.value or 0)
                         else:
-                            # 新增
+                            # 新增：账号行（默认模型）+ 勾选模型 catalog 行
                             new_account = ModelAccount(
-                                vendor=vendor.value,
-                                api_key_encrypted=encryption_service.encrypt(api_key.value) if api_key.value else '',
-                                model_name=model_name.value,
+                                vendor=vendor_val(),
+                                api_key_encrypted=encryption_service.encrypt(api_key.value),
+                                model_name=final_model,
                                 endpoint_id=endpoint_id.value if endpoint_id.value else None,
                                 base_url=base_url.value,
-                                extra_json=parsed_extra,
-                                priority=int(priority.value),
                                 is_enable=is_enable.value,
                                 balance_unit=balance_unit.value,
                                 balance_remaining=float(balance_remaining.value) if balance_remaining.value is not None else None,
@@ -1784,19 +2007,36 @@ def show_account_dialog(account_id: Optional[int] = None):
                             session.add(new_account)
 
                         await session.commit()
-                        
-                        # 保存后如果账号启用，智能同步模型并计算向量
                         saved_account = account if account_id else new_account
-                        if saved_account.is_enable:
-                            try:
-                                model_display, is_new = await sync_model_to_catalog(saved_account, session)
-                                sync_msg = f'，模型 {model_display} 已同步并计算向量'
-                            except Exception as sync_err:
-                                sync_msg = f'，但模型同步失败: {sync_err}'
-                        else:
-                            sync_msg = ''
 
-                    ui.notify(f'保存成功{sync_msg}，正在刷新...', type='positive')
+                        # 同步勾选模型到 catalog（主从：每个勾选模型一行，挂本账号）
+                        from app.services.model_catalog_service import ModelCatalogService
+                        svc = ModelCatalogService(session)
+                        synced = 0
+                        # 默认模型即使未勾选也强制建档（路由候选以默认模型为兜底）
+                        if final_model not in selected:
+                            try:
+                                await svc.ensure_model(final_model, saved_account.vendor, account_id=saved_account.id)
+                                synced += 1
+                            except Exception:
+                                pass
+                        for m in selected:
+                            try:
+                                await svc.ensure_model(m, saved_account.vendor, account_id=saved_account.id)
+                                synced += 1
+                            except Exception:
+                                pass
+                        # 编辑：取消勾选的已有模型 → 停用（不删除，保留能力记录）
+                        if account_id:
+                            cat_result = await session.execute(
+                                select(ModelCatalog).where(ModelCatalog.account_id == saved_account.id)
+                            )
+                            for cat in cat_result.scalars().all():
+                                if cat.model_name not in selected:
+                                    cat.is_active = False
+                        await session.commit()
+
+                    ui.notify(f'保存成功，已开通 {synced} 个模型', type='positive')
                     dialog.close()
                     # 刷新页面
                     ui.run_javascript('window.location.reload()')
@@ -1805,7 +2045,24 @@ def show_account_dialog(account_id: Optional[int] = None):
 
             with ui.row().classes('w-full justify-end gap-2 mt-4'):
                 ui.button('取消', on_click=dialog.close).props('flat')
-                ui.button('💾 保存', on_click=save).props('color=primary')
+                ui.button('保存', on_click=save).props('color=primary')
+            # T5：编辑弹窗打开即拉厂商完整模型列表（已开通勾选、未开通不勾），失败静默回退已开通列表
+            if account_id and initial['has_key']:
+                async def _load_full_models():
+                    try:
+                        async with AsyncSessionLocal() as _s:
+                            _acc = (await _s.execute(select(ModelAccount).where(ModelAccount.id == account_id))).scalar_one_or_none()
+                        if not _acc:
+                            return
+                        from app.services.balance import fetch_models
+                        _models = await fetch_models(_acc)
+                        if _models:
+                            render_models(_models)
+                            ui.notify(f'已加载 {len(_models)} 个可用模型，勾选后保存即开通', type='info', timeout=3000)
+                    except Exception:
+                        pass  # 拉取失败保持已开通回显
+
+                ui.timer(0.2, _load_full_models, once=True)
 
         dialog.open()
 
@@ -1833,35 +2090,39 @@ def show_model_capability_dialog(model_id: int):
             examples = model.examples or []
             is_active = model.is_active
         
-        with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl'):
-            ui.label(f'🧠 模型能力详情 - {display_name}').classes('text-2xl font-bold')
-            ui.label(f'厂商: {vendor} | 类型: {model_type}').classes('text-sm text-gray-500')
-            vector_badge = ui.badge('🧠 向量已计算' if model.embedding_vector else '🧠 向量未计算', color='purple' if model.embedding_vector else 'grey').classes('text-xs')
-            ui.label(f'当前示例 {len(examples)} 条，用于计算能力向量').classes('text-xs text-gray-400')
-            
-            ui.separator()
-            
+        with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl p-4'):
+            # 标题 + 元信息一行
+            ui.label(f'模型能力详情 - {display_name}').classes('text-xl font-bold')
+            with ui.row().classes('items-center gap-2 mt-1 flex-wrap'):
+                ui.badge(f'厂商：{vendor}', color='blue').classes('text-xs')
+                ui.badge(f'类型：{_type_label(model_type)}', color='teal').classes('text-xs')
+                ui.badge('向量已计算' if model.embedding_vector else '向量未计算',
+                         color='purple' if model.embedding_vector else 'grey').classes('text-xs')
+                ui.badge(f'{len(examples)} 条示例', color='indigo').classes('text-xs')
+
+            ui.separator().classes('mt-3')
+
             # 能力描述
             ui.label('能力描述').classes('text-sm font-bold text-gray-600')
             desc_input = ui.textarea(
                 value=capability_description,
                 placeholder='描述这个模型擅长什么，用于智能路由...'
-            ).classes('w-full h-32')
-            
-            # 示例列表
-            ui.label(f'典型请求示例（{len(examples)} 条，用于计算能力向量）').classes('text-sm font-bold text-gray-600 mt-2')
+            ).props('autogrow').classes('w-full')
+
+            # 示例列表（每行一条，用于计算能力向量）
+            ui.label(f'典型请求示例（每行一条，用于计算能力向量）').classes('text-sm font-bold text-gray-600 mt-2')
             examples_text = '\n'.join(examples) if examples else ''
             examples_input = ui.textarea(
                 value=examples_text,
                 placeholder='每行一条示例请求...'
-            ).classes('w-full h-40 font-mono text-xs')
-            
-            # 启用状态
-            is_active_checkbox = ui.checkbox('启用此模型', value=is_active)
-            
-            ui.separator()
-            
-            with ui.row().classes('gap-2 justify-end'):
+            ).props('autogrow').classes('w-full font-mono text-xs')
+
+            ui.separator().classes('mt-3')
+
+            # 启用状态 + 操作按钮一行
+            with ui.row().classes('items-center gap-2 w-full'):
+                is_active_checkbox = ui.checkbox('启用此模型', value=is_active)
+                ui.space()
                 ui.button('取消', on_click=dialog.close).props('outline')
                 
                 async def save():
@@ -1882,7 +2143,7 @@ def show_model_capability_dialog(model_id: int):
                             # 刷新页面
                             ui.navigate.to('/admin/accounts')
                 
-                ui.button('💾 保存', on_click=save).props('color=primary')
+                ui.button('保存', on_click=save).props('color=primary')
         dialog.open()
     
     ui.timer(0.01, show, once=True)
@@ -2001,7 +2262,7 @@ def auto_config_account(account_id: int, fetch_balance: bool = False):
             
             await session.commit()
             
-            ui.notify(f"✅ 已自动获取 {account.vendor}\nBase URL: {config['base_url']}\n模型: {config['model']}{balance_info}", type='positive')
+            ui.notify(f"已自动获取 {account.vendor}\nBase URL: {config['base_url']}\n模型: {config['model']}{balance_info}", type='positive')
             # 刷新页面
             ui.run_javascript('setTimeout(() => window.location.reload(), 1200)')
     
@@ -2012,7 +2273,7 @@ def show_delete_dialog(account_id: int):
     """显示删除确认对话框"""
     async def show():
         with ui.dialog() as dialog, ui.card():
-            ui.label('⚠️ 确认删除').classes('text-xl font-bold text-red-600')
+            ui.label('确认删除').classes('text-xl font-bold text-red-600')
             ui.label('此操作不可恢复，确定要删除这个账号吗？').classes('text-gray-600')
             
             async def confirm_delete():
@@ -2031,7 +2292,7 @@ def show_delete_dialog(account_id: int):
             
             with ui.row().classes('mt-4 gap-2'):
                 ui.button('取消', on_click=dialog.close).props('flat')
-                ui.button('🗑️ 确认删除', on_click=confirm_delete).props('color=negative')
+                ui.button('确认删除', on_click=confirm_delete).props('color=negative')
         
     
         dialog.open()
@@ -2041,6 +2302,10 @@ def show_delete_dialog(account_id: int):
 def init_ui(fastapi_app):
     """初始化NiceGUI并挂载到FastAPI"""
     create_ui()
+    # 显式挂载静态目录（含路由省钱演示页等），容器内项目根 /app/static
+    _static_dir = Path(__file__).resolve().parent.parent.parent / 'static'
+    if _static_dir.exists():
+        app.add_static_files('/static', str(_static_dir))
     ui.run_with(
         fastapi_app,
         mount_path='/admin',

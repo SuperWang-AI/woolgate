@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: 回归测试
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: 运行 pytest 回归
+        run: python -m pytest tests/ -q --disable-warnings
+
+      - name: 检查敏感信息
+        run: |
+          set -e
+          echo "== 检查仓库内是否含 API Key/私钥痕迹 =="
+          if git grep -nE '(sk-[A-Za-z0-9]{20,}|ark-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----)' -- ':!*.md' ':!*.html' ':!tests/*' || true; then
+            echo "::warning::检测到疑似敏感信息，请人工确认是否应提交"
+          fi
+          echo "检查完成"

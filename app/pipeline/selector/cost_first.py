@@ -1,9 +1,15 @@
 """
-成本最低策略（cost-first）—— 企业版
+成本最优策略（cost-first）—— 选号排序主策略
 
-按模型单价从低到高选择账号。
-M1 阶段 ModelCatalog 价格表尚未启用，暂时按 priority 降序（与 free-first 行为一致）。
-TODO(M2): 接入 ModelCatalog.input_price/output_price，按预估成本排序。
+排序规则（产品确认 A4-4）：
+1. 免费优先：该账号下目标模型显式价格为 0 → 最优先
+2. 同模型比价：有价格（>0）的按单价升序，低价先用
+3. 余额/健康度：比价后再比剩余额度，额度多者优先
+4. id 降序：同分兜底，新加的账号优先（用户对新模型有期待）
+
+价格维度 = 账号 + 模型（ModelCatalog 行），由 executor 在调用前注入
+`_cost_input` / `_cost_output` 临时属性（cost-first 专用，不落库）。
+优先级（priority）字段已从界面退场，仅作历史兼容，不再参与排序。
 """
 import logging
 from typing import List, Optional, TYPE_CHECKING
@@ -17,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class CostFirstSelector(AccountSelector):
-    """成本最低：M1 暂用 priority 代替，M2 接入 ModelCatalog 价格表"""
+    """成本最优：免费优先 → 同模型比价 → 余额 → id 降序"""
 
     name = "cost-first"
 
@@ -30,9 +36,42 @@ class CostFirstSelector(AccountSelector):
         if not available_accounts:
             return None
 
-        # TODO(M2): 按 ModelCatalog 中的 input_price/output_price 计算预估成本排序
-        # 当前暂按 priority 降序（与 free-first 行为一致）
-        sorted_accounts = sorted(available_accounts, key=lambda x: x.priority, reverse=True)
-        selected = sorted_accounts[0]
-        logger.info(f"[cost-first] 选中账号: {selected.id} (M1暂用priority)")
+        # 与 free-first 一致：优先只候选目标模型账号；无匹配则回退全部（兜底可用性）
+        candidates = available_accounts
+        if model_name:
+            matched = [a for a in available_accounts if a.model_name == model_name]
+            if matched:
+                candidates = matched
+            else:
+                logger.warning(f"[cost-first] 无账号匹配模型 {model_name}，回退到全部可用账号")
+
+        if not candidates:
+            return None
+
+        selected = sorted(candidates, key=self._rank)[0]
+        inp = getattr(selected, "_cost_input", None)
+        logger.info(
+            f"[cost-first] 选中账号: {selected.id} ({selected.vendor}, 模型: {selected.model_name}, "
+            f"价格: {inp if inp is not None else '未知'})"
+        )
         return selected
+
+    def _rank(self, a: "ModelAccount") -> tuple:
+        """排序键（升序，小者优先）"""
+        inp = getattr(a, "_cost_input", None)
+        out = getattr(a, "_cost_output", None)
+
+        # 免费优先：显式 0/0 → L0；有价 → L1；未知 → L2（不冒险优先）
+        if inp is not None and out is not None and inp == 0 and out == 0:
+            level, price = 0, 0.0
+        elif (inp is not None and inp > 0) or (out is not None and out > 0):
+            level, price = 1, (inp if inp is not None else float("inf"))
+        else:
+            level, price = 2, float("inf")
+
+        # 余额/健康度：额度多者优先（None 视为 0）
+        bal = getattr(a, "balance_remaining", None)
+        bal = bal if bal is not None else 0.0
+
+        # id 降序：新加的账号优先
+        return (level, price, -bal, -a.id)

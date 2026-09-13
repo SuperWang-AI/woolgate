@@ -2,13 +2,15 @@
 WoolGate 配置管理
 分为启动配置(.env)和运行时业务配置(数据库)
 """
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 from pathlib import Path
 
 
 class Settings(BaseSettings):
     """启动配置 - 修改后需重启服务"""
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
     
     # 服务配置
     HOST: str = Field(default="0.0.0.0", description="监听地址")
@@ -25,11 +27,7 @@ class Settings(BaseSettings):
     
     # 加密密钥
     ENCRYPTION_KEY: str = Field(default="", description="AES加密密钥(Fernet格式)")
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-    
+
     @property
     def database_url(self) -> str:
         """SQLite数据库连接URL"""

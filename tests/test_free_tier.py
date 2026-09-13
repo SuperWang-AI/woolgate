@@ -100,19 +100,20 @@ async def test_auto_configure_full_flow(db_session, monkeypatch):
     assert res["models_synced"] == ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
     assert res["errors"] == []
 
-    # 账号落库 + 启用
+    # 账号落库（主从：一个 Key 一行）+ 启用
     accounts = (await db_session.execute(select(ModelAccount))).scalars().all()
-    assert len(accounts) == 2
+    assert len(accounts) == 1
     for acc in accounts:
         assert acc.is_enable is True
         assert acc.vendor == "Groq"
         assert acc.base_url == "https://api.groq.com/openai/v1"
         assert acc.api_key_encrypted  # 已加密
 
-    # 模型目录同步 + 能力描述 + 向量
+    # 模型目录同步（主从：N 模型行挂同一账号）+ 能力描述 + 向量
     catalogs = (await db_session.execute(select(ModelCatalog))).scalars().all()
     assert len(catalogs) == 2
     for cat in catalogs:
+        assert cat.account_id == accounts[0].id  # 全部挂到同一账号行
         assert cat.capability_description
         assert cat.examples
         assert cat.embedding_vector == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
@@ -248,7 +249,7 @@ def test_vendor_matches_alias():
 @pytest.mark.asyncio
 async def test_auto_configure_dedup_by_alias(db_session, monkeypatch):
     """真实场景：库里已有 '月之暗面 (Moonshot)' 账号 → 向导配置 moonshot 不重复建号"""
-    # 预置已有账号（模拟账号管理里的月之暗面）+ 对应 catalog（正常生产账号都有能力记录）
+    # 预置已有账号（模拟账号管理里的月之暗面）+ 对应 catalog（主从后 catalog 挂账号行）
     existing = ModelAccount(
         vendor="月之暗面 (Moonshot)",
         model_name="kimi-k2.6",
@@ -257,7 +258,9 @@ async def test_auto_configure_dedup_by_alias(db_session, monkeypatch):
         is_enable=True,
     )
     db_session.add(existing)
+    await db_session.flush()
     db_session.add(ModelCatalog(
+        account_id=existing.id,
         vendor="月之暗面 (Moonshot)",
         model_name="kimi-k2.6",
         display_name="Kimi K2.6",
@@ -401,8 +404,12 @@ async def test_auto_configure_key_reuse_when_blank(db_session, monkeypatch):
 
     from app.utils.encryption import encryption_service
     rows = (await db_session.execute(select(ModelAccount))).scalars().all()
-    keys = {r.model_name: encryption_service.decrypt(r.api_key_encrypted) for r in rows}
-    assert keys == {"llama-3.3-70b-versatile": "sk-old-1", "llama-3.1-8b-instant": "sk-old-1"}
+    # 主从：一个 Key 一行（默认模型 = 首个模型）；新增模型挂同一账号
+    assert len(rows) == 1
+    assert encryption_service.decrypt(rows[0].api_key_encrypted) == "sk-old-1"
+    cats = (await db_session.execute(select(ModelCatalog))).scalars().all()
+    assert {c.model_name for c in cats} == {"llama-3.3-70b-versatile", "llama-3.1-8b-instant"}
+    assert all(c.account_id == rows[0].id for c in cats)
 
 
 @pytest.mark.asyncio

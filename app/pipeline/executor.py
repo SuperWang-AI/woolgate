@@ -22,14 +22,15 @@ from typing import AsyncGenerator, Union
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import RequestLog
+from app.models.database import RequestLog, SystemConfig, ModelCatalog
 from app.services.router import AccountRouter
 from app.services.llm_client import llm_client
 from app.pipeline.context import PipelineContext
 from app.pipeline.config import PipelineConfig
-from app.pipeline.router import OffRouter, RulesRouter
+from app.pipeline.router import OffRouter
 from app.pipeline.router.vector import VectorRouter
 from app.pipeline.router.llm import LLMRouter
 from app.pipeline.context_manager import PassthroughManager
@@ -42,8 +43,6 @@ from app.pipeline.selector import (
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES = 3  # 与现有硬编码一致
-
 
 class Executor:
     """统一执行层——ModelRouter → AccountSelector → ContextManager → Executor 四层管线"""
@@ -52,17 +51,31 @@ class Executor:
         self.db = db
         self._router = AccountRouter(db)
         self._model_router = None  # 延迟初始化（M1 默认 OffRouter）
+        self._llm_router = None  # 延迟初始化（hybrid 策略使用）
         self._context_manager = None  # 延迟初始化（M1 默认 PassthroughManager）
         self._account_selector = None  # 延迟初始化（M1 默认 PinSelector）
+        self._max_retries = 3  # 默认值，execute 时从 SystemConfig.max_retry_count 覆盖
+        self._entry_name = None  # 本请求内缓存对外模型名，避免重复查库
+
+    async def _read_max_retries(self) -> int:
+        """读取全局最大重试次数（后台配置生效；异常时回退默认 3）"""
+        try:
+            result = await self.db.execute(
+                select(SystemConfig).where(SystemConfig.id == 1)
+            )
+            config = result.scalar_one_or_none()
+            if config and config.max_retry_count is not None:
+                return max(1, int(config.max_retry_count))
+        except Exception as e:
+            logger.warning(f"[executor] 读取重试次数配置失败: {e}")
+        return 3
 
     async def _init_strategies(self, ctx: PipelineContext) -> None:
         """根据 PipelineConfig 初始化 ModelRouter 和 ContextManager（带缓存）"""
         config = await PipelineConfig.load(self.db)
 
         # ① ModelRouter（选羊）
-        if config.router_strategy == "rules":
-            self._model_router = RulesRouter(self.db, config.router_config.rules_match_mode)
-        elif config.router_strategy == "vector":
+        if config.router_strategy == "vector":
             self._model_router = VectorRouter(config.router_config, db=self.db)
         elif config.router_strategy == "llm":
             self._model_router = LLMRouter(config.router_config, db=self.db)
@@ -113,6 +126,8 @@ class Executor:
         """
         # ① 初始化策略（带缓存，60秒内不重复查库）
         await self._init_strategies(ctx)
+        # 读取全局最大重试次数（后台配置生效）
+        self._max_retries = await self._read_max_retries()
 
         # ①.5 加载会话状态（滞回判定 + 摘要复用）
         session = None
@@ -122,12 +137,33 @@ class Executor:
             session = await session_svc.get_or_create(ctx.session_id)
             ctx.current_model = session.current_model  # 供 VectorRouter 滞回判定
 
-        # ② ModelRouter 路由决策（写入 ctx.target_model）
-        await self._model_router.route(ctx)
+        # ② ModelRouter 路由决策（三分支：斜杠命令 / 对外入口名 / 真实模型名）
+        if ctx.forced_model:
+            # 斜杠命令强制指定（最高优先级，路由内部处理）
+            await self._model_router.route(ctx)
+        else:
+            entry_name = await self._get_entry_name()
+            is_entry = (ctx.requested_model == entry_name) or (ctx.requested_model == "chat")
+            is_real = await self._is_real_model(ctx.requested_model)
+            if is_real:
+                # 客户端点名真实模型 → 直走，跳过智能路由改判
+                ctx.target_model = ctx.requested_model
+                ctx.router_strategy = "named"
+                ctx.router_decision = f"named: 客户端指定模型 {ctx.requested_model}"
+                logger.info(f"[executor] 点名直走模型: {ctx.requested_model}")
+            elif is_entry:
+                # 对外入口名 → 智能路由（向量/LLM 决策真实模型）
+                await self._model_router.route(ctx)
+            else:
+                # 既不是入口名也不在模型池 → 明确报错（不再笼统报"没有可用账号"）
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"未知模型: {ctx.requested_model}，请使用对外模型名（{entry_name}）或已配置的真实模型名",
+                )
 
-        # ②.5 hybrid 混合路由：向量低置信度时升级到 LLM 路由
+        # ②.5 hybrid 混合路由：向量低置信度时升级到 LLM 路由（点名直走时不升级）
         config = await PipelineConfig.load(self.db)
-        if config.router_strategy == "hybrid" and self._llm_router:
+        if config.router_strategy == "hybrid" and self._llm_router and ctx.router_strategy == "vector":
             confidence = getattr(ctx, "router_confidence", 0)
             threshold = config.router_config.threshold_high
             if confidence < threshold and not ctx.forced_model:
@@ -180,15 +216,46 @@ class Executor:
                 logger.info(f"模型切换（{prev_account.model_name} → {ctx.target_model}），跳过会话粘性")
 
         # 2. 过滤可用账号
-        available = await self._router._filter_available_accounts(
-            ctx.requested_model, ctx.estimated_tokens
-        )
+        # 入口名场景：按路由决策的 target_model（真实模型）过滤；决策模型不可用时回退全量候选
+        # 真实模型名场景：按客户端点名过滤
+        entry_name = await self._get_entry_name()
+        is_entry = (ctx.requested_model == entry_name) or (ctx.requested_model == "chat")
+        if is_entry:
+            filter_model = ctx.target_model
+            available = await self._router._filter_available_accounts(
+                filter_model, ctx.estimated_tokens
+            )
+            if not available and ctx.target_model:
+                # 智能兜底：路由决策的模型当前无可用账号（如本地模型停用/额度不足）
+                # → 回退全量可用账号，交给选择器（free-first 等）智能挑选
+                logger.warning(
+                    f"[executor] 路由决策模型 {ctx.target_model} 无可用账号，回退全量候选"
+                )
+                ctx.router_decision = f"{ctx.router_decision or ''}; fallback: 决策模型不可用，全量候选"
+                available = await self._router._filter_available_accounts(
+                    None, ctx.estimated_tokens
+                )
+        else:
+            filter_model = ctx.requested_model
+            available = await self._router._filter_available_accounts(
+                filter_model, ctx.estimated_tokens
+            )
 
         if not available:
             return None
 
         # 3. AccountSelector 选择（优先用路由决策后的 target_model，回退到 requested_model）
         target = ctx.target_model or ctx.requested_model
+
+        # cost-first 需要"账号+模型"维度的单价：注入临时属性供排序，不落库
+        if self._account_selector.name == "cost-first" and target:
+            from app.services.model_catalog_service import ModelCatalogService
+            _svc = ModelCatalogService(self.db)
+            for _a in available:
+                _row = await _svc.get_by_account_model(_a.id, target)
+                _a._cost_input = _row.input_price if _row else None
+                _a._cost_output = _row.output_price if _row else None
+
         account = self._account_selector.select(
             available,
             model_name=target,
@@ -196,7 +263,42 @@ class Executor:
         ctx.selector_strategy = self._account_selector.name
         if account:
             ctx.selector_decision = f"{self._account_selector.name}: 选中账号 {account.id}"
+            # 回退全量场景：路由决策模型与选中账号实际模型不一致 → 以账号实际模型为准
+            if is_entry and "fallback" in (ctx.router_decision or "") and account.model_name:
+                if account.model_name != ctx.target_model:
+                    logger.info(
+                        f"[executor] 目标模型修正 {ctx.target_model} → {account.model_name}（回退兜底）"
+                    )
+                    ctx.target_model = account.model_name
         return account
+
+    async def _get_entry_name(self) -> str:
+        """读取对外暴露的模型名（system_config.virtual_entry_name，默认 woolgate），本请求内缓存"""
+        if self._entry_name:
+            return self._entry_name
+        try:
+            result = await self.db.execute(
+                select(SystemConfig).where(SystemConfig.id == 1)
+            )
+            config = result.scalar_one_or_none()
+            if config and config.virtual_entry_name:
+                self._entry_name = config.virtual_entry_name
+                return self._entry_name
+        except Exception as e:
+            logger.warning(f"[executor] 读取对外模型名失败: {e}")
+        self._entry_name = "woolgate"
+        return self._entry_name
+
+    async def _is_real_model(self, model_name: str) -> bool:
+        """判断请求名是否为模型池中的真实模型名"""
+        if not model_name:
+            return False
+        result = await self.db.execute(
+            select(ModelCatalog.id)
+            .where(ModelCatalog.model_name == model_name)
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
 
     # ══════════════════════════════════════════════════════════
     # 流式
@@ -214,7 +316,7 @@ class Executor:
         last_error = None
         tried_accounts: set[int] = set()
 
-        for attempt in range(MAX_RETRIES):
+        for attempt in range(self._max_retries):
             account = await self._select_account(ctx)
 
             if not account:
@@ -321,24 +423,19 @@ class Executor:
         finally:
             response_time = int((time.time() - start_time) * 1000)
             
-            # 如果模型没有返回 usage，用字符数估算 token
+            # 如果模型没有返回 usage，用字符数估算 token（统一口径见 app/utils/token_estimator.py）
+            from app.utils.token_estimator import estimate_tokens
             if prompt_tokens == 0 and ctx.original_messages:
-                # 估算输入 token：中文约1.5字符/token，英文约4字符/token
                 input_text = ""
                 for msg in ctx.original_messages:
                     content = msg.get("content", "")
                     if isinstance(content, str):
                         input_text += content
                 if input_text:
-                    # 简单估算：中文字符数 + 英文单词数*1.3
-                    chinese_chars = sum(1 for c in input_text if '\u4e00' <= c <= '\u9fff')
-                    other_chars = len(input_text) - chinese_chars
-                    prompt_tokens = int(chinese_chars / 1.5 + other_chars / 4)
+                    prompt_tokens = estimate_tokens(input_text)
             
             if completion_tokens == 0 and full_content:
-                chinese_chars = sum(1 for c in full_content if '\u4e00' <= c <= '\u9fff')
-                other_chars = len(full_content) - chinese_chars
-                completion_tokens = int(chinese_chars / 1.5 + other_chars / 4)
+                completion_tokens = estimate_tokens(full_content)
 
             # A3: 隐式信号——客户端中断/输出后中断 vs 输出前失败（由外层决定是否切换）
             implicit_signal = None
@@ -367,7 +464,7 @@ class Executor:
         last_error = None
         tried_accounts: set[int] = set()
 
-        for attempt in range(MAX_RETRIES):
+        for attempt in range(self._max_retries):
             account = await self._select_account(ctx)
 
             if not account:
@@ -402,7 +499,7 @@ class Executor:
                 await self._router.mark_account_failed(account.id)
                 await self.db.commit()
 
-                if attempt == MAX_RETRIES - 1:
+                if attempt == self._max_retries - 1:
                     raise HTTPException(
                         status_code=503,
                         detail=f"所有账号均失败。最后错误: {last_error}",
@@ -439,9 +536,7 @@ class Executor:
                 account, ctx, 0, 0, "failed", error_message, response_time,
                 implicit_signal="switch_retry",
             )
-            # 冷却（与现有 non_stream_handler 一致）
-            await self._router.mark_account_failed(account.id)
-            await self.db.commit()
+            # 冷却统一由外层 _execute_non_stream 处理（避免双重冷却）
             raise
 
     # ══════════════════════════════════════════════════════════

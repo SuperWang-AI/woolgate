@@ -39,8 +39,8 @@ class FreeFirstSelector(AccountSelector):
             else:
                 logger.warning(f"[free-first] 无账号匹配模型 {model_name}，回退到全部可用账号")
 
-        # 按优先级降序排序
-        sorted_accounts = sorted(candidates, key=lambda x: x.priority, reverse=True)
+        # 按优先级降序排序（priority 已从界面退场，全为默认值时退化为 id 降序：新账号优先）
+        sorted_accounts = sorted(candidates, key=lambda x: (x.priority, x.id), reverse=True)
         selected = sorted_accounts[0]
         logger.info(f"[free-first] 选中账号: {selected.id} (模型: {selected.model_name}, 优先级: {selected.priority})")
         return selected

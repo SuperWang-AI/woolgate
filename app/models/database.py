@@ -1,8 +1,8 @@
 """
 数据库模型定义
 """
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, JSON
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, JSON, UniqueConstraint
+from sqlalchemy.orm import declarative_base
 from datetime import datetime
 
 Base = declarative_base()
@@ -30,12 +30,6 @@ class SystemConfig(Base):
     # 日志配置
     log_retention_days = Column(Integer, default=30, comment="日志保留天数")
     
-    # 额度预警
-    quota_warning_threshold = Column(Float, default=0.1, comment="额度预警阈值(0-1)")
-    
-    # 路由策略
-    default_route_strategy = Column(String(20), default="sequential", 
-                                   comment="sequential/round_robin")
 
     # ── M1 架构重构：模型路由（选羊）──
     router_strategy = Column(String(20), default="off",
@@ -69,18 +63,28 @@ class SystemConfig(Base):
     onboarded = Column(Boolean, default=False, comment="是否完成启动引导")
     onboard_profile = Column(String(100), nullable=True, comment="引导应用的推荐配置模板名")
 
+    # ── M5 对外模型名（网关统一入口）──
+    virtual_entry_name = Column(String(50), default="woolgate",
+                                comment="对外暴露的虚拟模型名（客户端统一入口，智能路由自动映射真实模型）")
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class ModelAccount(Base):
-    """模型账号表"""
+    """模型账号表——真账号行（一个 API Key 一行）
+
+    主从架构（T1 改造后）：
+    - 本表承载账号级信息：key/base_url/余额/健康度/厂商
+    - 模型级信息（能力/示例/向量/价格）在 ModelCatalog（挂 account_id）
+    - virtual_model/model_name 语义降级为"默认模型"（兼容旧查询；匹配优先走 ModelCatalog）
+    """
     __tablename__ = "model_account"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     
     # 基础信息
     vendor = Column(String(50), nullable=False, comment="厂商名称")
-    virtual_model = Column(String(100), default="chat", comment="虚拟模型名(客户端请求)")
+    virtual_model = Column(String(100), default="woolgate", comment="虚拟模型名(客户端请求)")
     model_name = Column(String(100), nullable=False, comment="真实模型名(用于显示和路由)")
     endpoint_id = Column(String(100), nullable=True, comment="Endpoint ID(如豆包/火山引擎需要,调用时优先使用)")
     api_key_encrypted = Column(Text, nullable=False, comment="加密后的API Key")
@@ -91,9 +95,6 @@ class ModelAccount(Base):
     
     # 调度配置
     priority = Column(Integer, default=50, comment="优先级(数值越大越优先)")
-    route_strategy = Column(String(20), default="sequential", 
-                           comment="sequential/round_robin")
-    
     # 重试配置
     retry_enable = Column(Boolean, default=True, comment="是否允许重试")
     cool_down_seconds = Column(Integer, default=300, comment="故障冷却时间")
@@ -198,13 +199,16 @@ class SessionState(Base):
 
 
 class ModelCatalog(Base):
-    """模型供应目录——模型能力清单，LLM 智能路由的核心配置（M4 重构后启用）"""
+    """模型供应目录——模型能力清单（账号×模型行：一账号 N 模型，同模型跨账号可多行、单价独立）"""
     __tablename__ = "model_catalog"
+    __table_args__ = (
+        UniqueConstraint('account_id', 'model_name', name='uq_catalog_account_model'),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, nullable=True, comment="关联账号ID（一个账号下多个模型）")
+    account_id = Column(Integer, nullable=False, comment="关联账号ID（一账号 N 模型；同模型跨账号可多行）")
     vendor = Column(String(50), nullable=False, comment="厂商名称")
-    model_name = Column(String(100), nullable=False, unique=True, comment="真实模型ID")
+    model_name = Column(String(100), nullable=False, comment="真实模型ID（唯一性由 account_id+model_name 保证）")
     model_type = Column(String(20), default="chat", comment="模型类型: chat/embedding/image/audio")
     display_name = Column(String(100), nullable=True, comment="展示名")
     capability_description = Column(Text, nullable=True, comment="能力描述（给 LLM 路由和 embedding 用）")
@@ -215,20 +219,6 @@ class ModelCatalog(Base):
     avg_latency = Column(Float, nullable=True, comment="平均延迟（秒），LLM 路由做延迟优化参考")
     context_window = Column(Integer, nullable=True, comment="上下文窗口")
     embedding_vector = Column(JSON, nullable=True, comment="能力描述的向量（List[float]，自动计算）")
-    is_active = Column(Boolean, default=True, comment="是否启用")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class RouterRule(Base):
-    """路由规则表——rules 策略的关键词/正则映射，管理界面可维护"""
-    __tablename__ = "router_rule"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    domain_tag = Column(String(50), nullable=False, comment="目标领域标签，如 code/general/creative")
-    keywords = Column(JSON, nullable=False, comment="关键词列表，如 ['python','代码','调试']")
-    pattern = Column(String(500), nullable=True, comment="正则表达式（可选，优先级高于关键词）")
-    priority = Column(Integer, default=50, comment="优先级（数值越大越先匹配）")
     is_active = Column(Boolean, default=True, comment="是否启用")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

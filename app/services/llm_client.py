@@ -49,6 +49,8 @@ class LLMClient:
     
     def __init__(self):
         self.timeout = httpx.Timeout(120.0, connect=10.0)
+        # 复用连接（FastAPI 单进程单事件循环下安全；减少 TLS 握手与连接建立开销）
+        self._client = httpx.AsyncClient(timeout=self.timeout)
     
     async def chat_completion_stream(
         self,
@@ -96,8 +98,7 @@ class LLMClient:
         logger.info(f"请求上游API: {url} model={api_model}")
         logger.debug(f"请求payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
         
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream("POST", url, headers=headers, json=payload) as response:
+        async with self._client.stream("POST", url, headers=headers, json=payload) as response:
                 if response.status_code >= 400:
                     body = await response.aread()
                     logger.error(f"上游API错误 {response.status_code}: {body.decode('utf-8', errors='replace')[:500]}")
@@ -165,13 +166,12 @@ class LLMClient:
         
         logger.info(f"请求上游API: {url} model={api_model}")
         
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(url, headers=headers, json=payload)
-            if response.status_code >= 400:
-                error_body = response.text
-                logger.error(f"上游API返回错误 {response.status_code}: {error_body}")
-            response.raise_for_status()
-            return response.json()
+        response = await self._client.post(url, headers=headers, json=payload)
+        if response.status_code >= 400:
+            error_body = response.text
+            logger.error(f"上游API返回错误 {response.status_code}: {error_body}")
+        response.raise_for_status()
+        return response.json()
     
     def _get_api_url(self, account: ModelAccount) -> str:
         """获取API地址"""

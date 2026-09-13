@@ -64,6 +64,7 @@ async def _ensure_columns(conn):
         ("edition", "VARCHAR(20) DEFAULT 'opensource'"),
         ("onboarded", "BOOLEAN DEFAULT 0"),
         ("onboard_profile", "VARCHAR(100)"),
+        ("virtual_entry_name", "VARCHAR(50) DEFAULT 'woolgate'"),
     ]
     for col, coltype in sys_migrations:
         if col not in cols:
@@ -141,8 +142,9 @@ async def init_database():
         # 轻量迁移（已有表补充新列）
         await _ensure_columns(conn)
         
-        # 启用WAL模式
-        await conn.execute(text("PRAGMA journal_mode=WAL"))
+        # 不使用 WAL 模式：OrbStack/虚拟化挂载卷上 WAL 的 mmap/shm 不稳定，
+        # 会引发 disk I/O error；保持默认 rollback journal（DELETE）模式更稳。
+        # 如需并发优化，改用连接池参数而非 WAL。
         
     logger.info("数据库表创建完成")
     

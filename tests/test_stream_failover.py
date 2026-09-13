@@ -66,25 +66,17 @@ async def collect_outputs(db, req, messages, kwargs=None, estimated=100):
     return "".join(outputs)
 
 
-def make_account(db, vendor, model_name, priority, **extra):
-    acc = ModelAccount(
-        vendor=vendor,
-        model_name=model_name,
-        api_key_encrypted=f"key-{vendor}",
-        priority=priority,
-        virtual_model="chat",
-        balance_unit="token",
-        balance_remaining=1000000,
-        **extra,
-    )
-    return acc
+async def make_account(db, vendor, model_name, priority, **extra):
+    from tests.conftest import seed_account
+    # 请求固定走虚拟模型 chat；catalog 行按 chat 建，才能被路由匹配
+    return await seed_account(db, vendor, "chat", priority=priority, **extra)
 
 
 @pytest.mark.asyncio
 async def test_failover_before_output(db_session, monkeypatch):
     """账号A输出前失败（如402）→ 自动切换账号B → 正常输出 + [DONE] + 日志扣费正确"""
-    acc_a = make_account(db_session, "vendor-a", "model-a", priority=90)
-    acc_b = make_account(db_session, "vendor-b", "model-b", priority=80)
+    acc_a = await make_account(db_session, "vendor-a", "model-a", priority=90)
+    acc_b = await make_account(db_session, "vendor-b", "model-b", priority=80)
     db_session.add_all([acc_a, acc_b])
     await db_session.commit()
 
@@ -122,7 +114,7 @@ async def test_failover_before_output(db_session, monkeypatch):
 @pytest.mark.asyncio
 async def test_no_failover_after_output(db_session, monkeypatch):
     """账号已输出后失败 → 不切换，返回 stream_error 事件（不输出 [DONE]）"""
-    acc_a = make_account(db_session, "vendor-a", "model-a", priority=90)
+    acc_a = await make_account(db_session, "vendor-a", "model-a", priority=90)
     db_session.add(acc_a)
     await db_session.commit()
 
@@ -143,7 +135,7 @@ async def test_no_failover_after_output(db_session, monkeypatch):
 @pytest.mark.asyncio
 async def test_all_fail_before_output(db_session, monkeypatch):
     """所有账号均输出前失败 → 返回 no_available_account 错误事件（不中断连接）"""
-    acc_a = make_account(db_session, "vendor-a", "model-a", priority=90)
+    acc_a = await make_account(db_session, "vendor-a", "model-a", priority=90)
     db_session.add(acc_a)
     await db_session.commit()
 

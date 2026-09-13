@@ -1,7 +1,7 @@
 """
 管线配置——从 SystemConfig 反序列化，带缓存。
 
-RouterConfig: ModelRouter 的完整配置（rules/vector/llm 三种策略的参数）
+RouterConfig: ModelRouter 的完整配置（vector/llm/hybrid 策略的参数）
 ContextConfig: ContextManager 的配置
 PinSelectorConfig: AccountSelector pin 策略的配置
 PipelineConfig: 汇总配置，从数据库加载并缓存 60 秒
@@ -29,11 +29,8 @@ _CACHE_TTL = 60  # 秒
 class RouterConfig:
     """ModelRouter 路由配置"""
 
-    strategy: str = "off"  # off / rules / vector / llm / hybrid
+    strategy: str = "hybrid"  # off / vector / llm / hybrid
     fallback_model: str = ""  # 兜底模型名，空=自动选第一个启用账号的模型
-
-    # ── rules 策略 ──
-    rules_match_mode: str = "any"  # any=命中任一 / all=全部命中
 
     # ── vector 策略：Embedding 后端 ──
     embedding_backend: str = "cloud"  # cloud / local
@@ -41,8 +38,6 @@ class RouterConfig:
     # cloud 配置
     embedding_cloud_provider: str = "aliyun"  # aliyun / openai / custom
     embedding_cloud_base_url: str = ""
-    embedding_cloud_api_key: str = ""  # 加密存储（已废弃，保留兼容）
-    embedding_account_id: int = 0  # 使用哪个账号的API Key（已废弃，保留兼容）
     embedding_model_id: int = 0  # 使用哪个embedding模型（ModelCatalog的ID），0=自动选第一个
     embedding_cloud_model: str = "text-embedding-v3"  # 模型名（从ModelCatalog获取）
     embedding_cloud_input_field: str = "input"
@@ -136,8 +131,13 @@ class PipelineConfig:
         selector_json = _safe_json_load(getattr(config, "selector_config_json", None))
         context_json = _safe_json_load(getattr(config, "context_config_json", None))
 
+        # 兼容容错：过滤存量配置中的已废弃字段（M2-M3 遗留），避免未知字段报错
+        router_json = _filter_known_fields(router_json, RouterConfig)
+        selector_json = _filter_known_fields(selector_json, PinSelectorConfig)
+        context_json = _filter_known_fields(context_json, ContextConfig)
+
         pipeline = cls(
-            router_strategy=getattr(config, "router_strategy", "off") or "off",
+            router_strategy=getattr(config, "router_strategy", "hybrid") or "hybrid",
             router_config=RouterConfig(**{**RouterConfig().__dict__, **router_json}),
             selector_strategy=getattr(config, "selector_strategy", "pin") or "pin",
             pin_config=PinSelectorConfig(**{**PinSelectorConfig().__dict__, **selector_json}),
@@ -172,3 +172,11 @@ def _safe_json_load(value: Any) -> Dict[str, Any]:
         except (json.JSONDecodeError, TypeError):
             return {}
     return {}
+
+
+def _filter_known_fields(data: Dict[str, Any], cfg_cls: Any) -> Dict[str, Any]:
+    """过滤配置 dict 中的未知字段（dataclass 严格校验，废弃字段直接剔除）"""
+    if not data:
+        return data
+    known = set(cfg_cls.__dataclass_fields__.keys())
+    return {k: v for k, v in data.items() if k in known}

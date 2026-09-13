@@ -70,18 +70,10 @@ async def collect_outputs(db, req, messages, kwargs=None, estimated=100, session
     return "".join(outputs)
 
 
-def make_account(db, vendor, model_name, priority, **extra):
-    acc = ModelAccount(
-        vendor=vendor,
-        model_name=model_name,
-        api_key_encrypted=f"key-{vendor}",
-        priority=priority,
-        virtual_model="chat",
-        balance_unit="token",
-        balance_remaining=1000000,
-        **extra,
-    )
-    return acc
+async def make_account(db, vendor, model_name, priority, **extra):
+    from tests.conftest import seed_account
+    # 请求固定走虚拟模型 chat；catalog 行按 chat 建，才能被路由匹配
+    return await seed_account(db, vendor, "chat", priority=priority, **extra)
 
 
 async def fetch_logs(db):
@@ -115,8 +107,8 @@ async def test_request_log_has_a3_columns(db_session):
 @pytest.mark.asyncio
 async def test_stream_failover_sets_switch_retry(db_session, monkeypatch):
     """输出前失败切换：失败日志 implicit_signal=switch_retry，成功日志无信号"""
-    acc_a = make_account(db_session, "vendor-a", "model-a", priority=90)
-    acc_b = make_account(db_session, "vendor-b", "model-b", priority=80)
+    acc_a = await make_account(db_session, "vendor-a", "model-a", priority=90)
+    acc_b = await make_account(db_session, "vendor-b", "model-b", priority=80)
     db_session.add_all([acc_a, acc_b])
     await db_session.commit()
 
@@ -151,7 +143,7 @@ async def test_stream_failover_sets_switch_retry(db_session, monkeypatch):
 @pytest.mark.asyncio
 async def test_stream_interrupted_signal(db_session, monkeypatch):
     """输出后中断：日志 implicit_signal=stream_interrupted"""
-    acc_a = make_account(db_session, "vendor-a", "model-a", priority=90)
+    acc_a = await make_account(db_session, "vendor-a", "model-a", priority=90)
     db_session.add(acc_a)
     await db_session.commit()
 
@@ -178,7 +170,7 @@ async def test_stream_interrupted_signal(db_session, monkeypatch):
 @pytest.mark.asyncio
 async def test_non_stream_failure_signal(db_session, monkeypatch):
     """非流式失败：日志 implicit_signal=switch_retry"""
-    acc_a = make_account(db_session, "vendor-a", "model-a", priority=90)
+    acc_a = await make_account(db_session, "vendor-a", "model-a", priority=90)
     db_session.add(acc_a)
     await db_session.commit()
 
@@ -311,7 +303,7 @@ async def test_response_headers_expose_request_id():
 async def test_client_cancel_marks_stream_interrupted(db_session, monkeypatch):
     """客户端主动断开（asyncio.CancelledError）→ 日志 failed + stream_interrupted"""
     import asyncio
-    acc_a = make_account(db_session, "vendor-a", "model-a", priority=90)
+    acc_a = await make_account(db_session, "vendor-a", "model-a", priority=90)
     db_session.add(acc_a)
     await db_session.commit()
 

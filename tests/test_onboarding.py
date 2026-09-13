@@ -1,13 +1,14 @@
 """
-A2 启动意图引导测试
+A2 启动意图引导测试（v2.1，09-11 重设计）
 
 覆盖：
 1. SystemConfig 表包含 onboarded / onboard_profile 字段
 2. 引导映射（纯函数 build_onboard_data）：
-   - 个人省钱 + 通用对话 + 免费云端 → hybrid / free-first / passthrough
-   - 团队企业 + 编程 + 付费 → hybrid / cost-first / summary（摘要配置就位）
-   - 创意/数据场景 → window 上下文
-   - 本地模型来源 → ollama_enabled=True
+   - 个人自用省钱 + 免费模型优先 + 都还没有 → hybrid / free-first / summary（云端免费摘要）
+   - 企业私有化部署 + 本地模型优先 + 本地就绪 → hybrid / cost-first / summary（本地摘要）+ ollama 开启
+   - 省钱方式选本地 → ollama_enabled=True
+   - 已有资源含本地（即使省钱选免费）→ 顺带开启 ollama
+   - 智能均衡为默认底座：无论省钱方式，路由恒 hybrid、上下文恒 summary（默认开启压缩）
 3. 应用后 profile 名称中文组合正确
 """
 import pytest
@@ -56,46 +57,64 @@ async def test_system_config_has_onboard_columns(db_session):
 # 2. 引导映射（纯函数）
 # ══════════════════════════════════════════════════════════
 
-def test_personal_chat_free_profile():
-    """个人省钱 + 通用对话 + 免费云端 → hybrid / free-first / passthrough"""
-    data, profile = build_onboard_data({"way": "personal", "scene": "chat", "source": "free"})
+def test_personal_free_none_profile():
+    """个人自用省钱 + 免费模型优先 + 都还没有 → hybrid / free-first / summary（云端免费摘要）"""
+    data, profile = build_onboard_data({"way": "personal", "saving": "free", "resource": "none"})
     assert data["router_strategy"] == "hybrid"
     assert data["selector_strategy"] == "free-first"
-    assert data["context_strategy"] == "passthrough"
+    assert data["context_strategy"] == "summary"
+    assert data["context_config_json"]["summary_provider"] == "cloud"
+    assert data["context_config_json"]["summary_model"] == "glm-4-flash"
     assert data["onboarded"] is True
-    assert "ollama_enabled" not in data  # 非本地来源不强制写
-    assert profile == "个人省钱·通用对话·免费云端"
+    assert "ollama_enabled" not in data  # 无本地资源不开启
+    assert profile == "个人自用省钱·免费模型优先·都还没有"
 
 
-def test_team_code_paid_profile():
-    """团队企业 + 编程开发 + 付费账号 → hybrid / cost-first / summary（带摘要配置）"""
-    data, profile = build_onboard_data({"way": "team", "scene": "code", "source": "paid"})
+def test_team_local_local_profile():
+    """企业私有化部署 + 本地模型优先 + 本地大模型就绪 → hybrid / cost-first / summary（本地摘要）+ ollama 开启"""
+    data, profile = build_onboard_data({"way": "team", "saving": "local", "resource": "local"})
     assert data["router_strategy"] == "hybrid"
     assert data["selector_strategy"] == "cost-first"
     assert data["context_strategy"] == "summary"
-    assert data["context_config_json"]["summary_model"] == "glm-4-flash"
-    assert data["context_config_json"]["summary_trigger_turns"] == 20
-    assert "ollama_enabled" not in data
-    assert profile == "企业使用·编程开发·付费账号"
-
-
-def test_local_source_enables_ollama():
-    """本地模型来源 → ollama_enabled=True"""
-    data, _ = build_onboard_data({"way": "personal", "scene": "creative", "source": "local"})
+    assert data["context_config_json"]["summary_provider"] == "local"
     assert data["ollama_enabled"] is True
-    assert data["context_strategy"] == "window"
-    assert data["context_config_json"] == {"window_turns": 10}
+    assert profile == "企业私有化部署·本地模型优先·本地大模型就绪"
 
 
-def test_data_scene_window():
-    """数据分析场景 → window 上下文"""
-    data, _ = build_onboard_data({"way": "personal", "scene": "data", "source": "free"})
-    assert data["context_strategy"] == "window"
+def test_local_saving_enables_ollama():
+    """省钱方式选本地 → ollama_enabled=True + 本地摘要"""
+    data, _ = build_onboard_data({"way": "personal", "saving": "local", "resource": "none"})
+    assert data["ollama_enabled"] is True
+    assert data["context_strategy"] == "summary"
+    assert data["context_config_json"]["summary_provider"] == "local"
+
+
+def test_local_resource_enables_ollama():
+    """已有资源含本地大模型（即使省钱选免费）→ 顺带开启 ollama，摘要仍走云端免费"""
+    data, _ = build_onboard_data({"way": "personal", "saving": "free", "resource": "local"})
+    assert data["ollama_enabled"] is True
+    assert data["context_strategy"] == "summary"
+    assert data["context_config_json"]["summary_provider"] == "cloud"
+
+
+def test_key_resource_no_ollama():
+    """已有厂商 API Key（无本地）→ 不强制开启 ollama"""
+    data, _ = build_onboard_data({"way": "personal", "saving": "free", "resource": "key"})
+    assert "ollama_enabled" not in data
+    assert data["context_strategy"] == "summary"
+
+
+def test_smart_base_always_on():
+    """智能均衡为默认底座：无论省钱方式，路由恒 hybrid、上下文恒 summary（压缩默认开启）"""
+    for saving in ("free", "local"):
+        data, _ = build_onboard_data({"way": "personal", "saving": saving, "resource": "none"})
+        assert data["router_strategy"] == "hybrid"
+        assert data["context_strategy"] == "summary"
 
 
 def test_router_config_has_hybrid_thresholds():
     """hybrid 路由配置带智能路由默认阈值（0.65/0.55）"""
-    data, _ = build_onboard_data({"way": "personal", "scene": "chat", "source": "free"})
+    data, _ = build_onboard_data({"way": "personal", "saving": "free", "resource": "none"})
     assert data["router_config_json"] == {"threshold_high": 0.65, "threshold_low": 0.55}
 
 

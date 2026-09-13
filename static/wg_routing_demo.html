@@ -1,0 +1,329 @@
+<html style="margin:0;padding:0;">
+<div style="background-color:transparent;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;">
+<style>
+.wg-root{box-sizing:border-box;max-width:1100px;margin:0 auto;padding:8px;color:#1f2937;}
+.wg-head{font-size:22px;font-weight:800;text-align:center;color:#111827;}
+.wg-sub{font-size:13px;text-align:center;color:#6b7280;margin:4px 0 12px;}
+.wg-stages{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;box-sizing:border-box;margin-bottom:10px;padding:8px 10px;border-radius:12px;background:#f8fafc;border:1px dashed #cbd5e1;}
+.wg-stage{box-sizing:border-box;font-size:13px;font-weight:700;color:#334155;padding:4px 10px;border-radius:8px;background:#fff;border:1px solid #e2e8f0;}
+.wg-sep{font-size:16px;color:#16a34a;font-weight:900;}
+.wg-main{display:flex;flex-wrap:wrap;gap:4px;align-items:stretch;box-sizing:border-box;background:linear-gradient(180deg,#eef2ff,#f8fafc);border:1px solid #e2e8f0;border-radius:18px;padding:14px;}
+.wg-slogan{flex:1 1 100%;text-align:center;font-size:13px;font-weight:700;color:#166534;margin:10px 0 2px;letter-spacing:.5px;}
+.wg-col{box-sizing:border-box;border-radius:14px;padding:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);}
+.wg-clients{flex:1 1 145px;min-width:0;background:linear-gradient(180deg,#eef2ff,#dbe4ff);border:1px solid #c7d2fe;}
+.wg-gate{flex:2 1 250px;min-width:0;display:flex;flex-direction:column;align-items:stretch;background:linear-gradient(180deg,#ecfdf5,#d1fae5);border:1px solid #a7f3d0;}
+.wg-models{flex:2 1 290px;min-width:0;background:linear-gradient(180deg,#fffbeb,#fef3c7);border:1px solid #fde68a;}
+.wg-flow{box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-width:0;padding:0 2px;color:#9ca3af;transition:color .3s;}
+.wg-flow .ar{font-size:26px;font-weight:900;line-height:1;color:#cbd5e1;transition:color .3s,transform .3s;}
+.wg-flow .lb{font-size:11px;color:#94a3b8;text-align:center;line-height:1.3;}
+.wg-flow.active{color:#16a34a;}
+.wg-flow.active .ar{color:#16a34a;}
+.wg-col-title{font-size:14px;font-weight:700;margin-bottom:10px;color:#374151;text-align:center;}
+.wg-client{box-sizing:border-box;background:#fff;color:#4338ca;border:1px solid #c7d2fe;border-radius:9px;text-align:center;font-size:13px;font-weight:600;padding:8px 4px;margin-bottom:8px;}
+.wg-client.active{border:2.5px solid #15803d;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;box-shadow:0 0 0 4px rgba(22,163,74,.35);transform:scale(1.04);}
+.wg-note{font-size:11px;color:#6b7280;text-align:center;line-height:1.5;margin-top:4px;}
+.wg-node{box-sizing:border-box;background:#f3f4f6;border:2px solid #e5e7eb;border-radius:11px;padding:9px 12px;text-align:center;font-size:14px;font-weight:700;color:#374151;transition:all .45s;}
+.wg-node.active{border:3px solid #15803d;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;box-shadow:0 0 0 4px rgba(22,163,74,.3),0 8px 22px rgba(22,163,74,.45);transform:scale(1.05);}
+.wg-sub2{font-size:11px;font-weight:400;color:#9ca3af;transition:color .3s;}
+.wg-node.active .wg-sub2{color:#d1fae5;}
+.wg-arrow{text-align:center;color:#9ca3af;font-size:13px;line-height:1.1;margin:2px 0;}
+.wg-dec{box-sizing:border-box;display:inline-block;margin:6px 3px 0;padding:5px 11px;border-radius:20px;background:#fff7ed;border:1.5px solid #fdba74;font-size:12px;font-weight:600;color:#9a3412;transition:all .45s;}
+.wg-dec.active{border:2.5px solid #d97706;background:#d97706;color:#fff;box-shadow:0 0 0 4px rgba(217,119,6,.35),0 6px 16px rgba(217,119,6,.5);}
+.wg-models-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:8px;box-sizing:border-box;}
+.wg-model{box-sizing:border-box;position:relative;border-radius:10px;padding:9px 6px;text-align:center;font-size:13px;font-weight:700;line-height:1.35;transition:all .3s;border:2px solid transparent;}
+.wg-model span{display:block;font-size:11px;font-weight:400;color:#6b7280;}
+.wg-model.local{border-color:#22d3ee;background:#ecfeff;color:#155e75;}
+.wg-model.free{border-color:#86efac;background:#f0fdf4;color:#14532d;}
+.wg-model.paid{border-color:#c4b5fd;background:#f5f3ff;color:#4c1d95;}
+.wg-model.hit{border:3px solid #f59e0b;background:#fffbeb;box-shadow:0 0 0 5px rgba(245,158,11,.45),0 10px 26px rgba(0,0,0,.28);transform:scale(1.09);z-index:2;}
+.wg-model.hit::after{content:'✓ 选中';position:absolute;top:-11px;right:-6px;background:#f59e0b;color:#fff;font-size:10px;font-weight:800;padding:2px 6px;border-radius:10px;box-shadow:0 2px 6px rgba(0,0,0,.25);}
+.wg-node.dim,.wg-dec.dim,.wg-model.dim,.wg-client.dim{opacity:.3;filter:grayscale(.7);}
+.wg-log{box-sizing:border-box;min-height:56px;margin:12px 0 10px;padding:12px 14px;border-radius:11px;background:#111827;color:#e5e7eb;font-size:13px;line-height:1.7;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all;}
+.wg-log .ok{color:#4ade80;font-weight:700;}
+.wg-ctrl{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;box-sizing:border-box;}
+.wg-btn{box-sizing:border-box;min-height:44px;padding:10px 16px;border-radius:10px;border:1.5px solid #d1d5db;background:#fff;color:#374151;font-size:14px;font-weight:600;cursor:pointer;transition:all .2s;}
+.wg-btn:hover{border-color:#16a34a;color:#166534;}
+.wg-btn.sel{border-color:#16a34a;background:#ecfdf5;color:#065f46;font-weight:700;}
+.wg-play{box-sizing:border-box;min-height:44px;padding:10px 22px;border-radius:10px;border:none;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;}
+.wg-play:hover{opacity:.9;}
+.wg-input{box-sizing:border-box;flex:1 1 260px;min-width:0;min-height:44px;padding:10px 12px;border-radius:10px;border:1.5px solid #d1d5db;font-size:14px;color:#1f2937;background:#fff;}
+.wg-input:focus{outline:none;border-color:#16a34a;box-shadow:0 0 0 3px rgba(22,163,74,.15);}
+.wg-chip{box-sizing:border-box;min-height:44px;padding:10px 14px;border-radius:10px;border:1.5px dashed #d1d5db;background:#f9fafb;color:#4b5563;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;}
+.wg-chip:hover{border-color:#16a34a;color:#065f46;background:#ecfdf5;}
+.wg-rules{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:12px;box-sizing:border-box;}
+.wg-rule{box-sizing:border-box;flex:1 1 200px;min-width:0;text-align:center;background:#fffbeb;border:1.5px solid #fcd34d;border-radius:11px;padding:9px 6px;font-size:12.5px;color:#78350f;line-height:1.45;}
+.wg-rule b{display:block;font-size:13.5px;}
+@media (max-width: 860px){
+  .wg-main{flex-direction:column;}
+  .wg-flow{flex-direction:row;width:100%;padding:2px 0;}
+  .wg-flow .ar{transform:rotate(90deg);}
+}
+</style>
+<div class="wg-root">
+  <div class="wg-head">WoolGate 智能路由 —— 每一次请求都在帮你省钱</div>
+  <div class="wg-sub">任意 OpenAI 兼容客户端接入 · 一个网关调度所有模型 · 全程无需用户理解模型差异</div>
+
+  <div class="wg-stages">
+    <span class="wg-stage">① 客户端</span><span class="wg-sep">➜</span>
+    <span class="wg-stage">② WoolGate 网关</span><span class="wg-sep">➜</span>
+    <span class="wg-stage">③ 模型池</span>
+    <span style="font-size:11px;color:#94a3b8;margin-left:6px;">请求 → 智能路由 → 分发到最省钱的模型</span>
+  </div>
+
+  <div class="wg-main">
+    <div class="wg-col wg-clients">
+      <div class="wg-col-title">客户端（任选其一）</div>
+      <div class="wg-client">OpenClaw</div>
+      <div class="wg-client">Dify</div>
+      <div class="wg-client">LobeChat</div>
+      <div class="wg-client">Open WebUI</div>
+      <div class="wg-note">OpenAI 兼容协议<br>零改造接入</div>
+    </div>
+
+    <div class="wg-flow" id="wg-flow1"><span class="ar">➜</span><span class="lb">请求<br>进入</span></div>
+
+    <div class="wg-col wg-gate">
+      <div class="wg-col-title">WoolGate 网关</div>
+      <div class="wg-node" id="wg-n1">① 请求进入</div>
+      <div class="wg-arrow">↓</div>
+      <div class="wg-node" id="wg-n2">② 智能分类<br><span class="wg-sub2">向量比对 + LLM 判定（用免费模型判题）</span></div>
+      <div class="wg-arrow">↓</div>
+      <div class="wg-node" id="wg-n3">③ 路由决策
+        <div><span class="wg-dec" id="wg-dec1">🆓 免费优先</span><span class="wg-dec" id="wg-dec2">🎯 领域匹配</span><span class="wg-dec" id="wg-dec3">💰 成本最低</span></div>
+      </div>
+      <div class="wg-arrow">↓</div>
+      <div class="wg-node" id="wg-n4">④ 上下文压缩<br><span class="wg-sub2">长会话自动摘要，主模型 token 更省</span></div>
+    </div>
+
+    <div class="wg-flow" id="wg-flow2"><span class="ar">➜</span><span class="lb">智能<br>分发</span></div>
+
+    <div class="wg-col wg-models">
+      <div class="wg-col-title">模型池</div>
+      <div class="wg-models-grid">
+        <div class="wg-model local" data-key="ollama">Ollama 本地<span>简单问答 · 零成本</span></div>
+        <div class="wg-model free" data-key="glm">GLM-4-Flash<span>通用 · 免费</span></div>
+        <div class="wg-model free" data-key="deepseek">DeepSeek<span>编程 · 免费</span></div>
+        <div class="wg-model free" data-key="doubao">豆包<span>创意 · 免费</span></div>
+        <div class="wg-model free" data-key="kimi">Kimi<span>长文 · 免费</span></div>
+        <div class="wg-model free" data-key="qwen">千问<span>通用/数据 · 免费</span></div>
+        <div class="wg-model paid" data-key="claude">Claude<span>编程强 · 付费</span></div>
+        <div class="wg-model paid" data-key="gpt">GPT<span>创作强 · 付费</span></div>
+      </div>
+    </div>
+
+    <div class="wg-slogan">⇄ 保持上下文连贯，不受模型切换影响</div>
+  </div>
+
+  <div class="wg-log" id="wg-log">输入请求（或点一个示例），然后 ▶ 播放，看网关怎么帮你省钱</div>
+
+  <div class="wg-ctrl">
+    <input class="wg-input" id="wg-input" type="text" value="帮我写一个 Python 快速排序" placeholder="输入你的请求，例如：帮我写一个 Python 快速排序" />
+    <button class="wg-chip" id="wg-chip-code">💻 编程示例</button>
+    <button class="wg-chip" id="wg-chip-chat">💬 闲聊示例</button>
+    <button class="wg-chip" id="wg-chip-creative">✍️ 创意示例</button>
+    <button class="wg-play" id="wg-play">▶ 播放</button>
+  </div>
+
+  <div class="wg-rules">
+    <div class="wg-rule"><b>🆓 免费优先</b>有免费额度优先用，不花一分钱</div>
+    <div class="wg-rule"><b>🎯 领域匹配</b>都免费时，选最擅长该领域的</div>
+    <div class="wg-rule"><b>💰 成本最低</b>同领域内选单价最低的</div>
+  </div>
+</div>
+
+<script>
+(function() {
+  try {
+    var DEMOS = {
+      code: {
+        label: '编程提问',
+        q: '"帮我写一个 Python 快速排序"',
+        steps: [
+          '② 向量比对 + LLM 判定 → 领域：编程',
+          '③ 免费优先：候选 = DeepSeek / GLM / 千问（免费额度）',
+          '③ 领域匹配：DeepSeek 编程专长匹配度 92%（最高）',
+          '③ 成本最低：同领域走免费额度，本次成本 ¥0'
+        ],
+        target: 'deepseek',
+        result: '本次请求 → 免费 DeepSeek。若误用 Claude 需约 ¥0.03，网关帮你省下这笔'
+      },
+      chat: {
+        label: '日常闲聊',
+        q: '"今天天气不错，有什么推荐的电影？"',
+        steps: [
+          '② 向量比对 + LLM 判定 → 领域：通用闲聊',
+          '③ 免费优先：候选 = GLM / 千问 / Kimi（免费额度）',
+          '③ 领域匹配：GLM 通用对话匹配度 88%（最高）',
+          '③ 成本最低：同领域走免费额度，本次成本 ¥0'
+        ],
+        target: 'glm',
+        result: '本次请求 → 免费 GLM。闲聊用免费模型即可，不浪费高端模型'
+      },
+      creative: {
+        label: '创意写作',
+        q: '"写一段科幻小说开头，带赛博朋克氛围"',
+        steps: [
+          '② 向量比对 + LLM 判定 → 领域：创意写作',
+          '③ 免费优先：候选 = 豆包 / Kimi / GLM（免费额度）',
+          '③ 领域匹配：豆包创作专长匹配度 90%（最高）',
+          '③ 成本最低：同领域走免费额度，本次成本 ¥0'
+        ],
+        target: 'doubao',
+        result: '本次请求 → 免费豆包。创作任务匹配其专长，效果不打折还免费'
+      },
+      local: {
+        label: '本地问答',
+        q: '"1+1 等于几？"',
+        steps: [
+          '② 向量比对 + LLM 判定 → 简单基础问答',
+          '③ 本地优先：Ollama 本地模型即可回答（零成本）',
+          '③ 无需消耗任何云端免费/付费额度',
+          '③ 复杂问题才升级云端，本次成本 ¥0'
+        ],
+        target: 'ollama',
+        result: '本次请求 → Ollama 本地模型。简单问题本地直答，云端额度留给更有价值的请求'
+      }
+    };
+    var stepTimers = [];
+    var state = { playing: false };
+    var EXAMPLES = {
+      'wg-chip-code': '帮我写一个 Python 快速排序',
+      'wg-chip-chat': '今天天气不错，有什么推荐的电影？',
+      'wg-chip-creative': '写一段科幻小说开头，带赛博朋克氛围'
+    };
+    function classify(text) {
+      var t = (text || '').toLowerCase();
+      if (/(python|javascript|java|c\+\+|golang|rust|代码|编程|排序|函数|算法|bug|修复|脚本|接口|sql|报错|调试)/.test(t)) return 'code';
+      if (/(小说|故事|文案|创意|剧本|诗歌|科幻|开头|宣传|广告|营销|段子)/.test(t)) return 'creative';
+      if (/^1\+1|等于几|简单|本地|1 \+ 1/.test(t)) return 'local';
+      return 'chat';
+    }
+
+    function el(id) { return document.getElementById(id); }
+    function all(sel) { return document.querySelectorAll(sel); }
+    function clearHighlights() {
+      all('.wg-node').forEach(function(n){ n.classList.remove('active','dim'); });
+      all('.wg-dec').forEach(function(n){ n.classList.remove('active','dim'); });
+      all('.wg-model').forEach(function(n){ n.classList.remove('hit','dim'); });
+      all('.wg-client').forEach(function(n){ n.classList.remove('active','dim'); });
+      all('.wg-flow').forEach(function(n){ n.classList.remove('active'); });
+    }
+    function dimAll() {
+      all('.wg-node').forEach(function(n){ n.classList.add('dim'); n.classList.remove('active'); });
+      all('.wg-dec').forEach(function(n){ n.classList.add('dim'); n.classList.remove('active'); });
+      all('.wg-model').forEach(function(n){ n.classList.add('dim'); n.classList.remove('hit'); });
+      all('.wg-client').forEach(function(n){ n.classList.add('dim'); n.classList.remove('active'); });
+      all('.wg-flow').forEach(function(n){ n.classList.remove('active'); });
+    }
+    function log(t, ok) {
+      var l = el('wg-log'); if (!l) return;
+      l.innerHTML = ok ? '<span class="ok">' + t + '</span>' : t;
+    }
+    function schedule() {
+      clearHighlights();
+      var d = Object.assign({}, DEMOS[state.key], { q: state.q });
+      log('▶ 请求：' + state.q + '\n网关开始判断该请求属于哪个领域…');
+      var seq = [
+        ['cli', 400, '第 0 步：客户端（OpenClaw / Dify / LobeChat / Open WebUI）发起请求…', ''],
+        ['n1', 6400, '① 请求进入网关，开始智能路由…', 'wg-flow1'],
+        ['n2', 8600, d.steps[0], ''],
+        ['n3', 10800, '③ 路由决策：免费优先 → 领域匹配 → 成本最低', ''],
+        ['dec1', 13000, d.steps[1], ''],
+        ['dec2', 15200, d.steps[2], ''],
+        ['dec3', 17400, d.steps[3], ''],
+        ['n4', 19600, '④ 长会话自动摘要压缩，主模型 token 消耗更低', ''],
+        ['hit', 21800, d.result, 'wg-flow2']
+      ];
+      seq.forEach(function(s) {
+        stepTimers.push(setTimeout(function() {
+          dimAll();
+          if (s[0] === 'cli') {
+            var clients = all('.wg-client');
+            var order = [0, 1, 2, 3, 0, 1, 2, 3];
+            order.forEach(function(idx, i) {
+              stepTimers.push(setTimeout(function() {
+                clients.forEach(function(c, j){ c.classList.add('dim'); c.classList.remove('active'); });
+                if (clients[idx]) { clients[idx].classList.remove('dim'); clients[idx].classList.add('active'); }
+              }, i * 400));
+            });
+            stepTimers.push(setTimeout(function() {
+              clients.forEach(function(c, j){ c.classList.add('dim'); c.classList.remove('active'); });
+              var pick = Math.floor(Math.random() * clients.length);
+              if (clients[pick]) { clients[pick].classList.remove('dim'); clients[pick].classList.add('active'); }
+              log('接入客户端：' + (clients[pick] ? clients[pick].textContent : '') + '（OpenAI 兼容，零改造）');
+            }, 3400));
+            if (s[2]) log(s[2]);
+          } else if (s[0] === 'hit') {
+            var m = document.querySelector('.wg-model[data-key="' + d.target + '"]');
+            if (m) { m.classList.remove('dim'); m.classList.add('hit'); }
+            if (s[3]) { var f = el(s[3]); if (f) f.classList.add('active'); }
+            log(s[2], true);
+          } else {
+            var node = el('wg-' + s[0]);
+            if (node) { node.classList.remove('dim'); node.classList.add('active'); }
+            if (s[0].indexOf('dec') === 0) {
+              var n3 = el('wg-n3');
+              if (n3) { n3.classList.remove('dim'); n3.classList.add('active'); }
+            }
+            if (s[3]) { var f = el(s[3]); if (f) f.classList.add('active'); }
+            if (s[2]) log(s[2]);
+          }
+        }, s[1]));
+      });
+      stepTimers.push(setTimeout(function() { nextDemo(); schedule(); }, 26800));
+    }
+    function startOver() {
+      stepTimers.forEach(function(t){ clearTimeout(t); });
+      stepTimers = [];
+      schedule();
+    }
+    var DEMO_KEYS = ['code', 'chat', 'creative', 'local'];
+    var lastAuto = -1;
+    function nextDemo() {
+      lastAuto = (lastAuto + 1) % DEMO_KEYS.length;
+      state.key = DEMO_KEYS[lastAuto];
+      state.q = DEMOS[state.key].q;
+      var input = el('wg-input');
+      if (input) input.value = DEMOS[state.key].q.replace(/"/g, '');
+    }
+    function play() {
+      var input = el('wg-input');
+      var q = (input && input.value || '').trim();
+      if (state.playing) {
+        // 播放中点击：中止当前，切换到下一个场景（或用户点过示例则按示例分类）
+        stepTimers.forEach(function(t){ clearTimeout(t); });
+        stepTimers = [];
+        if (forced) { state.key = classify(q); state.q = q; forced = false; }
+        else { nextDemo(); }
+        startOver();
+        return;
+      }
+      var isDefault = !forced && (!q || q === '帮我写一个 Python 快速排序');
+      if (isDefault) {
+        nextDemo();
+      } else {
+        state.key = classify(q);
+        state.q = q;
+      }
+      forced = false;
+      state.playing = true;
+      var p = el('wg-play'); if (p) p.textContent = '▶ 从头开始';
+      startOver();
+    }
+
+    var forced = false;
+    Object.keys(EXAMPLES).forEach(function(id) {
+      var c = el(id);
+      if (!c) return;
+      c.addEventListener('click', function() {
+        var i = el('wg-input'); if (i) i.value = EXAMPLES[id];
+        forced = true;
+      });
+    });
+    var playBtn = el('wg-play');
+    if (playBtn) playBtn.addEventListener('click', play);
+  } catch (e) { console.error('renderer error:', e); }
+})();
+</script>
+</div>
+</html>

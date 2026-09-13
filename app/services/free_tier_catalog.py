@@ -868,7 +868,8 @@ class FreeTierService:
             models = catalog_model_ids
         logger.info(f"[向导] {vendor['name']} 模型清单: {models}（真实探测 {len(real_models)} 个）")
 
-        # 2. Key 决策：留空 = 沿用该厂商已有 Key（新增模型同样沿用）；填写 = 统一更换该厂商全部模型的 Key
+        # 2. Key 决策（保持语义）：留空 = 沿用该厂商已有 Key；填写 = 统一更换该厂商全部账号的 Key
+        #    注意：reuse_account 必须在替换前记录（替换会把其他账号 key 改为新值，避免误复用）
         key_input = (api_key or "").strip()
         vendor_accs = (
             await self.db.execute(select(ModelAccount))
@@ -877,25 +878,54 @@ class FreeTierService:
         keys_updated = []
         if key_input:
             key_enc = encryption_service.encrypt(key_input)
+            reuse_account = next((a for a in vendor_accs if a.api_key_encrypted == key_enc), None)
             for a in vendor_accs:
                 if a.api_key_encrypted and a.api_key_encrypted != key_enc:
                     a.api_key_encrypted = key_enc
                     keys_updated.append(a.model_name)
         else:
             key_enc = next((a.api_key_encrypted for a in vendor_accs if a.api_key_encrypted), None)
+            reuse_account = next((a for a in vendor_accs if a.api_key_encrypted == key_enc), None)
         if key_enc is None:
             if vendor.get("no_key"):
                 key_enc = encryption_service.encrypt("")   # 本地模型无 Key
             else:
                 raise ValueError("该厂商尚未配置 Key，请先粘贴 API Key（或前往账号管理配置）")
+        vendor_name = vendor["name"]
         logger.info(
             f"[向导] {vendor['name']} Key 决策: "
-            + ("统一更换 " + str(len(keys_updated)) + " 个模型" if keys_updated else ("沿用已有 Key" if not key_input and vendor_accs else "新建"))
+            + ("统一更换 " + str(len(keys_updated)) + " 个账号" if keys_updated else ("沿用已有 Key" if not key_input and vendor_accs else "新建"))
         )
 
-        # 3. 逐个模型建账号 + 同步目录 + 计算向量
+        # 3. 模型已存在判定（主从后：vendor+model_name 的目录行存在 = 已配置，跨 Key 幂等跳过）
+        from app.models.database import ModelCatalog
+        all_cats = (await self.db.execute(select(ModelCatalog))).scalars().all()
+
+        def _model_exists(model_id: str) -> bool:
+            return any(
+                c.model_name == model_id and vendor_matches(c.vendor or "", vendor["id"])
+                for c in all_cats
+            )
+
+        pending = [m for m in models if not _model_exists(m)]
+
+        # 4. 账号行（主从：一个 API Key 一行）：仅当存在新增模型时才需要账号载体
+        target_account = None
+        if pending:
+            target_account = reuse_account
+            if target_account is None:
+                target_account = ModelAccountProxy.to_model(
+                    vendor_name=vendor_name,
+                    model_name=pending[0],   # 默认模型（兼容字段，匹配主要走 ModelCatalog）
+                    api_key_encrypted=key_enc,
+                    base_url=base_url,
+                )
+                self.db.add(target_account)
+                await self.db.flush()
+
+        # 5. 逐个模型同步目录（挂 account_id）+ 能力描述 + 计算向量
         result = {
-            "vendor": vendor["name"],
+            "vendor": vendor_name,
             "created_accounts": [],
             "skipped": [],
             "models_synced": [],
@@ -906,33 +936,10 @@ class FreeTierService:
 
         for model_id in models:
             try:
-                duplicated = next((a for a in vendor_accs if a.model_name == model_id), None)
-                if duplicated:
+                if _model_exists(model_id):
                     result["skipped"].append(model_id)
-                    # 防 catalog 缺失：已有账号但目录无该模型记录 → 补同步（能力描述+向量）
-                    try:
-                        from app.models.database import ModelCatalog
-                        cat = (await self.db.execute(
-                            select(ModelCatalog).where(ModelCatalog.model_name == model_id)
-                        )).scalar_one_or_none()
-                        if cat is None:
-                            await self._sync_model(duplicated, vendor, model_id)
-                            result["models_synced"].append(model_id)
-                    except Exception as e:
-                        logger.warning(f"[向导] 补目录 {model_id} 失败: {e}")
                     continue
 
-                account = ModelAccountProxy.to_model(
-                    vendor_name=vendor["name"],
-                    model_name=model_id,
-                    api_key_encrypted=key_enc,
-                    base_url=base_url,
-                )
-                self.db.add(account)
-                await self.db.flush()
-                result["created_accounts"].append(f"{vendor['name']} / {model_id}")
-
-                # 同步模型目录 + 能力描述 + 向量
                 display_override = None
                 if (
                     vendor.get("require_extra") == "endpoint_id"
@@ -941,8 +948,9 @@ class FreeTierService:
                     and vendor["models"]
                 ):
                     display_override = vendor["models"][0]["display"]
-                await self._sync_model(account, vendor, model_id, display_override)
+                await self._sync_model(target_account, vendor, model_id, display_override)
                 result["models_synced"].append(model_id)
+                result["created_accounts"].append(f"{vendor_name} / {model_id}")
             except Exception as e:
                 logger.error(f"[向导] 配置 {model_id} 失败: {e}", exc_info=True)
                 result["errors"].append(f"{model_id}: {str(e)[:100]}")
@@ -967,7 +975,11 @@ class FreeTierService:
         return result
 
     async def _sync_model(self, account, vendor: dict, model_id: str, display_override: str = None):
-        """建 ModelCatalog + 能力描述 + 示例 + 计算向量（多示例平均）"""
+        """建 ModelCatalog 行（挂 account_id）+ 能力描述 + 示例 + 计算向量
+
+        主从改造后：能力/示例/向量为模型级属性——同模型已有行则直接复制（不重算），
+        仅价格/激活状态行级独立；唯一性由 (account_id, model_name) 保证。
+        """
         from app.models.database import ModelCatalog
         from app.pipeline.config import PipelineConfig
         from app.services.embedding import EmbeddingService
@@ -975,19 +987,36 @@ class FreeTierService:
         # 从目录取该模型的信息
         model_meta = next((m for m in vendor["models"] if m["id"] == model_id), None)
 
+        # 同模型已有行（任意账号）→ 作为能力/向量原型（模型级属性跨账号复用）
+        proto_result = await self.db.execute(
+            select(ModelCatalog)
+            .where(ModelCatalog.model_name == model_id)
+            .limit(1)
+        )
+        proto = proto_result.scalar_one_or_none()
+
         catalog_result = await self.db.execute(
-            select(ModelCatalog).where(ModelCatalog.model_name == model_id)
+            select(ModelCatalog).where(
+                ModelCatalog.account_id == account.id,
+                ModelCatalog.model_name == model_id,
+            )
         )
         catalog = catalog_result.scalar_one_or_none()
         if not catalog:
             catalog = ModelCatalog(
+                account_id=account.id,
                 vendor=vendor["name"],
                 model_name=model_id,
-                display_name=display_override or (model_meta or {}).get("display") or model_id,
+                display_name=display_override
+                or (model_meta or {}).get("display")
+                or (proto.display_name if proto else model_id),
                 capability_description=(model_meta or {}).get("capability")
-                or f"{vendor['name']} {model_id} 模型，具备通用对话能力。",
-                capability_tags=(model_meta or {}).get("tags") or ["chat", "general"],
-                examples=(model_meta or {}).get("examples") or [],
+                or (proto.capability_description if proto else f"{vendor['name']} {model_id} 模型，具备通用对话能力。"),
+                capability_tags=(model_meta or {}).get("tags")
+                or (proto.capability_tags if proto else ["chat", "general"]),
+                examples=(model_meta or {}).get("examples")
+                or (proto.examples if proto else []),
+                embedding_vector=proto.embedding_vector if proto else None,
                 is_active=True,
             )
             self.db.add(catalog)
@@ -997,25 +1026,26 @@ class FreeTierService:
             catalog.capability_description = model_meta["capability"]
             catalog.embedding_vector = None
 
-        # 计算向量（多示例平均；无示例则用能力描述）
+        # 计算向量（多示例平均；无示例则用能力描述）——仅当本行无向量
         examples = catalog.examples or []
         cfg = await PipelineConfig.load(self.db)
         embed_svc = EmbeddingService(cfg.router_config, db=self.db)
-        if examples:
-            vectors = []
-            for ex in examples[:8]:
-                vec = await embed_svc.embed(ex)
+        if catalog.embedding_vector is None:
+            if examples:
+                vectors = []
+                for ex in examples[:8]:
+                    vec = await embed_svc.embed(ex)
+                    if vec:
+                        vectors.append(vec)
+                if vectors:
+                    dim = len(vectors[0])
+                    catalog.embedding_vector = [
+                        sum(v[i] for v in vectors) / len(vectors) for i in range(dim)
+                    ]
+            elif catalog.capability_description:
+                vec = await embed_svc.embed(catalog.capability_description)
                 if vec:
-                    vectors.append(vec)
-            if vectors:
-                dim = len(vectors[0])
-                catalog.embedding_vector = [
-                    sum(v[i] for v in vectors) / len(vectors) for i in range(dim)
-                ]
-        elif catalog.capability_description:
-            vec = await embed_svc.embed(catalog.capability_description)
-            if vec:
-                catalog.embedding_vector = vec
+                    catalog.embedding_vector = vec
 
 
 class ModelAccountProxy:
@@ -1036,7 +1066,7 @@ class ModelAccountProxy:
             model_name=model_name,
             api_key_encrypted=api_key_encrypted,
             base_url=base_url,
-            virtual_model="chat",
+            virtual_model="woolgate",
             priority=50,
             is_enable=True,
             balance_unit="token",

@@ -118,29 +118,57 @@ class ModelCatalogService:
         self.db = db
 
     async def list_active_models(self) -> List[ModelCatalog]:
-        """列出所有启用的模型（含能力向量）"""
+        """列出所有启用的模型（含能力向量）
+
+        主从后：同模型跨账号多行，模型池按 model_name 去重（能力相同），
+        取最早激活行作为代表；账号级选择由 executor 选号阶段处理。
+        """
         result = await self.db.execute(
-            select(ModelCatalog).where(ModelCatalog.is_active == True)  # noqa: E712
+            select(ModelCatalog)
+            .where(ModelCatalog.is_active == True)  # noqa: E712
+            .order_by(ModelCatalog.id.asc())
         )
-        return list(result.scalars().all())
+        seen: set = set()
+        models: List[ModelCatalog] = []
+        for m in result.scalars().all():
+            if m.model_name not in seen:
+                seen.add(m.model_name)
+                models.append(m)
+        return models
 
     async def get_by_model_name(self, model_name: str) -> Optional[ModelCatalog]:
-        """按模型名获取"""
+        """按模型名获取（主从后同模型可多行：取最新行，能力一致，避免 MultipleResultsFound）"""
         result = await self.db.execute(
-            select(ModelCatalog).where(ModelCatalog.model_name == model_name)
+            select(ModelCatalog)
+            .where(ModelCatalog.model_name == model_name)
+            .order_by(ModelCatalog.id.desc())
+            .limit(1)
         )
         return result.scalar_one_or_none()
 
-    async def ensure_model(self, model_name: str, vendor: str = "") -> ModelCatalog:
+    async def get_by_account_model(self, account_id: int, model_name: str) -> Optional[ModelCatalog]:
+        """按账号+模型查本账号行（主从语义：同模型多账号各一行）"""
+        result = await self.db.execute(
+            select(ModelCatalog).where(
+                ModelCatalog.account_id == account_id,
+                ModelCatalog.model_name == model_name,
+            ).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def ensure_model(self, model_name: str, vendor: str = "", account_id: int = None) -> ModelCatalog:
         """
-        确保模型存在于目录中，不存在则自动创建。
+        确保模型存在于目录中，不存在则自动创建（主从后必须挂账号行）。
 
         优先级：
-        1. 已存在 → 直接返回
-        2. 匹配预置模板 → 用预置能力描述创建
-        3. 未匹配 → 用通用描述创建（后续可由 LLM 生成更准确的描述）
+        1. 本账号行已存在 → 直接返回（examples 空则补预置示例）
+        2. 其他账号有同模型原型行 → 复制其能力/示例/单价/向量（不重算，决策 #1）
+        3. 匹配预置模板 → 用预置能力描述创建
+        4. 未匹配 → 用通用描述创建（后续可由 LLM 生成更准确的描述）
         """
-        existing = await self.get_by_model_name(model_name)
+        if account_id is None:
+            raise ValueError("ensure_model 需要 account_id（主从后模型行必须挂账号）")
+        existing = await self.get_by_account_model(account_id, model_name)
         if existing:
             # 已存在但 examples 为空，且预置模板中有 examples，智能补充
             if not existing.examples:
@@ -153,36 +181,56 @@ class ModelCatalogService:
                     logger.info(f"模型目录补充 examples: {model_name} ({len(preset['examples'])} 条)")
             return existing
 
-        # 匹配预置模板
-        preset = PRESET_MODEL_DESCRIPTIONS.get(model_name)
-        if preset:
+        # 原型行：任意账号的同模型行（复制能力/单价/向量，不重算）
+        proto = await self.get_by_model_name(model_name)
+        if proto and proto.account_id != account_id:
             model = ModelCatalog(
-                vendor=preset["vendor"],
+                account_id=account_id,
+                vendor=vendor or proto.vendor,
                 model_name=model_name,
-                display_name=model_name,
-                capability_description=preset["capability_description"],
-                capability_tags=preset["capability_tags"],
-                examples=preset.get("examples", []),
-                input_price=preset["input_price"],
-                output_price=preset["output_price"],
-                context_window=preset["context_window"],
+                display_name=proto.display_name or model_name,
+                capability_description=proto.capability_description,
+                capability_tags=proto.capability_tags,
+                examples=list(proto.examples or []),
+                input_price=proto.input_price,
+                output_price=proto.output_price,
+                context_window=proto.context_window,
+                embedding_vector=list(proto.embedding_vector) if proto.embedding_vector else None,
                 is_active=True,
             )
         else:
-            # 未匹配预置模板，用通用描述
-            model = ModelCatalog(
-                vendor=vendor or "unknown",
-                model_name=model_name,
-                display_name=model_name,
-                capability_description=f"{vendor} {model_name} 模型，具备通用对话和生成能力。",
-                capability_tags=["chat", "general"],
-                is_active=True,
-            )
+            # 匹配预置模板
+            preset = PRESET_MODEL_DESCRIPTIONS.get(model_name)
+            if preset:
+                model = ModelCatalog(
+                    account_id=account_id,
+                    vendor=preset["vendor"],
+                    model_name=model_name,
+                    display_name=model_name,
+                    capability_description=preset["capability_description"],
+                    capability_tags=preset["capability_tags"],
+                    examples=preset.get("examples", []),
+                    input_price=preset["input_price"],
+                    output_price=preset["output_price"],
+                    context_window=preset["context_window"],
+                    is_active=True,
+                )
+            else:
+                # 未匹配预置模板，用通用描述
+                model = ModelCatalog(
+                    account_id=account_id,
+                    vendor=vendor or "unknown",
+                    model_name=model_name,
+                    display_name=model_name,
+                    capability_description=f"{vendor} {model_name} 模型，具备通用对话和生成能力。",
+                    capability_tags=["chat", "general"],
+                    is_active=True,
+                )
 
         self.db.add(model)
         await self.db.commit()
         await self.db.refresh(model)
-        logger.info(f"模型目录新增: {model_name} (vendor={vendor})")
+        logger.info(f"模型目录新增: {model_name} (vendor={vendor}, account={account_id})")
         return model
 
     async def update_capability_description(
@@ -209,6 +257,60 @@ class ModelCatalogService:
         await self.db.commit()
         await self.db.refresh(model)
         return model
+
+    async def recompute_missing_embeddings(self, embedding_service) -> int:
+        """
+        仅重算缺失能力向量的启用模型（增量）。
+
+        启动时调用，避免每次重启全量重算白烧外部 embedding API 额度；
+        新模型创建时已实时计算向量，这里只补历史缺失。
+
+        Args:
+            embedding_service: EmbeddingService 实例
+
+        Returns:
+            更新的模型数量
+        """
+        from sqlalchemy import select
+        from app.models.database import ModelCatalog
+        result = await self.db.execute(
+            select(ModelCatalog)
+            .where(ModelCatalog.is_active == True)  # noqa: E712
+            .where(ModelCatalog.embedding_vector.is_(None))
+        )
+        models = result.scalars().all()
+        if not models:
+            logger.info("模型能力向量增量重算：无缺失，跳过")
+            return 0
+
+        count = 0
+        for model in models:
+            try:
+                # 优先用多示例平均向量
+                if model.examples:
+                    vectors = []
+                    for example in model.examples:
+                        vec = await embedding_service.embed(example)
+                        if vec:
+                            vectors.append(vec)
+                    if vectors:
+                        dim = len(vectors[0])
+                        avg_vector = [sum(v[i] for v in vectors) / len(vectors) for i in range(dim)]
+                        model.embedding_vector = avg_vector
+                        count += 1
+                        continue
+
+                # 回退：用能力描述计算向量
+                if model.capability_description:
+                    vector = await embedding_service.embed(model.capability_description)
+                    if vector:
+                        model.embedding_vector = vector
+                        count += 1
+            except Exception as e:
+                logger.warning(f"模型 {model.model_name} 向量计算失败: {e}")
+        await self.db.commit()
+        logger.info(f"模型能力向量增量重算完成: {count}/{len(models)} 个缺失向量模型")
+        return count
 
     async def recompute_all_embeddings(self, embedding_service) -> int:
         """

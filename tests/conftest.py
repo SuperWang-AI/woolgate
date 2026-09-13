@@ -7,10 +7,13 @@ async 测试与 async fixture 由插件统一管理，无需自定义 event_loop
 
 import os
 
+from cryptography.fernet import Fernet
+
 # 测试专用环境变量：config.py 强制校验无默认凭据（安全设计），
 # CI / 纯净环境无 .env 时注入测试值，保证测试可独立运行。
+# 注意：加密密钥动态生成（非静态文本），避免密钥文本出现在代码库中。
 os.environ.setdefault("GATEWAY_BEARER_TOKEN", "test-token")
-os.environ.setdefault("ENCRYPTION_KEY", "ZBaeSb4SFK0I7h61sFUS7oaCSpkNTGe-8xf-zh2phZg=")
+os.environ.setdefault("ENCRYPTION_KEY", Fernet.generate_key().decode())
 
 
 async def seed_account(db, vendor, model_name, **extra):

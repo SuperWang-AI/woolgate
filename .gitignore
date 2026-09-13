@@ -61,3 +61,5 @@ htmlcov/
 *.backup*
 *.bak
 migrate_*.py
+scripts/archive/
+_fs_test.txt

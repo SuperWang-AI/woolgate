@@ -106,6 +106,7 @@ curl -X POST http://localhost:8765/v1/chat/completions \
 │  路由        LLM 路由 / 向量路由 / 免费优先 / 成本优先  │
 │  选择器      免费优先 · 成本优先 · 粘性 · 轮询 · 兜底   │
 │  上下文      窗口 / 摘要压缩 / 直通                   │
+│  扩展层      9 生命周期插口 · 插件 SDK · SPI 组件池     │
 │  账号层      厂商 → 账号(Key) → 模型，加密存储         │
 │  管理后台    /admin（免费向导 / 账号 / 模型菜单 / 策略）│
 └──────────────────────────────────────────────────────┘
@@ -114,6 +115,8 @@ curl -X POST http://localhost:8765/v1/chat/completions \
   模型池（DeepSeek / 通义 / Kimi / 智谱 / 豆包 / Ollama …）
 ```
 
+> v0.6.0 起支持组件化/插件化：分类引擎、客户端适配器、会话存储、安全审核等均可通过 SPI 替换；插件通过 `WOOLGATE_PLUGINS` 环境变量加载，失败跳过不影响启动。详见 [ARCHITECTURE.md](ARCHITECTURE.md#七组件化插件化v060) 与 [docs/extensions/](docs/extensions/)。
+
 ## 项目结构
 
 ```
@@ -121,10 +124,13 @@ woolgate/
 ├── app/
 │   ├── models/          # 数据模型（厂商 / 账号 / 模型 / 日志）
 │   ├── pipeline/        # 请求管线（路由 / 选择器 / 上下文管理 / 执行器）
+│   ├── extensions/      # 扩展层（hooks / SDK / SPI / 插件加载器）
 │   ├── routes/          # OpenAI 兼容 API
-│   ├── services/        # 业务服务（免费向导 / 模型目录 / 账号 / 余额 / 会话）
+│   ├── services/        # 业务服务（免费向导 / 模型目录 / 账号 / 余额 / 会话 / 健康度）
 │   ├── ui/              # 管理后台
 │   └── config.py        # 配置管理
+├── docs/extensions/     # 扩展契约文档（01~06）
+├── examples/plugins/    # 示例插件模板
 ├── static/              # 静态资源（路由演示页等）
 ├── tests/               # 单元测试（pytest，可 CI 回归）
 ├── main.py              # 主应用入口

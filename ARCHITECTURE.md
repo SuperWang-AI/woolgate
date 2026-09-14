@@ -1,8 +1,8 @@
 # WoolGate 架构设计
 
-> 版本：v2.0（2026-09-13）
+> 版本：v2.1（2026-09-14，v0.6.0 组件化/插件化）
 > 状态：与实际代码一致
-> 对应：app/pipeline / app/services / app/models
+> 对应：app/pipeline / app/services / app/models / app/extensions
 
 ## 一、总体架构
 
@@ -18,11 +18,21 @@
 │              · 模型名解析：woolgate（智能路由） / 真实模型名（直连）   │
 │                                                                   │
 │  管线层      app/pipeline/executor.py                              │
-│              · 任务分类（LLM / 向量 / 规则）                        │
+│              · 任务分类（Classifier 组件，v0.6.0 可替换）             │
 │              · 路由决策（router）                                   │
 │              · 模型选择（selector）                                 │
 │              · 上下文管理（context_manager）                        │
 │              · 执行与重试（failover）                               │
+│              · 生命周期插口（9 hooks）+ 降级链                      │
+│                                                                   │
+│  扩展层      app/extensions/（v0.6.0 组件化/插件化预留）              │
+│              · hooks.py      — 9 个生命周期插口注册表                │
+│              · sdk.py        — 插件 SDK（register_hook/spi）         │
+│              · classifiers.py— 分类引擎 SPI（vector/llm/local）      │
+│              · security.py   — 安全审核插口（默认放行）              │
+│              · adapters.py   — 客户端适配器 SPI（OpenAI 兼容默认）    │
+│              · stores.py     — 会话存储 SPI（租户前缀隔离）          │
+│              · loader.py     — 插件加载器（WOOLGATE_PLUGINS）        │
 │                                                                   │
 │  路由        app/pipeline/router/                                   │
 │              · llm.py    — LLM 智能判题路由（分类+推荐）             │
@@ -108,11 +118,60 @@ app/
 │   ├── router/        #   路由决策（llm / vector / off）
 │   ├── selector/      #   选择器（free_first / cost_first / sticky / round_robin / pin / failover）
 │   ├── context_manager/ # 上下文（window / summary / passthrough）
-│   ├── executor.py    #   管线执行器
-│   └── config.py      #   管线配置
+│   ├── executor.py    #   管线执行器（9 插口挂载点 + 分类降级链）
+│   └── config.py      #   管线配置（含 classifier_engine）
+├── extensions/        # 扩展层（v0.6.0 组件化/插件化）
 ├── routes/            # API 路由
-├── services/          # 业务服务（免费向导 / 模型目录 / 账号 / 余额 / 会话 / 调度）
+├── services/          # 业务服务（免费向导 / 模型目录 / 账号 / 余额 / 会话 / 调度 / 健康度）
 ├── ui/                # 管理后台
-├── utils/             # 工具（加密 / token 估算）
+├── utils/             # 工具（加密 / token 估算 / 结构化日志）
 └── config.py          # 全局配置
 ```
+
+## 七、组件化/插件化（v0.6.0）
+
+### 心智模型
+
+> **层是虚拟标签，工位是真实类，插口是代码里的挂载点。**
+
+核心流水线为五个工位：分类（classify）→ 路由（route）→ 选号（select）→ 上下文（context）→ 执行（execute）。每个工位前后各有一个插口，加上请求开始/结束与异常，共 **9 个插口**：
+
+```
+request.started
+  └→ classify ──→ classify.after
+        └→ route.before → route ──→ route.after
+              └→ select ──→ select.after
+                    └→ context ──→ context.after
+                          └→ execute ──→ execute.after
+                                └→ request.finished
+      任意阶段异常 ──→ error.occurred
+```
+
+### SPI 可替换点
+
+| SPI | 接口 | 内置实现 | 替换价值 |
+|---|---|---|---|
+| 分类引擎 | `Classifier` | vector / llm / local | 免费/本地模型替代 embedding 分类 |
+| 账号选择 | `AccountSelector` | 6 种内置策略 | 企业自定义调度 |
+| 路由策略 | `ModelRouter` | off / vector / llm / hybrid | 行业专用路由 |
+| 上下文管理 | `ContextManager` | window / summary / passthrough | 企业级摘要/脱敏 |
+| 安全审核 | `SecurityGuard` | noop（默认放行） | 入站/出站内容审核 |
+| 客户端适配 | `ClientAdapter` | openai-compat | 接入非 OpenAI 协议 |
+| 会话存储 | `SessionStateStore` | sqlite | 企业 Redis 替换 |
+
+### 插件加载
+
+```bash
+# 环境变量，逗号分隔模块路径；失败跳过不影响启动
+WOOLGATE_PLUGINS=examples.plugins.minimal_plugin python main.py
+```
+
+### 关键设计决策（v0.6.0 新增）
+
+1. **分类是辅助，可用性是底线**：分类引擎故障 → 自动降级 fallback 模型直走，绝不因分类故障拒绝服务（A5）。
+2. **用户覆盖优先级**：斜杠命令 > 请求头 `X-Model-Preference` > API Key 默认模型 > 智能分类。
+3. **钩子异常隔离**：单个钩子故障不影响管线；before 钩子可主动阻断（HookBlocked → 4xx），after 钩子仅可改写白名单决策字段。
+4. **租户前缀**：多租户下 session_id 形如 `{tenant_id}:{session_id}`，杜绝跨租户会话串数据（A6）。
+5. **默认零开销**：无插件注册时钩子链直接返回；内置分类器行为与 v0.5.0 完全一致。
+
+契约文档见 `docs/extensions/01~06`。

@@ -17,13 +17,26 @@ logger = logging.getLogger(__name__)
 
 
 class SessionStateService:
-    """会话状态服务（SQLite 持久化）"""
+    """会话状态服务（SQLite 持久化）
 
-    def __init__(self, db: AsyncSession):
+    v0.6.0 租户隔离（契约 06）：多租户下 session_id 套用 {tenant_id}:{session} 前缀，
+    单租户（tenant_id=None）行为与 v0.5.0 完全一致。
+    """
+
+    def __init__(self, db: AsyncSession, tenant_id: Optional[str] = None):
         self.db = db
+        self.tenant_id = tenant_id
+
+    def _scoped(self, session_id: str) -> str:
+        """应用租户前缀；session_id 为空原样返回"""
+        if not session_id:
+            return session_id
+        from app.extensions.stores import build_scoped_session_id
+        return build_scoped_session_id(self.tenant_id, session_id)
 
     async def get_or_create(self, session_id: str) -> SessionState:
-        """获取或创建会话状态"""
+        """获取或创建会话状态（session_id 自动带租户前缀）"""
+        session_id = self._scoped(session_id)
         if not session_id:
             # 无 session_id 时返回临时状态（不持久化）
             return SessionState(session_id="")
@@ -61,6 +74,7 @@ class SessionStateService:
         increment_turn: bool = False,
     ) -> None:
         """更新会话状态（仅更新非 None 字段）"""
+        session_id = self._scoped(session_id)
         if not session_id:
             return
 

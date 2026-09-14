@@ -8,7 +8,35 @@
 
 ### 待发布
 - 英文 README 简介
-- 镜像 CI 自动构建（GHCR）
+
+## [0.6.0] - 2026-09-14（组件化/插件化）
+
+### 新增（扩展机制 A1-A8）
+- **生命周期插口（9 hooks）**：request.started / classify.after / route.before / route.after / select.after / context.after / execute.after / request.finished / error.occurred，before 可阻断、after 可观测
+- **插件 SDK**：`register_hook` / `register_spi` / `PluginContext`（命名空间隔离 + 决策字段白名单）+ 插件加载器（`WOOLGATE_PLUGINS` 环境变量，失败跳过不影响启动）
+- **分类引擎组件化（A4/A5）**：Classifier SPI（vector/llm/local）+ 工厂（auto 推断/显式指定/hybrid 升级）+ 降级链（分类故障 → fallback 直走，绝不拒绝服务）
+- **用户模型覆盖**：请求头 `X-Model-Preference`（优先级：斜杠命令 > 请求头 > API Key 默认模型 > 智能分类）
+- **安全审核插口（A8）**：SecurityGuard SPI + 默认 noop 放行（企业版可注入入站/出站审核）
+- **客户端适配器 SPI（A7）**：ClientAdapter + OpenAI 兼容默认实现（行为零变化）
+- **租户隔离预留（A6）**：会话 session_id 租户前缀 `{tenant_id}:{session}` + SessionStateStore SPI（SQLite 默认/Redis 预留）
+- **统一上下文对象（A1）**：PipelineContext 扩展（classify_engine/degraded/extensions/stage/成本字段），`to_log_dict()` 稳定契约
+
+### 新增（可观测性 B1/B2）
+- **成本核算**：按账号+模型单价计算估算/实际金额，随请求日志与结构化事件日志输出
+- **厂商健康度**：滑动窗口成功率/延迟统计（近 10 分钟），供选号与省钱看板使用
+- **结构化日志**：`log_event` / `ctx_event` JSON 行日志工具
+
+### 重构与加固（B3）
+- Executor 路由决策三分支重构（forced/override/named/智能分类），分支优先级显式化
+- `ctx.account` 字段补全（原日志中恒为 None 的缺口修复）
+
+### 文档（B4）
+- 扩展契约 6 篇（`docs/extensions/01~06`）
+- ARCHITECTURE.md v2.1 组件化/插件化章节
+- CONTRIBUTING.md 插件开发指南 + 示例插件模板（`examples/plugins/minimal_plugin.py`）
+
+### 测试
+- 新增 `tests/test_extensions.py`（钩子优先级/异常隔离/SPI/命名空间/降级/租户前缀/健康度/结构化日志）
 
 ## [0.5.0] - 2026-09-13（开源首发）
 
@@ -69,6 +97,7 @@
 - 统一余额逻辑（厂商余额 + 每日同步 + 用量统计）
 - 管理后台 4 页 tab 结构
 
-[Unreleased]: https://github.com/SuperWang-AI/woolgate/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/SuperWang-AI/woolgate/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/SuperWang-AI/woolgate/releases/tag/v0.6.0
 [0.5.0]: https://github.com/SuperWang-AI/woolgate/releases/tag/v0.5.0
 [0.1.0]: https://github.com/SuperWang-AI/woolgate/commits/v0.5.0

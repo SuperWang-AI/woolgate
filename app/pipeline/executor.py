@@ -28,7 +28,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import RequestLog, SystemConfig, ModelCatalog
 from app.services.router import AccountRouter
 from app.services.llm_client import llm_client
-from app.pipeline.context import PipelineContext
+from app.services.health import health_tracker
+from app.utils.log_utils import ctx_event
+from app.pipeline.context import PipelineContext, Stage
 from app.pipeline.config import PipelineConfig
 from app.pipeline.router import OffRouter
 from app.pipeline.router.vector import VectorRouter
@@ -40,6 +42,15 @@ from app.pipeline.selector import (
     AccountSelector, FreeFirstSelector, RoundRobinSelector,
     PinSelector, StickySelector, FailoverSelector, CostFirstSelector,
 )
+from app.extensions.classifiers import ClassifierFactory, ClassificationResult
+from app.extensions.hooks import (
+    HOOK_REQUEST_STARTED, HOOK_CLASSIFY_AFTER, HOOK_ROUTE_BEFORE,
+    HOOK_ROUTE_AFTER, HOOK_SELECT_AFTER, HOOK_CONTEXT_AFTER,
+    HOOK_EXECUTE_AFTER, HOOK_REQUEST_FINISHED, HOOK_ERROR_OCCURRED,
+    HookBlocked,
+)
+from app.extensions.sdk import emit_hooks
+from app.extensions.security import get_security_guard, SecurityBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +61,8 @@ class Executor:
     def __init__(self, db: AsyncSession):
         self.db = db
         self._router = AccountRouter(db)
-        self._model_router = None  # 延迟初始化（M1 默认 OffRouter）
-        self._llm_router = None  # 延迟初始化（hybrid 策略使用）
+        self._classifier = None  # 主分类器（v0.6.0 组件化，替代 _model_router）
+        self._classifier_upgrade = None  # hybrid 升级分类器（低置信度时用）
         self._context_manager = None  # 延迟初始化（M1 默认 PassthroughManager）
         self._account_selector = None  # 延迟初始化（M1 默认 PinSelector）
         self._max_retries = 3  # 默认值，execute 时从 SystemConfig.max_retry_count 覆盖
@@ -71,21 +82,16 @@ class Executor:
         return 3
 
     async def _init_strategies(self, ctx: PipelineContext) -> None:
-        """根据 PipelineConfig 初始化 ModelRouter 和 ContextManager（带缓存）"""
+        """根据 PipelineConfig 初始化分类器 / ContextManager / AccountSelector（带缓存）"""
         config = await PipelineConfig.load(self.db)
 
-        # ① ModelRouter（选羊）
-        if config.router_strategy == "vector":
-            self._model_router = VectorRouter(config.router_config, db=self.db)
-        elif config.router_strategy == "llm":
-            self._model_router = LLMRouter(config.router_config, db=self.db)
-        elif config.router_strategy == "hybrid":
-            # 混合路由：先向量，低置信度升级到 LLM（在 execute 中处理）
-            self._model_router = VectorRouter(config.router_config, db=self.db)
-            self._llm_router = LLMRouter(config.router_config, db=self.db)
-        else:
-            self._model_router = OffRouter()
-            self._llm_router = None
+        # ① 分类引擎（v0.6.0 组件化：vector/llm/local/hybrid，含自定义 SPI）
+        self._classifier, self._classifier_upgrade = ClassifierFactory.create(
+            config.router_strategy,
+            config.router_config.classifier_engine,
+            config.router_config,
+            db=self.db,
+        )
 
         # ③ ContextManager（上下文）
         if config.context_strategy == "window":
@@ -117,76 +123,189 @@ class Executor:
         """
         统一执行入口。
 
-        管线顺序：ModelRouter → 账号选择循环 → ContextManager → 上游调用
-        M1 默认 router=off, context=passthrough，行为与现有完全一致。
-
-        Returns:
-            流式: AsyncGenerator（yield SSE chunks）
-            非流式: JSONResponse
+        管线顺序：request.started → 安全入站审核 → 路由决策(分类) → 选号 → 上下文 → 上游调用
+        v0.6.0 起挂载 9 个生命周期插口 + 分类引擎组件化 + 降级链。
         """
-        # ① 初始化策略（带缓存，60秒内不重复查库）
-        await self._init_strategies(ctx)
-        # 读取全局最大重试次数（后台配置生效）
-        self._max_retries = await self._read_max_retries()
+        _t0 = time.time()
+        ctx.stage = Stage.REQUEST
+        try:
+            # ① 初始化策略（带缓存，60秒内不重复查库）
+            await self._init_strategies(ctx)
+            # 读取全局最大重试次数（后台配置生效）
+            self._max_retries = await self._read_max_retries()
 
-        # ①.5 加载会话状态（滞回判定 + 摘要复用）
-        session = None
-        if ctx.session_id:
-            from app.services.session_service import SessionStateService
-            session_svc = SessionStateService(self.db)
-            session = await session_svc.get_or_create(ctx.session_id)
-            ctx.current_model = session.current_model  # 供 VectorRouter 滞回判定
+            # ①.1 请求开始插口（审计/租户注入/限流）
+            await emit_hooks(HOOK_REQUEST_STARTED, ctx)
 
-        # ② ModelRouter 路由决策（三分支：斜杠命令 / 对外入口名 / 真实模型名）
-        if ctx.forced_model:
-            # 斜杠命令强制指定（最高优先级，路由内部处理）
-            await self._model_router.route(ctx)
-        else:
-            entry_name = await self._get_entry_name()
-            is_entry = (ctx.requested_model == entry_name) or (ctx.requested_model == "chat")
-            is_real = await self._is_real_model(ctx.requested_model)
-            if is_real:
-                # 客户端点名真实模型 → 直走，跳过智能路由改判
-                ctx.target_model = ctx.requested_model
-                ctx.router_strategy = "named"
-                ctx.router_decision = f"named: 客户端指定模型 {ctx.requested_model}"
-                logger.info(f"[executor] 点名直走模型: {ctx.requested_model}")
-            elif is_entry:
-                # 对外入口名 → 智能路由（向量/LLM 决策真实模型）
-                await self._model_router.route(ctx)
-            else:
-                # 既不是入口名也不在模型池 → 明确报错（不再笼统报"没有可用账号"）
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"未知模型: {ctx.requested_model}，请使用对外模型名（{entry_name}）或已配置的真实模型名",
-                )
+            # ①.2 安全入站审核（默认放行；企业版注入实现，SecurityBlocked → 403）
+            try:
+                guard = get_security_guard()
+                await guard.check_input(ctx)
+            except SecurityBlocked as e:
+                raise HTTPException(status_code=e.status_code, detail=e.reason)
+            ctx.stage_timings_ms[Stage.REQUEST] = int((time.time() - _t0) * 1000)
 
-        # ②.5 hybrid 混合路由：向量低置信度时升级到 LLM 路由（点名直走时不升级）
-        config = await PipelineConfig.load(self.db)
-        if config.router_strategy == "hybrid" and self._llm_router and ctx.router_strategy == "vector":
-            confidence = getattr(ctx, "router_confidence", 0)
-            threshold = config.router_config.threshold_high
-            if confidence < threshold and not ctx.forced_model:
-                logger.info(f"[executor] 向量置信度 {confidence:.3f} < {threshold}，升级到 LLM 路由")
-                await self._llm_router.route(ctx)
-
-        # ②.6 检测模型切换，路由后更新会话模型
-        if session:
-            old_model = session.current_model
-            if old_model and ctx.target_model and old_model != ctx.target_model:
-                ctx.model_switched = True
-                logger.info(f"[executor] 模型切换: {old_model} → {ctx.target_model}")
-            if ctx.target_model:
+            # ①.5 加载会话状态（滞回判定 + 摘要复用；租户前缀隔离见契约 06）
+            session = None
+            if ctx.session_id:
                 from app.services.session_service import SessionStateService
-                await SessionStateService(self.db).set_model(ctx.session_id, ctx.target_model)
+                session_svc = SessionStateService(self.db, tenant_id=ctx.tenant_id)
+                session = await session_svc.get_or_create(ctx.session_id)
+                ctx.current_model = session.current_model  # 供 VectorClassifier 滞回判定
 
-        # ③ ContextManager 组装消息（写入 ctx.assembled_messages）
-        await self._context_manager.assemble(ctx, session=session)
+            # ② 路由决策（三分支 + 用户覆盖 + 分类降级，v0.6.0 重构）
+            await self._decide_route(ctx)
 
-        # ④ 账号选择 + 上游调用（原有逻辑）
-        if ctx.stream:
-            return self._execute_stream(ctx)
-        return await self._execute_non_stream(ctx)
+            # ②.6 检测模型切换，路由后更新会话模型
+            if session:
+                old_model = session.current_model
+                if old_model and ctx.target_model and old_model != ctx.target_model:
+                    ctx.model_switched = True
+                    logger.info(f"[executor] 模型切换: {old_model} → {ctx.target_model}")
+                if ctx.target_model:
+                    from app.services.session_service import SessionStateService
+                    await SessionStateService(self.db, tenant_id=ctx.tenant_id).set_model(
+                        ctx.session_id, ctx.target_model
+                    )
+
+            # ③ ContextManager 组装消息（写入 ctx.assembled_messages）
+            _t_ctx = time.time()
+            ctx.stage = Stage.CONTEXT
+            await self._context_manager.assemble(ctx, session=session)
+            await emit_hooks(HOOK_CONTEXT_AFTER, ctx)
+            ctx.stage_timings_ms[Stage.CONTEXT] = int((time.time() - _t_ctx) * 1000)
+
+            # ④ 账号选择 + 上游调用（原有逻辑）
+            ctx.stage = Stage.EXECUTE
+            if ctx.stream:
+                result = self._execute_stream(ctx)
+            else:
+                result = await self._execute_non_stream(ctx)
+            ctx.stage = Stage.RESPONSE
+            return result
+        except HTTPException:
+            await emit_hooks(HOOK_ERROR_OCCURRED, ctx)
+            raise
+        except Exception as e:
+            ctx.status = "failed"
+            ctx.error_message = str(e)
+            await emit_hooks(HOOK_ERROR_OCCURRED, ctx)
+            raise
+
+    # ══════════════════════════════════════════════════════════
+    # 路由决策（v0.6.0 重构：B3 分支清晰化 + A4/A5 分类组件化与降级）
+    # ══════════════════════════════════════════════════════════
+
+    async def _decide_route(self, ctx: PipelineContext) -> None:
+        """
+        路由决策主流程（契约 02 第 6 节时序）：
+
+        route.before → [forced/override/named 直走 | 入口名智能分类]
+        → classify.after → route.after
+
+        分支优先级：斜杠命令 > 请求头覆盖 > 真实模型名直走 > 智能分类（入口名）
+        """
+        _t = time.time()
+        ctx.stage = Stage.ROUTE
+        await emit_hooks(HOOK_ROUTE_BEFORE, ctx)
+
+        try:
+            # 分支 1：斜杠命令强制指定（最高优先级，跳过分类）
+            if ctx.forced_model:
+                ctx.target_model = ctx.forced_model
+                ctx.router_strategy = self._classifier.name if self._classifier else "off"
+                ctx.router_decision = f"forced: 斜杠命令模型={ctx.forced_model}"
+                logger.info(f"[executor] 斜杠命令直走: {ctx.forced_model}")
+            # 分支 2：请求头 X-Model-Preference 覆盖（次高，跳过分类）
+            elif ctx.user_override_model:
+                ctx.target_model = ctx.user_override_model
+                ctx.router_strategy = "override"
+                ctx.router_decision = f"override: 请求头指定模型={ctx.user_override_model}"
+                logger.info(f"[executor] 请求头覆盖直走: {ctx.user_override_model}")
+            else:
+                entry_name = await self._get_entry_name()
+                is_entry = (ctx.requested_model == entry_name) or (ctx.requested_model == "chat")
+                is_real = await self._is_real_model(ctx.requested_model)
+                if is_real:
+                    # 分支 3：客户端点名真实模型 → 直走，跳过智能路由改判
+                    ctx.target_model = ctx.requested_model
+                    ctx.router_strategy = "named"
+                    ctx.router_decision = f"named: 客户端指定模型 {ctx.requested_model}"
+                    logger.info(f"[executor] 点名直走模型: {ctx.requested_model}")
+                elif is_entry:
+                    # 分支 4：对外入口名 → 智能分类（含 hybrid 升级与降级链）
+                    await self._classify_with_fallback(ctx)
+                else:
+                    # 既不是入口名也不在模型池 → 明确报错
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"未知模型: {ctx.requested_model}，请使用对外模型名（{entry_name}）或已配置的真实模型名",
+                    )
+
+            # classify.after：分类结果定稿前可覆盖（仅 after 类钩子，见契约）
+            await emit_hooks(HOOK_CLASSIFY_AFTER, ctx)
+            # route.after：最终目标模型定稿后校验/修正
+            await emit_hooks(HOOK_ROUTE_AFTER, ctx)
+        except HookBlocked as e:
+            raise HTTPException(status_code=e.status_code, detail=e.reason)
+        finally:
+            ctx.stage_timings_ms[Stage.ROUTE] = int((time.time() - _t) * 1000)
+
+    async def _classify_with_fallback(self, ctx: PipelineContext) -> None:
+        """
+        智能分类主调用 + 降级链（A4/A5）。
+
+        - 主分类器异常/无结果 → 降级 fallback_model（degraded=True）
+        - hybrid：vector 置信度 < threshold_high → 升级 LLM 分类
+        - 分类不可用（off）→ 直接 fallback（等价 v0.5.0 off 行为）
+        """
+        _t = time.time()
+        ctx.stage = Stage.CLASSIFY
+        config = await PipelineConfig.load(self.db)
+        fallback = ctx.default_model or config.router_config.fallback_model
+
+        if self._classifier is None:
+            # 分类关闭（off/未知策略）：等价 v0.5.0 OffRouter 透传行为
+            ctx.router_strategy = "off"
+            ctx.router_decision = "off: 不路由"
+            ctx.classify_engine = "off"
+            ctx.stage_timings_ms[Stage.CLASSIFY] = int((time.time() - _t) * 1000)
+            return
+
+        try:
+            result: ClassificationResult = await self._classifier.classify(ctx)
+            ctx.classify_engine = result.engine
+            ctx.classify_decision = result.decision
+
+            # hybrid 升级：向量低置信度 → LLM 分类
+            if self._classifier_upgrade and ctx.router_strategy == "vector":
+                threshold = config.router_config.threshold_high
+                confidence = getattr(ctx, "router_confidence", 0)
+                if confidence < threshold and not ctx.forced_model:
+                    logger.info(
+                        f"[executor] 向量置信度 {confidence:.3f} < {threshold}，升级到 LLM 分类"
+                    )
+                    result = await self._classifier_upgrade.classify(ctx)
+                    ctx.classify_engine = result.engine
+                    ctx.classify_decision = result.decision
+
+            # 分类无结果（空模型名）→ 降级 fallback
+            if not ctx.target_model:
+                ctx.degraded = True
+                ctx.degrade_reason = "classify_empty: 分类无结果"
+                ctx.target_model = fallback
+                ctx.router_decision = f"fallback: 分类无结果，使用 {fallback}"
+                logger.warning(f"[executor] 分类无结果，降级 fallback: {fallback}")
+        except Exception as e:
+            # A5 降级链：分类异常 → fallback 模型直走，绝不因分类故障拒绝服务
+            ctx.degraded = True
+            ctx.degrade_reason = f"classify_failed: {e}"
+            ctx.target_model = fallback
+            ctx.router_decision = f"fallback: 分类异常({e})，使用 {fallback}"
+            ctx.router_confidence = 0.0
+            logger.error(f"[executor] 分类异常，降级 fallback: {e}", exc_info=True)
+        finally:
+            ctx.stage_timings_ms[Stage.CLASSIFY] = int((time.time() - _t) * 1000)
 
     # ══════════════════════════════════════════════════════════
     # 账号选择（粘性推断 + 过滤 + Selector）
@@ -210,7 +329,9 @@ class Executor:
             if prev_account and (not ctx.target_model or prev_account.model_name == ctx.target_model):
                 ctx.selector_strategy = self._account_selector.name
                 ctx.selector_decision = f"sticky: 继续使用账号 {prev_account.id}"
+                ctx.account = prev_account
                 logger.info(f"会话粘性：继续使用账号 {prev_account.id} ({prev_account.vendor})")
+                await emit_hooks(HOOK_SELECT_AFTER, ctx)
                 return prev_account
             elif prev_account:
                 logger.info(f"模型切换（{prev_account.model_name} → {ctx.target_model}），跳过会话粘性")
@@ -263,6 +384,7 @@ class Executor:
         ctx.selector_strategy = self._account_selector.name
         if account:
             ctx.selector_decision = f"{self._account_selector.name}: 选中账号 {account.id}"
+            ctx.account = account
             # 回退全量场景：路由决策模型与选中账号实际模型不一致 → 以账号实际模型为准
             if is_entry and "fallback" in (ctx.router_decision or "") and account.model_name:
                 if account.model_name != ctx.target_model:
@@ -270,6 +392,7 @@ class Executor:
                         f"[executor] 目标模型修正 {ctx.target_model} → {account.model_name}（回退兜底）"
                     )
                     ctx.target_model = account.model_name
+            await emit_hooks(HOOK_SELECT_AFTER, ctx)
         return account
 
     async def _get_entry_name(self) -> str:
@@ -316,54 +439,58 @@ class Executor:
         last_error = None
         tried_accounts: set[int] = set()
 
-        for attempt in range(self._max_retries):
-            account = await self._select_account(ctx)
+        try:
+            for attempt in range(self._max_retries):
+                account = await self._select_account(ctx)
 
-            if not account:
-                msg = self._no_account_msg(tried_accounts, last_error, ctx.requested_model)
-                logger.warning(msg)
-                yield self._error_sse(msg, "no_available_account")
-                return
-
-            if account.id in tried_accounts:
-                logger.warning(f"账号 {account.id} 已尝试过，跳过")
-                continue
-
-            tried_accounts.add(account.id)
-            ctx.switch_count = attempt  # M1 观测：第几次尝试（0=首次，1+=切换次数）
-            logger.info(f"尝试账号 {account.id} (第 {attempt + 1} 次尝试)")
-
-            produced_any = False
-            try:
-                async for chunk in self._stream_single(account, ctx):
-                    if not produced_any:
-                        produced_any = True
-                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-
-                # 流正常结束
-                yield "data: [DONE]\n\n"
-                return
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                last_error = str(e)
-                logger.error(f"账号 {account.id} 流式请求失败: {last_error}", exc_info=True)
-
-                if produced_any:
-                    # 已开始输出，不能切换账号
-                    logger.error(f"账号 {account.id} 已输出内容后中断，无法切换账号")
-                    yield self._error_sse(f"请求中断: {last_error}", "stream_error")
+                if not account:
+                    msg = self._no_account_msg(tried_accounts, last_error, ctx.requested_model)
+                    logger.warning(msg)
+                    yield self._error_sse(msg, "no_available_account")
                     return
 
-                # 输出前失败，冷却并切换
-                logger.warning(f"账号 {account.id} 输出前失败: {last_error}，尝试下一个账号")
-                await self._router.mark_account_failed(account.id)
-                await self.db.commit()
-                continue
+                if account.id in tried_accounts:
+                    logger.warning(f"账号 {account.id} 已尝试过，跳过")
+                    continue
 
-        # 所有账号均在输出前失败
-        yield self._error_sse(f"所有账号均失败。最后错误: {last_error}", "no_available_account")
+                tried_accounts.add(account.id)
+                ctx.switch_count = attempt  # M1 观测：第几次尝试（0=首次，1+=切换次数）
+                logger.info(f"尝试账号 {account.id} (第 {attempt + 1} 次尝试)")
+
+                produced_any = False
+                try:
+                    async for chunk in self._stream_single(account, ctx):
+                        if not produced_any:
+                            produced_any = True
+                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+                    # 流正常结束
+                    yield "data: [DONE]\n\n"
+                    return
+
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    last_error = str(e)
+                    logger.error(f"账号 {account.id} 流式请求失败: {last_error}", exc_info=True)
+
+                    if produced_any:
+                        # 已开始输出，不能切换账号
+                        logger.error(f"账号 {account.id} 已输出内容后中断，无法切换账号")
+                        yield self._error_sse(f"请求中断: {last_error}", "stream_error")
+                        return
+
+                    # 输出前失败，冷却并切换
+                    logger.warning(f"账号 {account.id} 输出前失败: {last_error}，尝试下一个账号")
+                    await self._router.mark_account_failed(account.id)
+                    await self.db.commit()
+                    continue
+
+            # 所有账号均在输出前失败
+            yield self._error_sse(f"所有账号均失败。最后错误: {last_error}", "no_available_account")
+        finally:
+            # 流结束（正常/异常/客户端断开）统一触发 request.finished（只触发一次）
+            await emit_hooks(HOOK_REQUEST_FINISHED, ctx)
 
     async def _stream_single(self, account, ctx: PipelineContext) -> AsyncGenerator:
         """
@@ -451,6 +578,10 @@ class Executor:
                 implicit_signal=implicit_signal,
             )
 
+            # 流式出站审核（A8）：流式内容逐块产出，整体审核需流式审核器，
+            # 预留随企业组件池提供；此处触发 execute.after 钩子（可做缓存/质量评分）
+            await emit_hooks(HOOK_EXECUTE_AFTER, ctx)
+
     # ══════════════════════════════════════════════════════════
     # 非流式
     # ══════════════════════════════════════════════════════════
@@ -524,6 +655,17 @@ class Executor:
                 account, ctx, prompt_tokens, completion_tokens,
                 "success", None, response_time,
             )
+
+            # 出站安全审核（A8：默认放行，企业版可脱敏/拦截）
+            try:
+                guard = get_security_guard()
+                await guard.check_output(ctx, response)
+            except SecurityBlocked as e:
+                raise HTTPException(status_code=e.status_code, detail=e.reason)
+
+            # execute.after 钩子（缓存响应/质量评分）
+            await emit_hooks(HOOK_EXECUTE_AFTER, ctx)
+            await emit_hooks(HOOK_REQUEST_FINISHED, ctx)
             return JSONResponse(content=response)
 
         except Exception as e:
@@ -549,9 +691,32 @@ class Executor:
         status: str, error_message, response_time: int,
         implicit_signal: str = None,
     ):
-        """统一记账（deduct_quota）+ 请求日志（RequestLog，含 M1 观测埋点 + A3 反馈/信号字段）"""
+        """统一记账（deduct_quota）+ 请求日志（RequestLog，含 M1 观测埋点 + A3 反馈/信号字段 + B1 成本）"""
         try:
             await self._router.deduct_quota(account.id, prompt_tokens, completion_tokens)
+
+            # B1 成本计算：按账号+模型维度的单价（ModelCatalog 行）；无单价记 0（免费/未获取）
+            cost_input, cost_output = await self._get_model_prices(account, ctx.target_model)
+            actual_cost = (prompt_tokens / 1_000_000) * (cost_input or 0) + \
+                          (completion_tokens / 1_000_000) * (cost_output or 0)
+            ctx.prompt_tokens = prompt_tokens
+            ctx.completion_tokens = completion_tokens
+            ctx.response_time_ms = response_time
+            ctx.status = status
+            ctx.error_message = error_message
+            ctx.actual_cost = round(actual_cost, 6)
+            if status == "success":
+                ctx.estimated_cost = round(
+                    (ctx.estimated_tokens / 1_000_000) * (cost_input or 0), 6
+                ) if cost_input else 0.0
+
+            # B2 健康度信号：记录本次调用结果（供选号/省钱看板）
+            health_tracker.record(
+                account.id,
+                success=(status == "success"),
+                latency_ms=response_time,
+                error=error_message or "",
+            )
 
             log = RequestLog(
                 account_id=account.id,
@@ -580,8 +745,28 @@ class Executor:
             )
             self.db.add(log)
             await self.db.commit()
+
+            # 结构化事件日志（B1）：每次调用输出一条 JSON 事件
+            ctx_event(
+                logger, "executor.call_done", ctx,
+                level=logging.INFO,
+                account_id=account.id, vendor=account.vendor,
+                cost_input=cost_input, cost_output=cost_output,
+                actual_cost=ctx.actual_cost,
+            )
         except Exception as log_err:
             logger.error(f"记录请求日志失败: {log_err}", exc_info=True)
+
+    async def _get_model_prices(self, account, model_name: str):
+        """读取账号+模型维度单价（ModelCatalog 行）；无数据返回 (None, None)"""
+        try:
+            from app.services.model_catalog_service import ModelCatalogService
+            row = await ModelCatalogService(self.db).get_by_account_model(account.id, model_name or account.model_name)
+            if row:
+                return row.input_price, row.output_price
+        except Exception as e:
+            logger.warning(f"[executor] 读取模型单价失败: {e}")
+        return None, None
 
     @staticmethod
     def _no_account_msg(tried_accounts: set, last_error, model_name: str) -> str:

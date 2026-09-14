@@ -327,23 +327,38 @@ async def chat_completions(
         msg_hash = hashlib.md5(first_user_msg.encode("utf-8")).hexdigest()[:8]
         session_id = f"{request.client.host}:{msg_hash}"
 
-    # A3: 后台标记上一条成功日志为 followup（同一会话短时间继续追问 = 上一条回答被接受）
-    asyncio.create_task(_mark_followup_signal(session_id))
+    # v0.6.0 用户模型覆盖：X-Model-Preference 请求头（优先于 API Key 默认模型，低于斜杠命令）
+    user_override_model = request.headers.get("X-Model-Preference", "").strip() or None
+    if user_override_model:
+        logger.info(f"请求头 X-Model-Preference 覆盖: {user_override_model}")
 
-    # 构建管线上下文
-    ctx = PipelineContext(
-        request_id=str(uuid.uuid4()),
-        client_ip=request.client.host,
-        stream=bool(req.stream),
-        original_messages=messages,
-        requested_model=req.model,
-        kwargs=kwargs,
-        estimated_tokens=estimated_tokens,
-        session_id=session_id,
-        api_key_id=api_key_id,
-        default_model=default_model,
-        forced_model=forced_model,
-    )
+    # A7 客户端适配器分发（v0.6.0 预留：默认 OpenAI 兼容直走现有逻辑，非 OpenAI 客户端后续注册）
+    from app.extensions.adapters import get_adapter
+    adapter = get_adapter(request)
+    if adapter.name != "openai-compat":
+        # 非 OpenAI 兼容协议（预留扩展点）：由适配器解析为管线上下文
+        ctx = await adapter.parse(request, db=db)
+        if ctx is None:
+            raise HTTPException(status_code=501, detail=f"适配器 {adapter.name} 未实现 parse()")
+    else:
+        # A3: 后台标记上一条成功日志为 followup（同一会话短时间继续追问 = 上一条回答被接受）
+        asyncio.create_task(_mark_followup_signal(session_id))
+
+        # 构建管线上下文
+        ctx = PipelineContext(
+            request_id=str(uuid.uuid4()),
+            client_ip=request.client.host,
+            stream=bool(req.stream),
+            original_messages=messages,
+            requested_model=req.model,
+            kwargs=kwargs,
+            estimated_tokens=estimated_tokens,
+            session_id=session_id,
+            api_key_id=api_key_id,
+            default_model=default_model,
+            forced_model=forced_model,
+            user_override_model=user_override_model,
+        )
 
     executor = Executor(db)
     result = await executor.execute(ctx)

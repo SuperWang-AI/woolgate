@@ -12,6 +12,18 @@ if TYPE_CHECKING:
     from app.models.database import ModelAccount
 
 
+class Stage:
+    """管线阶段常量（插件插口与阶段计时用，v0.6.0）"""
+
+    REQUEST = "request"
+    CLASSIFY = "classify"
+    ROUTE = "route"
+    SELECT = "select"
+    CONTEXT = "context"
+    EXECUTE = "execute"
+    RESPONSE = "response"
+
+
 @dataclass
 class PipelineContext:
     """
@@ -39,6 +51,11 @@ class PipelineContext:
     api_key_id: Optional[int] = None  # 匹配到的 ApiKey ID
     default_model: Optional[str] = None  # API Key 默认模型，None=向量/LLM 路由自动选择
     forced_model: Optional[str] = None  # 斜杠命令强制指定的模型（/qwen-plus 等）
+    user_override_model: Optional[str] = None  # 请求头 X-Model-Preference 指定（v0.6.0，次高于 default_model）
+
+    # ── 分类引擎输出（v0.6.0 组件化）──
+    classify_engine: str = ""  # 实际使用的分类引擎：vector/llm/local/auto
+    classify_decision: str = ""  # 分类器的人类可读决策说明
 
     # ── ① ModelRouter 输出 ──
     target_model: Optional[str] = None
@@ -69,8 +86,24 @@ class PipelineContext:
     status: str = "success"
     error_message: Optional[str] = None
 
+    # ── 成本维度（v0.6.0，省钱看板）──
+    estimated_cost: float = 0.0  # 估算金额（元），按预估 token × 单价
+    actual_cost: float = 0.0  # 实际金额（元），按实际 token × 单价
+
     # ── 治理层（企业版）──
     tenant_id: Optional[str] = None
+
+    # ── 降级标记（v0.6.0）──
+    degraded: bool = False  # 本次请求是否发生了降级（分类失败/无可用账号回退等）
+    degrade_reason: str = ""  # 降级原因描述
+
+    # ── 插件命名空间（v0.6.0）──
+    # key=插件注册名；插件只能读写自己的命名空间，互不可见、不落库
+    extensions: Dict[str, Any] = field(default_factory=dict)
+
+    # ── 阶段标记（v0.6.0，插口与阶段计时）──
+    stage: str = ""  # 当前阶段，取值见 Stage
+    stage_timings_ms: Dict[str, int] = field(default_factory=dict)  # {stage: 耗时ms}
 
     def to_log_dict(self) -> Dict[str, Any]:
         """导出为结构化日志字典（用于 RequestLog 和日志输出）"""
@@ -92,6 +125,12 @@ class PipelineContext:
             "response_time_ms": self.response_time_ms,
             "status": self.status,
             "error_message": self.error_message,
+            # ── v0.6.0 新增字段 ──
+            "classify_engine": self.classify_engine,
+            "degraded": self.degraded,
+            "degrade_reason": self.degrade_reason,
+            "estimated_cost": self.estimated_cost,
+            "actual_cost": self.actual_cost,
         }
 
 

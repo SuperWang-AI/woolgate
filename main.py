@@ -21,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 版本号（统一入口，开源发布前确定正式版本）
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 
 
 @asynccontextmanager
@@ -42,6 +42,15 @@ async def lifespan(app: FastAPI):
     
     # 初始化数据库
     await init_database()
+
+    # 加载插件（v0.6.0 组件化/插件化：WOOLGATE_PLUGINS 环境变量，失败跳过不影响启动）
+    try:
+        from app.extensions.loader import load_plugins
+        loaded = load_plugins()
+        if loaded:
+            logger.info(f"已加载插件: {', '.join(loaded)}")
+    except Exception as e:
+        logger.error(f"插件加载器异常: {e}", exc_info=True)
 
     # 初始化模型能力清单（M4 LLM 智能路由用）
     try:

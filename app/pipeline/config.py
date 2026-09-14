@@ -32,6 +32,10 @@ class RouterConfig:
     strategy: str = "hybrid"  # off / vector / llm / hybrid
     fallback_model: str = ""  # 兜底模型名，空=自动选第一个启用账号的模型
 
+    # ── v0.6.0 分类引擎组件化（契约 04）──
+    classifier_engine: str = "auto"  # auto/vector/llm/local/hybrid；auto=按 strategy 推断
+    degrade_strategy: str = "fallback_model"  # 分类降级策略：fallback_model（默认）/ direct
+
     # ── vector 策略：Embedding 后端 ──
     embedding_backend: str = "cloud"  # cloud / local
 

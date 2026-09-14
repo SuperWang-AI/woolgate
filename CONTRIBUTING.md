@@ -38,7 +38,20 @@ pytest tests/   # 全量测试必须通过
 
 - 新功能必须附带单元测试
 - 修改路由/选择器/上下文逻辑时，运行 `pytest tests/ -k "router or selector or context"` 做定向回归
+- 新增扩展机制改动时，运行 `pytest tests/test_extensions.py`（钩子/SPI/降级/租户前缀）
 - CI（GitHub Actions）包含 pytest 回归 + gitleaks 密钥扫描，PR 合并前必须全绿
+
+## 插件 / 组件开发（v0.6.0）
+
+WoolGate 从 v0.6.0 起提供组件化/插件化扩展能力，完整契约见 `docs/extensions/`（01 上下文对象 / 02 插口与 SPI / 03 插件 SDK / 04 分类引擎 / 05 客户端适配器 / 06 租户隔离）。
+
+**快速开始**：复制 `examples/plugins/minimal_plugin.py` 为你的插件模块，按需修改后设置 `WOOLGATE_PLUGINS=your.plugin.module` 启动即可。该示例覆盖四个最小用例：钩子注册、命名空间读写、决策字段改写（白名单）、SPI 注册。
+
+**核心规则**：
+- 钩子：`before` 可阻断（抛 `HookBlocked`），`after` 只可观测或改写白名单决策字段；
+- 命名空间：插件只能读写 `ctx.extensions[你的插件名]`，互不可见、不落库；
+- 异常隔离：钩子异常不拖垮管线；插件 import 失败不影响应用启动；
+- 内置行为零变化：无插件注册时所有插口零开销，默认分类器与 v0.5.0 行为一致。
 
 ## 提交 PR
 

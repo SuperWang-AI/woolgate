@@ -177,6 +177,15 @@ class RequestLog(Base):
     implicit_signal = Column(String(50), nullable=True,
                              comment="隐式信号: switch_retry(失败切换)/stream_interrupted(输出中断)/followup(继续追问)")
 
+    # ── C5 学习型路由：成本/决策明细/分类引擎（样本标签）──
+    estimated_cost = Column(Float, default=0.0, comment="估算成本(元)，路由后按预估token×单价")
+    actual_cost = Column(Float, default=0.0, comment="实际成本(元)，执行后按实际token×单价")
+    router_decision = Column(String(100), nullable=True, comment="路由决策明细（目标模型+置信度等）")
+    selector_decision = Column(String(100), nullable=True, comment="选号决策明细")
+    classify_engine = Column(String(20), nullable=True, comment="实际分类引擎: vector/llm/local/auto")
+    degraded = Column(Boolean, default=False, comment="是否降级兜底（分类失败/无可用账号回退等）")
+    degrade_reason = Column(String(100), nullable=True, comment="降级原因描述")
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

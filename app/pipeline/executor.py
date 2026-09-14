@@ -742,6 +742,14 @@ class Executor:
                 tenant_id=ctx.tenant_id,
                 # ── A3 隐式信号 ──
                 implicit_signal=implicit_signal,
+                # ── C5 学习型路由：成本/决策明细/分类引擎 ──
+                estimated_cost=ctx.estimated_cost,
+                actual_cost=ctx.actual_cost,
+                router_decision=ctx.router_decision,
+                selector_decision=ctx.selector_decision,
+                classify_engine=ctx.classify_engine,
+                degraded=ctx.degraded,
+                degrade_reason=ctx.degrade_reason,
             )
             self.db.add(log)
             await self.db.commit()

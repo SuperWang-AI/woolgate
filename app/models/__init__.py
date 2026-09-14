@@ -87,6 +87,14 @@ async def _ensure_columns(conn):
         ("user_feedback", "VARCHAR(20)"),
         ("feedback_at", "DATETIME"),
         ("implicit_signal", "VARCHAR(50)"),
+        # ── C5 学习型路由：成本/决策明细/分类引擎 ──
+        ("estimated_cost", "FLOAT DEFAULT 0.0"),
+        ("actual_cost", "FLOAT DEFAULT 0.0"),
+        ("router_decision", "VARCHAR(100)"),
+        ("selector_decision", "VARCHAR(100)"),
+        ("classify_engine", "VARCHAR(20)"),
+        ("degraded", "BOOLEAN DEFAULT 0"),
+        ("degrade_reason", "VARCHAR(100)"),
     ]
     for col, coltype in log_migrations:
         if col not in cols:

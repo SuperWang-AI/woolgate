@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### 新增（C5 学习型路由数据补齐）
+- **RequestLog 补 7 列**：`estimated_cost` / `actual_cost`（成本标签）、`router_decision` / `selector_decision`（决策明细）、`classify_engine` / `degraded` / `degrade_reason`（样本质量标记），随每次请求落库（轻量迁移幂等）
+- 为学习型路由训练补齐成本、决策、降级样本标签；原始消息仍不落库（隐私友好）
+
 ### 待发布
 - 英文 README 简介
 

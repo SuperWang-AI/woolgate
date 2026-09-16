@@ -85,7 +85,7 @@ model:
 
 ```bash
 curl -X POST http://localhost:8765/v1/chat/completions \
-  -H "Authorization: Bearer your-token" \
+  -H "Authorization: Bearer ${GATEWAY_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"model": "woolgate", "messages": [{"role": "user", "content": "Hello"}], "stream": true}'
 ```

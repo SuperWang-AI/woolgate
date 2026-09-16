@@ -1,75 +1,75 @@
-# WoolGate · AI 聚合网关
+# WoolGate · AI Aggregation Gateway
 
-> **English**: WoolGate is an AI aggregation gateway that unifies all your LLM calls behind one OpenAI-compatible endpoint. It routes every request to the most cost-effective model — free-tier quotas first, task-based classification, local-model offload, and cost-aware failover. Plug any OpenAI-compatible client (Dify, OpenClaw, etc.) into one model name (`woolgate`); the gateway handles the rest. Self-hosted, zero telemetry, Apache-2.0. [Quick Start](QUICKSTART.md)
+> **中文**：[README.zh-CN.md](README.zh-CN.md) · **English**: below
 
-**WoolGate 是一个自托管开源 AI 聚合网关：把国内厂商免费大模型 API 聚合到一个 OpenAI 兼容端点，智能路由省钱，30 秒 Docker 部署，本地模型兜底。Apache-2.0。**
+**WoolGate is a self-hosted, open-source AI aggregation gateway: it unifies free LLM APIs from Chinese vendors behind one OpenAI-compatible endpoint, with smart cost-saving routing, 30-second Docker deployment, and local-model fallback. Apache-2.0.**
 
-客户端（Dify / OpenClaw / 任何 OpenAI 兼容工具）只需配置一个地址、一个模型名，WoolGate 在背后帮你完成：免费额度调度、任务分类路由、本地模型分流、上下文管理。用户只做一次配置，剩下的交给网关。
+Clients (Dify / OpenClaw / any OpenAI-compatible tool) configure a single address and a single model name. WoolGate handles the rest: free-tier quota scheduling, task-based routing, local-model offload, and context management. One-time setup, everything else is automatic.
 
-## 为什么需要 WoolGate
+## Why WoolGate
 
-日常使用大模型，钱主要浪费在三处：
+Everyday LLM usage wastes money in three ways:
 
-1. **该用免费的用了付费的** — 闲聊、翻译、简单问答用免费模型完全够，但很多客户端只能配一个付费模型，一视同仁地烧钱。
-2. **该用便宜的用了贵的** — 编程、绘图、视频这类任务模型价格差几十倍，用最贵的模型干最普通的事。
-3. **付费模型干了本地模型的活** — 判题、向量化、简单直答这类高频低难度调用，本地小模型就能胜任，成本趋近于零。
+1. **Using paid models for tasks free models can handle** — casual chat, translation, and simple Q&A work fine on free models, but most clients only support one paid model and burn money indiscriminately.
+2. **Using expensive models for cheap tasks** — coding, image, and video models cost tens of times more; the most expensive model gets used for the most trivial work.
+3. **Using cloud models for work a local model can do** — high-frequency low-difficulty calls like classification, embedding, and simple Q&A can be handled by a small local model at near-zero cost.
 
-WoolGate 的智能路由正是为这三类浪费而设计：**免费优先、按任务分类、成本排序、本地分流**，把每一次请求送到最经济的模型上。
+WoolGate's smart routing is designed for exactly these three types of waste: **free-tier first, task-based classification, cost-ordered selection, local-model offload** — every request is sent to the most economical model.
 
-## 核心特性
+## Core Features
 
-- **免费向导** — 内置国内主流免费模型目录（DeepSeek、通义、Kimi、智谱、豆包、混元、千帆等），复制注册账号拿到的 API Key，粘贴即自动完成「建账号 → 同步模型 → 计算能力向量 → 启用」，全程 30 秒。
-- **智能路由** — 请求先做任务分类（编程 / 创意写作 / 对话 / 向量 / 通用），再按「免费优先 → 成本优先 → 兜底」逐级选择最经济的可用模型；路由判定可选用 LLM 智能驱动或向量匹配，均优先使用本地/免费模型完成。
-- **统一模型名** — 客户端只配一个对外模型名（默认 `woolgate`），由网关内部路由；也可以精确指定真实模型名直连某个模型。
-- **账号管理** — 厂商 → 账号（API Key）→ 模型三层结构：一个 Key 挂载该厂商全部模型，启用停用、智能同步、Key 加密存储。
-- **模型菜单** — 内置模型目录（本地模型 + 免费模型 + 各厂商型号），支持筛选与一键接入。
-- **上下文管理** — 窗口截断 / 摘要压缩 / 直通三种策略，长对话不爆上下文。
-- **本地模型接入** — 内置 Ollama 支持，本地模型用于 embedding、任务判题与简单直答，数据不出域。
-- **流式安全** — SSE 出流后锁定账号，杜绝流式响应中途切换导致上下文割裂。
-- **额度预判与智能重试** — 请求前预判剩余额度避免中途耗尽；失败指数退避 + 随机抖动重试，防止雪崩。
-- **Web 管理后台** — 免费向导、账号管理、模型菜单、管线策略、系统配置、日志一站式可视化管理。
-- **Docker 一键部署** — 开箱即用，镜像已精简至 400MB 级。
+- **Free Tier Wizard** — built-in catalog of mainstream free model vendors (DeepSeek, Tongyi/Qwen, Kimi, Zhipu/GLM, Doubao, Hunyuan, Qianfan, etc.). Paste the API Key you got from registration; one click auto-completes "create account → sync models → compute capability vectors → enable", all in ~30 seconds.
+- **Smart Routing** — requests are classified by task (coding / creative writing / chat / embedding / general), then routed tier by tier through "free-first → cost-first → fallback" to the most economical available model. Routing decisions can use LLM-driven or vector-based matching, both preferring local/free models.
+- **Unified Model Name** — clients configure one external model name (default `woolgate`), and the gateway routes internally. You can also specify a real model name to pin a specific model directly.
+- **Account Management** — vendor → account (API Key) → model three-tier structure: one Key mounts all models of that vendor, with enable/disable, smart sync, and encrypted Key storage.
+- **Model Catalog** — built-in model directory (local models + free models + vendor models), with filtering and one-click onboarding.
+- **Context Management** — three strategies: window truncation / summary compression / passthrough, so long conversations never blow the context.
+- **Local Model Support** — built-in Ollama support; local models handle embedding, task classification, and simple Q&A, keeping data on-premises.
+- **Streaming Safety** — account is locked once SSE streaming starts, preventing context fragmentation from mid-stream model switching.
+- **Quota Prediction & Smart Retry** — predicts remaining quota before a request to avoid mid-stream exhaustion; exponential backoff + jitter retry prevents thundering herds.
+- **Web Admin Panel** — Free Tier Wizard, Account Management, Model Catalog, Pipeline Policy, System Config, and Logs in one visual console.
+- **One-Command Docker Deployment** — out of the box, image trimmed to ~400MB.
 
-## 快速开始
+## Quick Start
 
-### 1. 启动服务
+### 1. Start the service
 
 ```bash
 git clone https://github.com/SuperWang-AI/woolgate.git
 cd woolgate
-cp .env.example .env   # 按注释生成并填入 ENCRYPTION_KEY 与 GATEWAY_BEARER_TOKEN
+cp .env.example .env   # generate and fill ENCRYPTION_KEY and GATEWAY_BEARER_TOKEN per the comments
 docker compose up -d
 ```
 
-### 2. 打开管理后台
+### 2. Open the admin panel
 
-浏览器访问 **http://localhost:8765/admin**
+Visit **http://localhost:8765/admin**
 
-### 3. 免费向导一键接入
+### 3. One-click onboarding via the Free Tier Wizard
 
-后台首页进入「免费向导」，选择你已注册的厂商（如 DeepSeek），粘贴 API Key，点击一键配置——账号、模型、能力向量全部自动完成，无需手动维护。
+From the admin home, open the Free Tier Wizard, pick a vendor you've registered (e.g. DeepSeek), paste your API Key, and click one-click configure — account, models, and capability vectors are all created automatically. No manual maintenance.
 
-### 4. 对接你的客户端
+### 4. Connect your client
 
-在 Dify / OpenClaw / 任意 OpenAI 兼容工具中：
+In Dify / OpenClaw / any OpenAI-compatible tool:
 
-- **Base URL**: `http://<woolgate-地址>:8765/v1`
-- **API Key**: 你的 `GATEWAY_BEARER_TOKEN`
-- **模型名**: `woolgate`（智能路由）或指定真实模型名（如 `deepseek-chat`，直连）
+- **Base URL**: `http://<woolgate-address>:8765/v1`
+- **API Key**: your `GATEWAY_BEARER_TOKEN`
+- **Model name**: `woolgate` (smart routing) or a real model name (e.g. `deepseek-chat`, pinned)
 
-详见 [QUICKSTART.md](QUICKSTART.md)。
+See [QUICKSTART.md](QUICKSTART.md) for details.
 
-## 客户端接入示例
+## Client Setup Examples
 
 ### Dify
 
-「设置 → 模型供应商 → OpenAI-API-compatible」新增：
+"Settings → Model Providers → OpenAI-API-compatible" and add:
 
-| 配置项 | 值 |
+| Setting | Value |
 |---|---|
-| 模型名称 | `woolgate` |
-| Base URL | `http://woolgate:8765/v1`（容器同网段时） |
-| API Key | 你的 `GATEWAY_BEARER_TOKEN` |
+| Model Name | `woolgate` |
+| Base URL | `http://woolgate:8765/v1` (when on the same Docker network) |
+| API Key | your `GATEWAY_BEARER_TOKEN` |
 
 ### OpenClaw
 
@@ -81,126 +81,126 @@ model:
   model: woolgate
 ```
 
-### curl 直测
+### curl direct test
 
 ```bash
 curl -X POST http://localhost:8765/v1/chat/completions \
   -H "Authorization: Bearer your-token" \
   -H "Content-Type: application/json" \
-  -d '{"model": "woolgate", "messages": [{"role": "user", "content": "你好"}], "stream": true}'
+  -d '{"model": "woolgate", "messages": [{"role": "user", "content": "Hello"}], "stream": true}'
 ```
 
-## 智能路由如何省钱（演示）
+## How Smart Routing Saves Money (Demo)
 
-访问仓库内演示页 **`static/wg_routing_demo.html`**（浏览器直接打开），动画演示一次请求从客户端 → 网关 → 智能分类 → 路由决策 → 模型池的完整过程：怎么把对话路由到最经济的模型、怎么用本地模型分流、怎么在免费模型中选领域最匹配的那个。
+Open **`static/wg_routing_demo.html`** in the repo (any browser) to watch an animated walkthrough of one request flowing from client → gateway → smart classification → routing decision → model pool: how chat is routed to the most economical model, how local models offload cheap work, and how the best-matching free model is picked within a domain.
 
-## 架构总览
+## Architecture Overview
 
 ```
-客户端 (Dify / OpenClaw / OpenAI 兼容)
-        │  OpenAI 兼容协议 /v1
+Clients (Dify / OpenClaw / OpenAI-compatible)
+        │  OpenAI-compatible protocol /v1
         ▼
-┌─────────────────── WoolGate 网关 ───────────────────┐
-│  API 层      /v1/chat/completions  /v1/models        │
-│  管线层      任务分类 → 路由决策 → 模型选择 → 执行     │
-│  路由        LLM 路由 / 向量路由 / 免费优先 / 成本优先  │
-│  选择器      免费优先 · 成本优先 · 粘性 · 轮询 · 兜底   │
-│  上下文      窗口 / 摘要压缩 / 直通                   │
-│  扩展层      9 生命周期插口 · 插件 SDK · SPI 组件池     │
-│  账号层      厂商 → 账号(Key) → 模型，加密存储         │
-│  管理后台    /admin（免费向导 / 账号 / 模型菜单 / 策略）│
-└──────────────────────────────────────────────────────┘
+┌─────────────────── WoolGate Gateway ──────────────────┐
+│  API Layer      /v1/chat/completions  /v1/models      │
+│  Pipeline       classify → route → select → execute   │
+│  Routing        LLM / vector / free-first / cost-first│
+│  Selectors      free-first · cost-first · sticky · RR │
+│  Context        window / summary compression / direct │
+│  Extension      9 lifecycle hooks · plugin SDK · SPI  │
+│  Accounts       vendor → account(Key) → model, enc.   │
+│  Admin          /admin (wizard / accounts / catalog)  │
+└───────────────────────────────────────────────────────┘
         │
         ▼
-  模型池（DeepSeek / 通义 / Kimi / 智谱 / 豆包 / Ollama …）
+  Model Pool (DeepSeek / Qwen / Kimi / GLM / Doubao / Ollama …)
 ```
 
-> v0.6.0 起支持组件化/插件化：分类引擎、客户端适配器、会话存储、安全审核等均可通过 SPI 替换；插件通过 `WOOLGATE_PLUGINS` 环境变量加载，失败跳过不影响启动。详见 [ARCHITECTURE.md](ARCHITECTURE.md#七组件化插件化v060) 与 [docs/extensions/](docs/extensions/)。
+> Since v0.6.0, WoolGate supports componentization/pluginization: the classification engine, client adapters, session storage, security review, and more can be replaced via SPI; plugins are loaded via the `WOOLGATE_PLUGINS` env var and skipped on failure without blocking startup. See [ARCHITECTURE.md](ARCHITECTURE.md#七组件化插件化v060) and [docs/extensions/](docs/extensions/).
 
-## 项目结构
+## Project Structure
 
 ```
 woolgate/
 ├── app/
-│   ├── models/          # 数据模型（厂商 / 账号 / 模型 / 日志）
-│   ├── pipeline/        # 请求管线（路由 / 选择器 / 上下文管理 / 执行器）
-│   ├── extensions/      # 扩展层（hooks / SDK / SPI / 插件加载器）
-│   ├── routes/          # OpenAI 兼容 API
-│   ├── services/        # 业务服务（免费向导 / 模型目录 / 账号 / 余额 / 会话 / 健康度）
-│   ├── ui/              # 管理后台
-│   └── config.py        # 配置管理
-├── docs/extensions/     # 扩展契约文档（01~06）
-├── examples/plugins/    # 示例插件模板
-├── static/              # 静态资源（路由演示页等）
-├── tests/               # 单元测试（pytest，可 CI 回归）
-├── main.py              # 主应用入口
-├── requirements.txt     # Python 依赖
-├── Dockerfile           # Docker 镜像
-├── docker-compose.yml   # Docker 编排
-└── .env.example         # 环境变量示例
+│   ├── models/          # Data models (vendor / account / model / log)
+│   ├── pipeline/        # Request pipeline (routing / selectors / context / executor)
+│   ├── extensions/      # Extension layer (hooks / SDK / SPI / plugin loader)
+│   ├── routes/          # OpenAI-compatible API
+│   ├── services/        # Business services (wizard / catalog / accounts / quota / session / health)
+│   ├── ui/              # Admin panel
+│   └── config.py        # Configuration management
+├── docs/extensions/     # Extension contract docs (01~06)
+├── examples/plugins/    # Example plugin templates
+├── static/              # Static assets (routing demo page, etc.)
+├── tests/               # Unit tests (pytest, CI regression)
+├── main.py              # Main application entry
+├── requirements.txt     # Python dependencies
+├── Dockerfile           # Docker image
+├── docker-compose.yml   # Docker orchestration
+└── .env.example         # Environment variable example
 ```
 
-## 管理后台
+## Admin Panel
 
-| 页面 | 说明 |
+| Page | Description |
 |---|---|
-| 首页 | 概览、引导式接入（AI 聚合网关使用向导） |
-| 免费向导 | 免费模型一键接入 |
-| 账号管理 | 厂商 / 账号 / 模型三层管理与启用停用 |
-| 模型菜单 | 内置模型目录与筛选 |
-| 管线策略 | 路由与上下文策略配置 |
-| 系统配置 | 全局配置 |
-| 日志 | 请求日志与统计 |
+| Home | Overview + guided onboarding (AI gateway setup wizard) |
+| Free Tier Wizard | One-click free model onboarding |
+| Account Management | Vendor / account / model three-tier management |
+| Model Catalog | Built-in model directory & filtering |
+| Pipeline Policy | Routing & context policy configuration |
+| System Config | Global configuration |
+| Logs | Request logs & statistics |
 
-## 企业版
+## Enterprise Edition
 
-开源版面向个人与自用，免费聚合各厂商额度并智能调度。**团队与组织**需要以下能力时可升级企业版：
+The open-source edition targets individuals and self-use: it aggregates free quotas from various vendors and schedules them intelligently. **Teams and organizations** can upgrade to the Enterprise Edition for:
 
-- **多租户**：团队/项目隔离，独立 Key 与权限
-- **配额预算**：按租户统计用量，超限自动停用
-- **审计与账单**：按租户隔离日志与费用明细
-- **本地智能省钱模式**：本地 embedding + 本地判题 + 本地简单直答，数据不出域
+- **Multi-tenancy** — team/project isolation with independent keys and permissions
+- **Quota budgets** — per-tenant usage stats with auto-disable on over-limit
+- **Audit & billing** — per-tenant isolated logs and cost details
+- **Local smart saving mode** — local embedding + local classification + local simple Q&A, data never leaves your network
 
-企业版在开源版中已预留升级入口，计划即将推出；如需提前接入，请通过项目主页联系作者。
+The Enterprise Edition entrance is reserved in the open-source version and is planned for release soon. For early access, contact the author via the project home page.
 
-## 安全说明
+## Security Notes
 
-- API Key 使用 Fernet 加密存储（`ENCRYPTION_KEY`）
-- 网关鉴权依赖 `GATEWAY_BEARER_TOKEN`，请设置强随机值
-- 建议仅在内网使用，不要直接暴露公网
-- 仅手动导入自有账号，不提供自动注册、接码等能力
+- API Keys are encrypted with Fernet (`ENCRYPTION_KEY`)
+- Gateway auth relies on `GATEWAY_BEARER_TOKEN` — use a strong random value
+- Recommended for intranet use only; do not expose directly to the public internet
+- Only manually-imported self-owned accounts are supported; no auto-registration, SMS-receiving, or similar capabilities
 
-## 技术栈
+## Tech Stack
 
-- **后端**: FastAPI + Uvicorn
-- **数据库**: SQLite + SQLAlchemy（异步）
-- **协议适配**: LiteLLM SDK
-- **加密**: Cryptography (Fernet)
-- **调度**: APScheduler
-- **管理后台**: 自研 Web UI
-- **部署**: Docker + Docker Compose
+- **Backend**: FastAPI + Uvicorn
+- **Database**: SQLite + SQLAlchemy (async)
+- **Protocol adapter**: LiteLLM SDK
+- **Encryption**: Cryptography (Fernet)
+- **Scheduling**: APScheduler
+- **Admin panel**: Custom web UI
+- **Deployment**: Docker + Docker Compose
 
-## 开发调试
+## Development
 
 ```bash
 pip install -r requirements.txt
-python main.py          # 本地启动
-pytest tests/           # 运行单元测试
+python main.py          # local startup
+pytest tests/           # run unit tests
 ```
 
-## 常见问题
+## FAQ
 
-**Q: 客户端填什么模型名？**
-A: 默认填 `woolgate` 走智能路由；需要固定某个模型时填该厂商真实模型名（如 `deepseek-chat`）即可直连。
+**Q: What model name should the client use?**
+A: Use `woolgate` for smart routing; to pin a specific model, use the vendor's real model name (e.g. `deepseek-chat`) for direct connection.
 
-**Q: 免费向导里没看到我想要的厂商？**
-A: 当前内置国内主流免费模型厂商；也可以在模型菜单手动新增模型，或在账号管理中手动添加账号。
+**Q: I can't find a vendor I want in the Free Tier Wizard?**
+A: The built-in catalog covers mainstream free-model vendors in China; you can also add models manually in the Model Catalog, or add accounts manually in Account Management.
 
-**Q: Ollama 本地模型怎么连？**
-A: 确保 Ollama 已启动，Docker 部署时容器内通过 `host.docker.internal:11434` 访问宿主机。
+**Q: How do I connect an Ollama local model?**
+A: Make sure Ollama is running; in Docker deployments, access the host via `host.docker.internal:11434` from inside the container.
 
-**Q: 流式响应中断怎么办？**
-A: 检查账号额度是否充足，查看后台日志中的错误信息。
+**Q: What if streaming is interrupted?**
+A: Check whether the account quota is sufficient, and inspect the error details in the admin logs.
 
 ## License
 

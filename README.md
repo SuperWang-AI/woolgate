@@ -2,7 +2,7 @@
 
 > **English**: WoolGate is an AI aggregation gateway that unifies all your LLM calls behind one OpenAI-compatible endpoint. It routes every request to the most cost-effective model — free-tier quotas first, task-based classification, local-model offload, and cost-aware failover. Plug any OpenAI-compatible client (Dify, OpenClaw, etc.) into one model name (`woolgate`); the gateway handles the rest. Self-hosted, zero telemetry, Apache-2.0. [Quick Start](QUICKSTART.md)
 
-**一个统一接入、智能路由、持续省钱的大模型网关。**
+**WoolGate 是一个自托管开源 AI 聚合网关：把国内厂商免费大模型 API 聚合到一个 OpenAI 兼容端点，智能路由省钱，30 秒 Docker 部署，本地模型兜底。Apache-2.0。**
 
 客户端（Dify / OpenClaw / 任何 OpenAI 兼容工具）只需配置一个地址、一个模型名，WoolGate 在背后帮你完成：免费额度调度、任务分类路由、本地模型分流、上下文管理。用户只做一次配置，剩下的交给网关。
 

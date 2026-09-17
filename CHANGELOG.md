@@ -4,14 +4,22 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [Unreleased]
+## [0.6.1] - 2026-09-17
 
 ### 新增（C5 学习型路由数据补齐）
 - **RequestLog 补 7 列**：`estimated_cost` / `actual_cost`（成本标签）、`router_decision` / `selector_decision`（决策明细）、`classify_engine` / `degraded` / `degrade_reason`（样本质量标记），随每次请求落库（轻量迁移幂等）
 - 为学习型路由训练补齐成本、决策、降级样本标签；原始消息仍不落库（隐私友好）
 
-### 待发布
-- 英文 README 简介
+### 文档
+- 完整英文 README（主文件英文化）+ 中文版 README.zh-CN.md
+- README 首段埋 SEO 关键词（自托管 / OpenAI 兼容 / 免费 API 聚合 / 智能路由 / 30 秒部署）
+- `docs/enterprise-isolation.md`：企业版 vs 开源版三重隔离方案
+
+### 修复
+- gitleaks 误报：README curl 示例改用 `${GATEWAY_BEARER_TOKEN}` 环境变量写法
+- CI 修复：GHCR 镜像名大小写、tag 触发、pytest 依赖、gitleaks 扫描
+
+## [Unreleased]
 
 ## [0.6.0] - 2026-09-14（组件化/插件化）
 
@@ -101,7 +109,8 @@
 - 统一余额逻辑（厂商余额 + 每日同步 + 用量统计）
 - 管理后台 4 页 tab 结构
 
-[Unreleased]: https://github.com/SuperWang-AI/woolgate/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/SuperWang-AI/woolgate/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/SuperWang-AI/woolgate/releases/tag/v0.6.1
 [0.6.0]: https://github.com/SuperWang-AI/woolgate/releases/tag/v0.6.0
 [0.5.0]: https://github.com/SuperWang-AI/woolgate/releases/tag/v0.5.0
 [0.1.0]: https://github.com/SuperWang-AI/woolgate/commits/v0.5.0

@@ -67,6 +67,10 @@ class SystemConfig(Base):
     virtual_entry_name = Column(String(50), default="woolgate",
                                 comment="对外暴露的虚拟模型名（客户端统一入口，智能路由自动映射真实模型）")
 
+    # ── P0 技术债：模型参数约束配置化 ──
+    model_param_constraints_json = Column(JSON, nullable=True,
+        comment="模型参数约束覆盖表 {model_name: {param: value}}，为空则用内置默认值")
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -189,9 +193,48 @@ class RequestLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-# ══════════════════════════════════════════════════════════════
-# M1 架构重构：新增表
-# ══════════════════════════════════════════════════════════════
+class RoundRobinState(Base):
+    """轮询索引持久化表（解决重启归零问题）"""
+    __tablename__ = "round_robin_state"
+
+    model_name = Column(String(100), primary_key=True, comment="虚拟模型名")
+    last_index = Column(Integer, default=0, comment="上次选中的索引")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ModelPerformance(Base):
+    """模型历史表现表（学习型路由选号信号）"""
+    __tablename__ = "model_performance"
+    __table_args__ = (
+        UniqueConstraint("account_id", "model_name", "domain_tag", name="uq_perf_key"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, nullable=False, comment="账号ID")
+    model_name = Column(String(100), nullable=False, comment="模型名")
+    domain_tag = Column(String(50), nullable=True, comment="任务类型（分类结果）")
+
+    request_count = Column(Integer, default=0, comment="总请求数")
+    success_count = Column(Integer, default=0, comment="成功数")
+    interrupted_count = Column(Integer, default=0, comment="流式中断数")
+    retry_count = Column(Integer, default=0, comment="切换重试数")
+    avg_actual_cost = Column(Float, default=0.0, comment="平均实际成本(元)")
+
+    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def success_rate(self) -> float:
+        if self.request_count == 0:
+            return 1.0
+        return self.success_count / self.request_count
+
+    @property
+    def effective_cost(self) -> float:
+        """有效成本 = 挂牌平均成本 / 成功率（成功率低意味着要重试多次）"""
+        sr = self.success_rate
+        if sr <= 0.01:
+            return float("inf")
+        return self.avg_actual_cost / sr
 
 class SessionState(Base):
     """会话状态表（ContextManager 依赖，初期用 SQLite，可换 Redis）"""

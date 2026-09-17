@@ -91,6 +91,16 @@ def start_scheduler():
         name="清理过期日志",
         replace_existing=True
     )
+
+    # 每小时聚合模型历史表现（学习型路由选号信号）
+    from app.services.performance_learner import aggregate_performance
+    scheduler.add_job(
+        aggregate_performance,
+        trigger=CronTrigger(minute=10, timezone="Asia/Shanghai"),  # 每小时第10分钟
+        id="aggregate_performance",
+        name="模型历史表现聚合",
+        replace_existing=True
+    )
     
     scheduler.start()
     logger.info("定时任务调度器已启动")

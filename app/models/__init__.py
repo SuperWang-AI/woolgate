@@ -141,6 +141,13 @@ async def _ensure_columns(conn):
         await conn.execute(text("ALTER TABLE session_state ADD COLUMN current_model VARCHAR(100)"))
         logger.info("迁移: session_state 增加列 current_model")
 
+    # ── system_config 补列（P0 技术债：模型参数约束配置化）──
+    result = await conn.execute(text("PRAGMA table_info(system_config)"))
+    cols = {row[1] for row in result.fetchall()}
+    if "model_param_constraints_json" not in cols:
+        await conn.execute(text("ALTER TABLE system_config ADD COLUMN model_param_constraints_json JSON"))
+        logger.info("迁移: system_config 增加列 model_param_constraints_json")
+
 
 async def init_database():
     """初始化数据库（创建表 + 轻量迁移 + 默认配置）"""

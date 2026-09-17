@@ -69,9 +69,14 @@ class CostFirstSelector(AccountSelector):
         else:
             level, price = 2, float("inf")
 
+        # 学习型选号：历史有效成本（考虑成功率）
+        # 有历史数据 → 按有效成本升序；无历史数据 → 排在有数据的后面（先试新账号再给信号）
+        eff = getattr(a, "_effective_cost", None)
+        eff_key = eff if eff is not None else float("inf")
+
         # 余额/健康度：额度多者优先（None 视为 0）
         bal = getattr(a, "balance_remaining", None)
         bal = bal if bal is not None else 0.0
 
         # id 降序：新加的账号优先
-        return (level, price, -bal, -a.id)
+        return (level, eff_key, price, -bal, -a.id)

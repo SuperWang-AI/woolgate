@@ -27,15 +27,67 @@ def _normalize_extra_json(extra_json):
 
 
 # 模型参数约束——部分模型对参数有硬性限制，自动修正避免 400 错误
-MODEL_PARAM_CONSTRAINTS: Dict[str, Dict[str, Any]] = {
+# 内置默认值，可被系统配置覆盖
+DEFAULT_MODEL_PARAM_CONSTRAINTS: Dict[str, Dict[str, Any]] = {
     # kimi-k2.6 是推理模型，只允许 temperature=1
     "kimi-k2.6": {"temperature": 1},
 }
 
+# 运行时缓存的模型参数约束（从系统配置加载）
+_runtime_constraints: Dict[str, Dict[str, Any]] = {}
+_constraints_loaded: bool = False
+
+
+def _load_constraints_from_db() -> None:
+    """从系统配置加载模型参数约束（首次调用时）"""
+    global _constraints_loaded, _runtime_constraints
+    if _constraints_loaded:
+        return
+    try:
+        from app.models.database import AsyncSessionLocal, SystemConfig
+        from sqlalchemy import select
+        import asyncio
+        # 在同步上下文里创建事件循环
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        async def _fetch():
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(select(SystemConfig).where(SystemConfig.id == 1))
+                config = result.scalar_one_or_none()
+                if config and config.model_param_constraints_json:
+                    return config.model_param_constraints_json
+                return {}
+        custom = loop.run_until_complete(_fetch())
+        # 合并：默认值 + 自定义覆盖
+        merged = dict(DEFAULT_MODEL_PARAM_CONSTRAINTS)
+        merged.update(custom or {})
+        _runtime_constraints = merged
+    except Exception as e:
+        logger.warning(f"加载模型参数约束失败，使用默认值: {e}")
+        _runtime_constraints = dict(DEFAULT_MODEL_PARAM_CONSTRAINTS)
+    _constraints_loaded = True
+
+
+def get_model_param_constraints() -> Dict[str, Dict[str, Any]]:
+    """获取当前生效的模型参数约束"""
+    if not _constraints_loaded:
+        _load_constraints_from_db()
+    return _runtime_constraints
+
+
+def reload_model_param_constraints() -> None:
+    """强制重新加载（系统配置修改后调用）"""
+    global _constraints_loaded
+    _constraints_loaded = False
+    _load_constraints_from_db()
+
 
 def _apply_model_param_constraints(model_name: str, payload: Dict[str, Any]) -> None:
     """根据模型名应用参数约束，原地修改 payload"""
-    constraints = MODEL_PARAM_CONSTRAINTS.get(model_name)
+    constraints = get_model_param_constraints().get(model_name)
     if not constraints:
         return
     for key, value in constraints.items():

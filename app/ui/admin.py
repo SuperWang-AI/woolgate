@@ -88,7 +88,41 @@ async def get_stats():
         row = result.one()
         today_prompt_tokens = row[0] or 0
         today_completion_tokens = row[1] or 0
-        
+
+        # 今日实际成本（省钱统计）
+        result = await session.execute(
+            select(func.sum(RequestLog.actual_cost))
+            .where(RequestLog.created_at >= today_start)
+        )
+        today_cost = result.scalar() or 0
+
+        # 今日免费模型请求数（actual_cost=0 视为免费）
+        result = await session.execute(
+            select(func.count(RequestLog.id))
+            .where(RequestLog.created_at >= today_start)
+            .where(RequestLog.actual_cost == 0)
+        )
+        today_free_requests = result.scalar() or 0
+
+        # 累计实际成本
+        result = await session.execute(
+            select(func.sum(RequestLog.actual_cost))
+        )
+        total_cost = result.scalar() or 0
+
+        # 累计总请求数
+        result = await session.execute(
+            select(func.count(RequestLog.id))
+        )
+        total_requests_all = result.scalar() or 0
+
+        # 累计免费模型请求数
+        result = await session.execute(
+            select(func.count(RequestLog.id))
+            .where(RequestLog.actual_cost == 0)
+        )
+        total_free_requests = result.scalar() or 0
+
         return {
             "total_accounts": total_accounts,
             "enabled_accounts": enabled_accounts,
@@ -97,6 +131,11 @@ async def get_stats():
             "total_completion_tokens": total_completion_tokens,
             "today_prompt_tokens": today_prompt_tokens,
             "today_completion_tokens": today_completion_tokens,
+            "today_cost": today_cost,
+            "today_free_requests": today_free_requests,
+            "total_cost": total_cost,
+            "total_requests_all": total_requests_all,
+            "total_free_requests": total_free_requests,
         }
 
 
@@ -466,6 +505,28 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                           f"{total_total_m:.4f}M",
                           [f"输入 {stats['total_prompt_tokens'] / 1_000_000:.4f}M",
                            f"输出 {stats['total_completion_tokens'] / 1_000_000:.4f}M"])
+            
+            # 省钱统计卡片
+            ui.label('省钱统计').classes('text-2xl font-bold text-gray-800 mt-4')
+            with ui.row().classes('w-full gap-4'):
+                # 今日花费
+                stat_card('payments', 'green-500', '今日花费',
+                          f"¥{stats['today_cost']:.4f}",
+                          "实际成本")
+                # 今日免费占比
+                today_free_pct = (stats['today_free_requests'] / stats['today_requests'] * 100) if stats['today_requests'] > 0 else 0
+                stat_card('card_giftcard', 'teal-500', '今日免费占比',
+                          f"{today_free_pct:.1f}%",
+                          [f"{stats['today_free_requests']} 次免费", "走免费模型"])
+                # 累计花费
+                stat_card('account_balance_wallet', 'blue-500', '累计花费',
+                          f"¥{stats['total_cost']:.4f}",
+                          "实际成本")
+                # 累计免费占比
+                total_free_pct = (stats['total_free_requests'] / stats['total_requests_all'] * 100) if stats['total_requests_all'] > 0 else 0
+                stat_card('emoji_events', 'yellow-500', '累计免费占比',
+                          f"{total_free_pct:.1f}%",
+                          [f"{stats['total_free_requests']} 次免费", "走免费模型"])
             
             # API 配置信息卡片
             ui.label('API 配置信息').classes('text-2xl font-bold text-gray-800 mt-4')

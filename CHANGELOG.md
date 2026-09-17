@@ -4,6 +4,23 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [0.7.0] - 2026-09-17
+
+### 新增
+- **学习型选号路由**：ModelPerformance 表 + performance_learner 聚合引擎，按"成功且便宜才加分"逻辑自动学习每个账号的实际有效成本，样本量≥5 才采信历史数据
+- **省钱看板**：总览页新增今日花费/今日免费占比/累计花费/累计免费占比四个卡片，直观展示省钱效果
+- **企业版 SPI 预留**：9 个生命周期钩子 + 7 种 SPI 接口 + PluginContext 安全隔离，为 M6 企业版扩展点打好基础
+
+### 改进
+- **模型参数约束配置化**：kimi-k2.6 temperature 硬编码改为系统配置可编辑，不再需要改代码
+- **round-robin 持久化**：轮询索引存到数据库，重启后不再归零
+- **CostFirstSelector 排序优化**：排序键改为 (level, eff_key, price, -bal, -a.id)，免费 L0 / 有价 L1 / 未知 L2 分层更清晰
+- **定时聚合 job**：每小时第 10 分钟自动聚合 ModelPerformance 数据
+
+### 测试
+- 160 条随机请求测试：153 成功 / 7 超时，成功率 95.6%
+- 超时根因定位：客户端 30s 太短，调整为 60s
+
 ## [0.6.1] - 2026-09-17
 
 ### 新增（C5 学习型路由数据补齐）
@@ -109,7 +126,8 @@
 - 统一余额逻辑（厂商余额 + 每日同步 + 用量统计）
 - 管理后台 4 页 tab 结构
 
-[Unreleased]: https://github.com/SuperWang-AI/woolgate/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/SuperWang-AI/woolgate/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/SuperWang-AI/woolgate/releases/tag/v0.7.0
 [0.6.1]: https://github.com/SuperWang-AI/woolgate/releases/tag/v0.6.1
 [0.6.0]: https://github.com/SuperWang-AI/woolgate/releases/tag/v0.6.0
 [0.5.0]: https://github.com/SuperWang-AI/woolgate/releases/tag/v0.5.0

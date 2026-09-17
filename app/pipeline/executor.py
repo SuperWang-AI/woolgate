@@ -371,11 +371,15 @@ class Executor:
         # cost-first 需要"账号+模型"维度的单价：注入临时属性供排序，不落库
         if self._account_selector.name == "cost-first" and target:
             from app.services.model_catalog_service import ModelCatalogService
+            from app.services.performance_learner import get_effective_cost_map
             _svc = ModelCatalogService(self.db)
+            # 历史有效成本（学习型选号信号）
+            _eff_cost_map = await get_effective_cost_map(self.db, target, ctx.domain_tag or "general")
             for _a in available:
                 _row = await _svc.get_by_account_model(_a.id, target)
                 _a._cost_input = _row.input_price if _row else None
                 _a._cost_output = _row.output_price if _row else None
+                _a._effective_cost = _eff_cost_map.get(_a.id)  # None = 无历史数据
 
         account = self._account_selector.select(
             available,

@@ -1,5 +1,7 @@
 # WoolGate · AI 聚合网关
 
+> **10 秒接入全部免费大模型。**
+
 > **English**: [README.md](README.md) · **中文**: 以下正文
 
 **WoolGate 是一个自托管开源 AI 聚合网关：把国内厂商免费大模型 API 聚合到一个 OpenAI 兼容端点，智能路由省钱，30 秒 Docker 部署，本地模型兜底。Apache-2.0。**

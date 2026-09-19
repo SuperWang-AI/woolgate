@@ -38,6 +38,27 @@
 
 ## [Unreleased]
 
+### 规划（2026-09-19 讨论确定，待实施）
+
+#### 插件系统基础设施补全
+- **UI 扩展点（4个）**：页面路由注入（register_page）、导航菜单扩展（register_nav_item）、组件挂载点（register_component，预设 dashboard.widgets / account.card.footer / log.detail.extra / config.page.extra）、配置界面注入（register_config）
+- **配置扩展点**：复用 SystemConfig 表新增 plugin_configs JSON 字段，提供 get_plugin_config / set_plugin_config，优先级：环境变量 > 数据库配置 > 默认值
+- **目标**：补全 v0.6.0 插件系统的 UI/配置层缺口，使插件无需改主程序即可完整展示 UI 和管理配置
+
+#### 余额监控与额度预警插件（第一个完整插件）
+- **余额同步引擎**：BalanceProvider SPI + 4个内置 Provider（Kimi/DeepSeek/SiliconFlow/Manual兜底），5种触发时机（每日首次/请求后节流/疑似耗尽/定时/手动），节流容错退避
+- **预警引擎**：4级预警（🟢正常/🟡注意/🟠警告/🔴紧急/⚫耗尽），可配置阈值，耗尽预测（当前余额/近7天日均消耗）
+- **路由感知**：route.before 钩子过滤耗尽账号+紧急降权，不替换现有选号器只做预处理
+- **UI展示**：独立余额看板页面（/admin/balance）、首页总览卡片、账号卡片余额标识、日志详情预警信息（全部通过 UI 扩展点注入，不改主程序）
+- **数据模型**：复用 ModelAccount 余额字段，新增 BalanceSyncLog / BalanceAlertLog 表
+
+#### 插件开发指南 + Hello World 示例
+- **插件开发指南**：文档（docs/plugin-development-guide.md），覆盖快速开始/基本结构/逻辑扩展/UI扩展/数据扩展/配置管理/最佳实践
+- **Hello World 插件**：真实可运行插件（examples/plugins/hello_world.py），演示注册组件到挂载点、注册钩子、注册页面和导航、注册配置，作为社区开发者最低门槛的参与示例
+
+#### 阶段复盘文档
+- 新增 `docs/retrospectives/2026-09-19-插件系统架构与余额监控插件复盘.md`，完整记录本次架构讨论、决策过程、关键经验与教训
+
 ## [0.6.0] - 2026-09-14（组件化/插件化）
 
 ### 新增（扩展机制 A1-A8）

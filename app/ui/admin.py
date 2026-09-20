@@ -327,11 +327,13 @@ def create_ui():
         else:
             path = KEY_TO_PATH.get(key, '/')
             ui.run_javascript(f"history.replaceState(null, '', '/admin{path}')")
-            if key != 'plugins':
+            if key == 'plugins':
+                # 切回插件管理页面：重置active并刷新
                 _plugin_active = None
-                # 切回插件管理页面时也刷新
-                if key == 'plugins' and _plugin_refresh is not None:
+                if _plugin_refresh is not None:
                     _plugin_refresh()
+            else:
+                _plugin_active = None
 
     # 插件系统 v2：UI 扩展点注册表
     from app.extensions.sdk import (
@@ -2051,11 +2053,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                                                 ui.button(
                                                                     f'📦 {display_name}',
                                                                     on_click=lambda p=target_name: ui.run_javascript(
-                                                                        f'var el=document.querySelector("[data-plugin=\\\"{p}\\\"]");'
-                                                                        f'if(el){{el.scrollIntoView({{behavior:"smooth",block:"center"}});'
+                                                                        f'var container=document.getElementById("plugin-detail-scroll");'
+                                                                        f'var el=container?container.querySelector("[data-plugin=\"{p}\"]"):document.querySelector("[data-plugin=\"{p}\"]");'
+                                                                        f'if(el&&container){{var targetTop=el.offsetTop-container.offsetTop+container.scrollTop-16;'
+                                                                        f'container.scrollTo({{top:targetTop,behavior:"smooth"}});'
                                                                         f'var blinkCount=0;var blinkInterval=setInterval(function(){{'
                                                                         f'if(blinkCount%2===0){{el.classList.add("ring-2","ring-blue-400")}}else{{el.classList.remove("ring-2","ring-blue-400")}};'
-                                                                        f'blinkCount++;if(blinkCount>=6){{clearInterval(blinkInterval);el.classList.remove("ring-2","ring-blue-400")}}}},500);}}'
+                                                                        f'blinkCount++;if(blinkCount>=10){{clearInterval(blinkInterval);el.classList.remove("ring-2","ring-blue-400")}}}},500);}}'
+                                                                        f'else if(el){{el.scrollIntoView({{behavior:"smooth",block:"center"}});}}'
                                                                     )
                                                                 ).props('flat dense color=green text-xs').classes('text-xs')
                                                             # 显示函数名和类型
@@ -2137,129 +2142,131 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                     ui.button('关闭', on_click=plugin_list_dialog.close).props('flat color=gray').classes('mt-4 self-end text-sm')
                             plugin_list_btn.on_click(plugin_list_dialog.open)
 
-                        if registry:
-                            for module_name, info in registry.items():
-                                status = info['status']
-                                error = info.get('error')
+                        # 插件详情滚动容器（固定高度，内部滚动，不影响整个页面）
+                        with ui.column().classes('w-full gap-4 overflow-y-auto pr-2').style('max-height: 72vh; scroll-behavior: smooth;').props('id=plugin-detail-scroll') as plugin_detail_scroll:
+                            if registry:
+                                for module_name, info in registry.items():
+                                    status = info['status']
+                                    error = info.get('error')
 
-                                if status == 'loaded':
-                                    status_color = 'positive'
-                                    status_icon = 'check_circle'
-                                    status_text = '已加载'
-                                else:
-                                    status_color = 'negative'
-                                    status_icon = 'error'
-                                    status_text = '加载失败'
+                                    if status == 'loaded':
+                                        status_color = 'positive'
+                                        status_icon = 'check_circle'
+                                        status_text = '已加载'
+                                    else:
+                                        status_color = 'negative'
+                                        status_icon = 'error'
+                                        status_text = '加载失败'
 
-                                # 插件友好名称（用于 data-plugin 属性和点击跳转）
-                                display_name = info.get('name', module_name.split('.')[-1])
-                                plugin_version = info.get('version', 'unknown')
-                                plugin_author = info.get('author', 'unknown')
-                                plugin_description = info.get('description', '')
-                                plugin_tags = info.get('tags', [])
+                                    # 插件友好名称（用于 data-plugin 属性和点击跳转）
+                                    display_name = info.get('name', module_name.split('.')[-1])
+                                    plugin_version = info.get('version', 'unknown')
+                                    plugin_author = info.get('author', 'unknown')
+                                    plugin_description = info.get('description', '')
+                                    plugin_tags = info.get('tags', [])
 
-                                with ui.card().classes('w-full shadow-sm hover:shadow-md transition-shadow').props(f'data-plugin="{display_name}"'):
-                                    with ui.column().classes('gap-3 p-4'):
-                                        # 插件头部
-                                        with ui.row().classes('items-center justify-between w-full'):
-                                            with ui.row().classes('items-center gap-2'):
-                                                ui.icon(status_icon, size='sm').classes(f'text-{status_color}')
-                                                ui.label(display_name).classes('font-bold text-gray-800 text-lg')
-                                                ui.badge(f'v{plugin_version}', color='grey').props('outline')
-                                                ui.badge(status_text, color=status_color).props('outline')
+                                    with ui.card().classes('w-full shadow-sm hover:shadow-md transition-shadow').props(f'data-plugin="{display_name}"'):
+                                        with ui.column().classes('gap-3 p-4'):
+                                            # 插件头部
+                                            with ui.row().classes('items-center justify-between w-full'):
+                                                with ui.row().classes('items-center gap-2'):
+                                                    ui.icon(status_icon, size='sm').classes(f'text-{status_color}')
+                                                    ui.label(display_name).classes('font-bold text-gray-800 text-lg')
+                                                    ui.badge(f'v{plugin_version}', color='grey').props('outline')
+                                                    ui.badge(status_text, color=status_color).props('outline')
 
-                                            # 展开/收起配置按钮
-                                            if module_name in all_configs and all_configs[module_name].get('schema'):
-                                                cfg_btn = ui.button('⚙️ 配置', icon='settings').props('outline color=primary size=sm')
-                                            else:
-                                                cfg_btn = None
+                                                # 展开/收起配置按钮
+                                                if module_name in all_configs and all_configs[module_name].get('schema'):
+                                                    cfg_btn = ui.button('⚙️ 配置', icon='settings').props('outline color=primary size=sm')
+                                                else:
+                                                    cfg_btn = None
 
-                                        # 插件元信息
-                                        with ui.column().classes('gap-1'):
-                                            ui.label(module_name).classes('text-xs text-gray-400 font-mono')
-                                            if plugin_description:
-                                                ui.label(plugin_description).classes('text-sm text-gray-600')
-                                            if plugin_author and plugin_author != 'unknown':
-                                                ui.label(f'👤 作者: {plugin_author}').classes('text-xs text-gray-400')
-                                            if plugin_tags:
-                                                with ui.row().classes('gap-1 flex-wrap'):
-                                                    for tag in plugin_tags:
-                                                        ui.badge(tag, color='primary').props('outline').classes('text-xs')
+                                            # 插件元信息
+                                            with ui.column().classes('gap-1'):
+                                                ui.label(module_name).classes('text-xs text-gray-400 font-mono')
+                                                if plugin_description:
+                                                    ui.label(plugin_description).classes('text-sm text-gray-600')
+                                                if plugin_author and plugin_author != 'unknown':
+                                                    ui.label(f'👤 作者: {plugin_author}').classes('text-xs text-gray-400')
+                                                if plugin_tags:
+                                                    with ui.row().classes('gap-1 flex-wrap'):
+                                                        for tag in plugin_tags:
+                                                            ui.badge(tag, color='primary').props('outline').classes('text-xs')
 
-                                        if error:
-                                            ui.label(f'❌ 加载错误: {error}').classes('text-sm text-red-600')
+                                            if error:
+                                                ui.label(f'❌ 加载错误: {error}').classes('text-sm text-red-600')
 
-                                        # 该插件注册的扩展点统计（从 hook_details 和 spi_details 中收集）
-                                        plugin_hook_count = 0
-                                        plugin_spi_count = 0
-                                        for event, hooks in stats.get('hook_details', {}).items():
-                                            plugin_hook_count += sum(1 for h in hooks if h['plugin'] == display_name)
-                                        for stype, impls in stats.get('spi_details', {}).items():
-                                            plugin_spi_count += sum(1 for s in impls if s['plugin'] == display_name)
+                                            # 该插件注册的扩展点统计（从 hook_details 和 spi_details 中收集）
+                                            plugin_hook_count = 0
+                                            plugin_spi_count = 0
+                                            for event, hooks in stats.get('hook_details', {}).items():
+                                                plugin_hook_count += sum(1 for h in hooks if h['plugin'] == display_name)
+                                            for stype, impls in stats.get('spi_details', {}).items():
+                                                plugin_spi_count += sum(1 for s in impls if s['plugin'] == display_name)
 
-                                        with ui.row().classes('gap-2 flex-wrap'):
-                                            if plugin_hook_count > 0:
-                                                ui.badge(f'🔌 {plugin_hook_count} 个钩子', color='info').props('outline')
-                                            if plugin_spi_count > 0:
-                                                ui.badge(f'⚙️ {plugin_spi_count} 个SPI', color='secondary').props('outline')
-                                            if module_name in all_configs:
-                                                ui.badge('🔧 可配置', color='warning').props('outline')
+                                            with ui.row().classes('gap-2 flex-wrap'):
+                                                if plugin_hook_count > 0:
+                                                    ui.badge(f'🔌 {plugin_hook_count} 个钩子', color='info').props('outline')
+                                                if plugin_spi_count > 0:
+                                                    ui.badge(f'⚙️ {plugin_spi_count} 个SPI', color='secondary').props('outline')
+                                                if module_name in all_configs:
+                                                    ui.badge('🔧 可配置', color='warning').props('outline')
 
-                                        # 插件配置区域（默认隐藏，点击展开）
-                                        if cfg_btn and module_name in all_configs:
-                                            cfg_area = ui.column().classes('w-full gap-3 border-t pt-3')
-                                            cfg_area.visible = False
+                                            # 插件配置区域（默认隐藏，点击展开）
+                                            if cfg_btn and module_name in all_configs:
+                                                cfg_area = ui.column().classes('w-full gap-3 border-t pt-3')
+                                                cfg_area.visible = False
 
-                                            def toggle_cfg(area=cfg_area, btn=cfg_btn):
-                                                area.visible = not area.visible
-                                                btn.props(f'label={"收起配置" if area.visible else "⚙️ 配置"}')
+                                                def toggle_cfg(area=cfg_area, btn=cfg_btn):
+                                                    area.visible = not area.visible
+                                                    btn.props(f'label={"收起配置" if area.visible else "⚙️ 配置"}')
 
-                                            cfg_btn.on_click(lambda e, area=cfg_area, btn=cfg_btn: toggle_cfg(area, btn))
+                                                cfg_btn.on_click(lambda e, area=cfg_area, btn=cfg_btn: toggle_cfg(area, btn))
 
-                                            with cfg_area:
-                                                schema = all_configs[module_name].get('schema', {})
-                                                try:
-                                                    current_cfg = await get_plugin_config(module_name)
-                                                except Exception:
-                                                    current_cfg = all_configs[module_name].get('default', {})
-
-                                                config_values = dict(current_cfg)
-
-                                                for field_key, field_def in schema.items():
-                                                    field_type = field_def.get('type', 'string')
-                                                    field_label = field_def.get('label', field_key)
-                                                    field_help = field_def.get('help', '')
-                                                    field_default = field_def.get('default', config_values.get(field_key))
-
-                                                    with ui.row().classes('items-center gap-3 w-full'):
-                                                        ui.label(field_label).classes('text-sm text-gray-600 w-36 shrink-0')
-                                                        if field_type == 'boolean':
-                                                            switch = ui.switch(value=bool(config_values.get(field_key, field_default)))
-                                                            switch.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
-                                                        elif field_type == 'select':
-                                                            options = field_def.get('options', [])
-                                                            select = ui.select(options, value=config_values.get(field_key, field_default))
-                                                            select.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
-                                                        elif field_type == 'number':
-                                                            number = ui.number(value=config_values.get(field_key, field_default))
-                                                            number.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
-                                                        elif field_type == 'textarea':
-                                                            textarea = ui.textarea(value=str(config_values.get(field_key, field_default)))
-                                                            textarea.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
-                                                        else:
-                                                            text_input = ui.input(value=str(config_values.get(field_key, field_default)))
-                                                            text_input.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
-                                                        if field_help:
-                                                            ui.tooltip(field_help).classes('text-xs')
-
-                                                async def save_plugin_config(pn=module_name, cv=config_values):
+                                                with cfg_area:
+                                                    schema = all_configs[module_name].get('schema', {})
                                                     try:
-                                                        await set_plugin_config(pn, cv)
-                                                        ui.notify(f'{pn} 配置已保存', type='positive')
-                                                    except Exception as e:
-                                                        ui.notify(f'保存失败: {e}', type='negative')
+                                                        current_cfg = await get_plugin_config(module_name)
+                                                    except Exception:
+                                                        current_cfg = all_configs[module_name].get('default', {})
 
-                                                ui.button('💾 保存配置', on_click=save_plugin_config).props('color=primary')
+                                                    config_values = dict(current_cfg)
+
+                                                    for field_key, field_def in schema.items():
+                                                        field_type = field_def.get('type', 'string')
+                                                        field_label = field_def.get('label', field_key)
+                                                        field_help = field_def.get('help', '')
+                                                        field_default = field_def.get('default', config_values.get(field_key))
+
+                                                        with ui.row().classes('items-center gap-3 w-full'):
+                                                            ui.label(field_label).classes('text-sm text-gray-600 w-36 shrink-0')
+                                                            if field_type == 'boolean':
+                                                                switch = ui.switch(value=bool(config_values.get(field_key, field_default)))
+                                                                switch.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
+                                                            elif field_type == 'select':
+                                                                options = field_def.get('options', [])
+                                                                select = ui.select(options, value=config_values.get(field_key, field_default))
+                                                                select.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
+                                                            elif field_type == 'number':
+                                                                number = ui.number(value=config_values.get(field_key, field_default))
+                                                                number.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
+                                                            elif field_type == 'textarea':
+                                                                textarea = ui.textarea(value=str(config_values.get(field_key, field_default)))
+                                                                textarea.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
+                                                            else:
+                                                                text_input = ui.input(value=str(config_values.get(field_key, field_default)))
+                                                                text_input.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
+                                                            if field_help:
+                                                                ui.tooltip(field_help).classes('text-xs')
+
+                                                    async def save_plugin_config(pn=module_name, cv=config_values):
+                                                        try:
+                                                            await set_plugin_config(pn, cv)
+                                                            ui.notify(f'{pn} 配置已保存', type='positive')
+                                                        except Exception as e:
+                                                            ui.notify(f'保存失败: {e}', type='negative')
+
+                                                    ui.button('💾 保存配置', on_click=save_plugin_config).props('color=primary')
                             else:
                                 with ui.card().classes('w-full text-center p-12'):
                                     ui.icon('extension', size='4rem').classes('text-gray-400')

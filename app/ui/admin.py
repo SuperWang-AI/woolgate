@@ -1890,23 +1890,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         stat_card('📦', '已加载插件', f'{stats["loaded_plugins"]}/{stats["total_plugins"]}', f'失败 {stats["failed_plugins"]}', 'green')
                         stat_card('🔌', '生命周期钩子', stats['hook_count'], f'{len(stats["hook_events"])} 个事件', 'blue')
                         stat_card('⚙️', 'SPI 策略实现', stats['spi_count'], f'{len(stats["spi_types"])} 种类型', 'purple')
-
-                # ═══ 一、概览统计 ═══
-                def stat_card(icon, title, value, sub=None, color='blue'):
-                    with ui.card().classes(f'flex-1 border-l-4 border-{color}-500 p-4').style('min-height:120px'):
-                        with ui.column().classes('w-full items-center gap-2 justify-center').style('min-height:100%'):
-                            ui.label(icon).classes('text-2xl')
-                            ui.label(str(value)).classes('text-3xl font-bold')
-                            ui.label(title).classes('text-sm text-gray-600 font-medium')
-                            if sub:
-                                ui.label(sub).classes('text-xs text-gray-400')
-
-                with ui.row().classes('w-full gap-3'):
-                    stat_card('📦', '已加载插件', f'{stats["loaded_plugins"]}/{stats["total_plugins"]}', f'失败 {stats["failed_plugins"]}', 'green')
-                    stat_card('🔌', '生命周期钩子', stats['hook_count'], f'{len(stats["hook_events"])} 个事件', 'blue')
-                    stat_card('⚙️', 'SPI 策略实现', stats['spi_count'], f'{len(stats["spi_types"])} 种类型', 'purple')
-                    stat_card('🖥️', 'UI 扩展点', stats.get('ui_pages', 0) + stats.get('ui_nav_items', 0) + stats.get('ui_components', 0),
-                              f'页面{stats.get("ui_pages",0)} 导航{stats.get("ui_nav_items",0)} 组件{stats.get("ui_components",0)}', 'orange')
+                        stat_card('🖥️', 'UI 扩展点', stats.get('ui_pages', 0) + stats.get('ui_nav_items', 0) + stats.get('ui_components', 0),
+                                  f'页面{stats.get("ui_pages",0)} 导航{stats.get("ui_nav_items",0)} 组件{stats.get("ui_components",0)}', 'orange')
 
                 # ═══ 二、概念说明（可折叠）═══
                 with ui.card().classes('w-full'):

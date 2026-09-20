@@ -307,6 +307,32 @@ def create_ui():
     """创建UI"""
     print(f"[DEBUG] create_ui() 被调用")
 
+    # ═══ SPA 全局状态 ═══
+    _tabs_ref = None          # 当前tabs对象引用，用于SPA内导航
+    _plugin_active = None     # 当前激活的插件key（用于插件页面动态渲染）
+    _plugin_refresh = None    # 插件页面刷新回调（SPA内切换插件时调用）
+
+    def spa_navigate(key: str, active: str = None):
+        """SPA内导航：切换tab value + 同步URL，不触发整页刷新"""
+        nonlocal _plugin_active
+        if _tabs_ref is not None:
+            _tabs_ref.value = key
+        # 同步URL（不刷新页面）
+        if key == 'plugins' and active:
+            ui.run_javascript(f"history.replaceState(null, '', '/admin/plugins?active={active}')")
+            _plugin_active = active
+            # 触发插件页面刷新（SPA内切换插件）
+            if _plugin_refresh is not None:
+                _plugin_refresh()
+        else:
+            path = KEY_TO_PATH.get(key, '/')
+            ui.run_javascript(f"history.replaceState(null, '', '/admin{path}')")
+            if key != 'plugins':
+                _plugin_active = None
+                # 切回插件管理页面时也刷新
+                if key == 'plugins' and _plugin_refresh is not None:
+                    _plugin_refresh()
+
     # 插件系统 v2：UI 扩展点注册表
     from app.extensions.sdk import (
         page_registry, nav_registry, component_registry, config_registry,
@@ -392,40 +418,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 </style>
 ''')
 
-    def nav_header(current: str):
-        """独立页面顶部导航（vendors 等保留整页跳转）"""
-        page_head()
-        with ui.header().classes('header-gradient items-center justify-between px-6 shadow-lg').style('overflow: visible'):
-            with ui.row().classes('items-center gap-4'):
-                ui.label('🐑').classes('text-4xl')
-                ui.label('WoolGate').classes('text-2xl font-bold text-white')
-            with ui.row().classes('gap-2'):
-                for label, path, key in NAV_PAGES:
-                    if key == current:
-                        # 当前页：白色背景高亮 + 深色文字（内联样式强制覆盖，确保可读）
-                        ui.button(label, on_click=lambda p=path: ui.navigate.to(p)) \
-                            .props('no-caps') \
-                            .style('background-color:#ffffff !important; color:#764ba2 !important; font-weight:700; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.18);')
-                    else:
-                        ui.button(label, on_click=lambda p=path: ui.navigate.to(p)) \
-                            .props('flat no-caps text-color=white')
-                # 插件注册的导航项
-                for nav_item in nav_registry.list():
-                    plugin_key = f"plugin_{nav_item['route'].strip('/').replace('/', '_')}"
-                    if plugin_key == current:
-                        ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.run_javascript(f"window.location.href = '/admin{p}'")) \
-                            .props('no-caps') \
-                            .style('background-color:#ffffff !important; color:#764ba2 !important; font-weight:700; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.18);')
-                    else:
-                        ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.run_javascript(f"window.location.href = '/admin{p}'")) \
-                            .props('flat no-caps text-color=white')
-
     # SPA 路由映射：路由路径 ↔ tab key（插件统一使用/plugins?active=xxx）
     PATH_TO_KEY = {'/': 'home', '/wizard': 'wizard', '/accounts': 'accounts', '/config': 'config', '/pipeline': 'pipeline', '/logs': 'logs', '/plugins': 'plugins'}
     KEY_TO_PATH = {v: k for k, v in PATH_TO_KEY.items()}
 
     def nav_tabs(active_key: str):
         """SPA 顶部导航 tabs：点击仅前端切换面板，无整页刷新（插件统一聚合入口，带下拉列表）"""
+        nonlocal _tabs_ref
         page_head()
         with ui.header().classes('header-gradient items-center justify-between px-6 shadow-lg').style('overflow: visible'):
             with ui.row().classes('items-center gap-4'):
@@ -433,6 +432,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 ui.label('WoolGate').classes('text-2xl font-bold text-white')
             with ui.row().classes('items-center gap-1'):
                 with ui.tabs().props('dense active-color=white indicator-color=white text-color=white').classes('gap-1') as tabs:
+                    _tabs_ref = tabs  # 保存tabs引用供SPA导航使用
                     # 内置页面tab（除了插件管理）
                     for label, path, key in NAV_PAGES:
                         if key != 'plugins':
@@ -445,7 +445,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     dropdown_card.props(f'id={plugin_dropdown_id}')
                     with ui.column().classes('gap-0 p-0'):
                         # 插件管理入口
-                        ui.button('📋 插件管理', on_click=lambda: ui.run_javascript("window.location.href = '/admin/plugins'")).props('flat align=left').classes('w-full text-left text-gray-700 hover:bg-gray-100')
+                        ui.button('📋 插件管理', on_click=lambda: spa_navigate('plugins')).props('flat align=left').classes('w-full text-left text-gray-700 hover:bg-gray-100')
                         ui.separator()
                         # 已启用插件列表（只有注入前端页面的插件才会注册到nav_registry）
                         for nav_item in nav_registry.list():
@@ -454,17 +454,27 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                             label_text = nav_item['label']
                             if desc:
                                 label_text = f"{label_text}  —  {desc}"
-                            ui.button(label_text, on_click=lambda k=plugin_key: ui.run_javascript(f"window.location.href = '/admin/plugins?active={k}'")).props('flat align=left').classes('w-full text-left text-gray-700 hover:bg-gray-100')
+                            ui.button(label_text, on_click=lambda k=plugin_key: spa_navigate('plugins', active=k)).props('flat align=left').classes('w-full text-left text-gray-700 hover:bg-gray-100')
         return tabs
 
     async def build_spa(active_key: str, request: Optional[Request] = None):
         """SPA 根：导航 tabs + 内容面板，导航切换零刷新（URL 用 history.replaceState 同步，刷新后仍停留当前页）"""
+        nonlocal _plugin_active
         ui.page_title('WoolGate AI 聚合网关')
+        # 从URL解析初始插件active状态
+        if request is not None and active_key == 'plugins':
+            _plugin_active = request.query_params.get('active', None)
         tabs = nav_tabs(active_key)
 
         def sync_url(e):
+            nonlocal _plugin_active
             path = KEY_TO_PATH.get(e.value, '/')
-            ui.run_javascript(f"history.replaceState(null, '', '/admin{path}')")
+            if e.value == 'plugins' and _plugin_active:
+                ui.run_javascript(f"history.replaceState(null, '', '/admin/plugins?active={_plugin_active}')")
+            else:
+                ui.run_javascript(f"history.replaceState(null, '', '/admin{path}')")
+            if e.value != 'plugins':
+                _plugin_active = None
 
         tabs.on_value_change(sync_url)
 
@@ -585,7 +595,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     if ok:
                         ui.notify(f'已应用智能配置：{profile}。可在「管线策略」页随时微调。', type='positive', position='top')
                         # 统一走免费向导：本地大模型→向导首个卡片；已有 Key→向导粘贴/回显新增；都没有→向导领取免费额度
-                        ui.navigate.to('/wizard')
+                        spa_navigate('wizard')
                     else:
                         ui.notify('应用失败，请重试', type='negative')
 
@@ -755,10 +765,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             # 快速操作
             ui.label('快速操作').classes('text-2xl font-bold text-gray-800 mt-4')
             with ui.row().classes('gap-3'):
-                ui.button('🆓 免费向导', on_click=lambda: ui.navigate.to('/wizard')).props('color=green size=lg')
-                ui.button('新增账号', on_click=lambda: ui.navigate.to('/accounts')).props('color=primary size=lg')
-                ui.button('系统配置', on_click=lambda: ui.navigate.to('/config')).props('color=secondary size=lg outline')
-                ui.button('查看日志', on_click=lambda: ui.navigate.to('/logs')).props('color=accent size=lg outline')
+                ui.button('🆓 免费向导', on_click=lambda: spa_navigate('wizard')).props('color=green size=lg')
+                ui.button('新增账号', on_click=lambda: spa_navigate('accounts')).props('color=primary size=lg')
+                ui.button('系统配置', on_click=lambda: spa_navigate('config')).props('color=secondary size=lg outline')
+                ui.button('查看日志', on_click=lambda: spa_navigate('logs')).props('color=accent size=lg outline')
                 ui.button('▶ 路由省钱演示', on_click=lambda: ui.run_javascript("window.open('/admin/static/wg_routing_demo.html', '_blank')")).props('color=orange size=lg')
     
     
@@ -1111,7 +1121,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         svc = ModelCatalogService(session)
                         count = await svc.recompute_all_embeddings(embed_svc)
                     ui.notify(f'已重算 {count} 个模型能力向量', type='positive')
-                    ui.navigate.to('/accounts')
+                    spa_navigate('accounts')
                 except Exception as e:
                     ui.notify(f'重算失败: {e}', type='negative')
 
@@ -1802,70 +1812,82 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         await logs_content()
 
     async def plugins_view(request: Optional[Request] = None):
-        """插件管理视图（SPA tab 面板内容）——支持?active=xxx显示指定插件内容"""
+        """插件管理视图（SPA tab 面板内容）——统一refreshable渲染，支持SPA内切换插件"""
+        nonlocal _plugin_refresh
 
-        # 从URL读取active参数
-        active_plugin = None
-        if request is not None:
-            active_plugin = request.query_params.get('active', None)
-
-        # 如果指定了active插件，渲染该插件内容
-        if active_plugin:
-            from app.extensions.sdk import page_registry, nav_registry
-            # 查找插件路由
-            plugin_route = None
-            plugin_info = None
-            for nav_item in nav_registry.list():
-                if nav_item['route'].strip('/') == active_plugin or nav_item['route'] == f'/{active_plugin}':
-                    plugin_route = nav_item['route']
-                    plugin_info = nav_item
-                    break
-
-            with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
-                # 插件页面顶部：返回按钮 + 插件名称
-                with ui.row().classes('items-center justify-between w-full'):
-                    with ui.row().classes('items-center gap-3'):
-                        ui.button('← 返回插件管理', on_click=lambda: ui.run_javascript("window.location.href = '/admin/plugins'")).props('outline color=primary')
-                        ui.label(plugin_info['label'] if plugin_info else active_plugin).classes('text-2xl font-bold text-gray-800')
-                    # 插件切换下拉
-                    plugin_options = {nav_item['route'].strip('/'): nav_item['label'] for nav_item in nav_registry.list()}
-                    current_key = plugin_route.strip('/') if plugin_route else active_plugin
-                    def on_plugin_change(e):
-                        ui.run_javascript(f"window.location.href = '/admin/plugins?active={e.value}'")
-                    ui.select(options=plugin_options, value=current_key, on_change=on_plugin_change, label='切换插件').props('outlined dense').classes('w-48')
-
-                # 插件内容区域
-                if plugin_route and plugin_route in page_registry.list():
-                    page_info = page_registry.get(plugin_route)
-                    if page_info and callable(page_info['render']):
-                        try:
-                            render_func = page_info['render']
-                            result = render_func(request) if 'request' in render_func.__code__.co_varnames else render_func()
-                            if hasattr(result, '__await__'):
-                                await result
-                        except Exception as e:
-                            with ui.card().classes('w-full bg-red-50 border-l-4 border-red-500 p-4'):
-                                ui.label(f'插件页面渲染异常: {e}').classes('text-red-700')
-                else:
-                    with ui.card().classes('w-full p-8 text-center'):
-                        ui.label(f'未找到插件: {active_plugin}').classes('text-xl text-gray-500')
-            return
-
-        # 无active参数：显示插件管理原内容
         @ui.refreshable
-        async def plugins_content():
-            from app.extensions.loader import get_plugin_registry, get_plugin_stats
-            from app.extensions.sdk import config_registry as _cfg_reg, get_plugin_config, set_plugin_config, nav_registry
+        async def render():
+            """统一渲染：根据_plugin_active全局状态决定显示插件详情或插件管理"""
+            if _plugin_active:
+                # ═══ 插件详情页面 ═══
+                from app.extensions.sdk import page_registry, nav_registry
+                active_plugin = _plugin_active
+                # 查找插件路由
+                plugin_route = None
+                plugin_info = None
+                for nav_item in nav_registry.list():
+                    if nav_item['route'].strip('/') == active_plugin or nav_item['route'] == f'/{active_plugin}':
+                        plugin_route = nav_item['route']
+                        plugin_info = nav_item
+                        break
 
-            stats = get_plugin_stats()
-            registry = get_plugin_registry()
-            all_configs = _cfg_reg.list()
+                with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
+                    # 插件页面顶部：返回按钮 + 插件名称
+                    with ui.row().classes('items-center justify-between w-full'):
+                        with ui.row().classes('items-center gap-3'):
+                            ui.button('← 返回插件管理', on_click=lambda: spa_navigate('plugins')).props('outline color=primary')
+                            ui.label(plugin_info['label'] if plugin_info else active_plugin).classes('text-2xl font-bold text-gray-800')
+                        # 插件切换下拉
+                        plugin_options = {nav_item['route'].strip('/'): nav_item['label'] for nav_item in nav_registry.list()}
+                        current_key = plugin_route.strip('/') if plugin_route else active_plugin
+                        def on_plugin_change(e):
+                            spa_navigate('plugins', active=e.value)
+                        ui.select(options=plugin_options, value=current_key, on_change=on_plugin_change, label='切换插件').props('outlined dense').classes('w-48')
 
-            with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
-                # ═══ 标题 ═══
-                with ui.row().classes('items-center justify-between w-full'):
-                    ui.label('🔌 插件管理').classes('text-3xl font-bold text-gray-800')
-                    ui.button('🔄 刷新', on_click=plugins_content.refresh).props('outline color=primary')
+                    # 插件内容区域
+                    if plugin_route and plugin_route in page_registry.list():
+                        page_info = page_registry.get(plugin_route)
+                        if page_info and callable(page_info['render']):
+                            try:
+                                render_func = page_info['render']
+                                result = render_func(request) if 'request' in render_func.__code__.co_varnames else render_func()
+                                if hasattr(result, '__await__'):
+                                    await result
+                            except Exception as e:
+                                with ui.card().classes('w-full bg-red-50 border-l-4 border-red-500 p-4'):
+                                    ui.label(f'插件页面渲染异常: {e}').classes('text-red-700')
+                    else:
+                        with ui.card().classes('w-full p-8 text-center'):
+                            ui.label(f'未找到插件: {active_plugin}').classes('text-xl text-gray-500')
+            else:
+                # ═══ 插件管理页面 ═══
+                from app.extensions.loader import get_plugin_registry, get_plugin_stats
+                from app.extensions.sdk import config_registry as _cfg_reg, get_plugin_config, set_plugin_config, nav_registry
+
+                stats = get_plugin_stats()
+                registry = get_plugin_registry()
+                all_configs = _cfg_reg.list()
+
+                with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
+                    # ═══ 标题 ═══
+                    with ui.row().classes('items-center justify-between w-full'):
+                        ui.label('🔌 插件管理').classes('text-3xl font-bold text-gray-800')
+                        ui.button('🔄 刷新', on_click=render.refresh).props('outline color=primary')
+
+                    # ═══ 一、概览统计 ═══
+                    def stat_card(icon, title, value, sub=None, color='blue'):
+                        with ui.card().classes(f'flex-1 border-l-4 border-{color}-500 p-4').style('min-height:120px'):
+                            with ui.column().classes('w-full items-center gap-2 justify-center').style('min-height:100%'):
+                                ui.label(icon).classes('text-2xl')
+                                ui.label(str(value)).classes('text-3xl font-bold')
+                                ui.label(title).classes('text-sm text-gray-600 font-medium')
+                                if sub:
+                                    ui.label(sub).classes('text-xs text-gray-400')
+
+                    with ui.row().classes('w-full gap-3'):
+                        stat_card('📦', '已加载插件', f'{stats["loaded_plugins"]}/{stats["total_plugins"]}', f'失败 {stats["failed_plugins"]}', 'green')
+                        stat_card('🔌', '生命周期钩子', stats['hook_count'], f'{len(stats["hook_events"])} 个事件', 'blue')
+                        stat_card('⚙️', 'SPI 策略实现', stats['spi_count'], f'{len(stats["spi_types"])} 种类型', 'purple')
 
                 # ═══ 一、概览统计 ═══
                 def stat_card(icon, title, value, sub=None, color='blue'):
@@ -2252,16 +2274,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         ui.code('WOOLGATE_PLUGINS=plugins.balance_monitor,my_company.audit_plugin').classes('text-xs bg-white p-2 rounded w-full')
                         ui.label('修改后需重启服务生效。插件 import 失败会被跳过，不影响启动。').classes('text-xs text-blue-600')
 
-        await plugins_content()
+        _plugin_refresh = render.refresh
+        await render()
 
 def _type_label(t):
     """模型类型显示汉化"""
     return {'chat': '对话', 'embedding': '向量', 'image': '图像', 'video': '视频', 'audio': '音频'}.get(t or 'chat', t or 'chat')
 
 
-_plugin_page_refs = []
-
-def _register_plugin_pages():
+def _log_plugin_pages():
     """插件页面已集成到SPA架构中，此处仅记录日志，不再注册独立页面路由"""
     from app.extensions.sdk import page_registry
     print(f"[插件系统] 插件页面已集成到SPA架构，page_registry 内容: {page_registry.list()}")
@@ -2274,9 +2295,10 @@ def _register_plugin_pages():
 def init_ui(fastapi_app):
     """初始化NiceGUI并挂载到FastAPI"""
     create_ui()
-    _register_plugin_pages()
+    _log_plugin_pages()
     # 显式挂载静态目录（含路由省钱演示页等），容器内项目根 /app/static
     _static_dir = Path(__file__).resolve().parent.parent.parent / 'static'
+    print(f'[UI] 静态文件目录: {_static_dir} (存在: {_static_dir.exists()})')
     if _static_dir.exists():
         app.add_static_files('/static', str(_static_dir))
     ui.run_with(

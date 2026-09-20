@@ -370,31 +370,28 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.run_javascript(f"window.location.href = '/admin{p}'")) \
                             .props('flat no-caps text-color=white')
 
-    # SPA 路由映射：路由路径 ↔ tab key（插件页面使用整页跳转，不在此映射中）
+    # SPA 路由映射：路由路径 ↔ tab key（动态包含插件页面）
     PATH_TO_KEY = {'/': 'home', '/wizard': 'wizard', '/accounts': 'accounts', '/config': 'config', '/pipeline': 'pipeline', '/logs': 'logs', '/plugins': 'plugins'}
+    # 动态添加插件页面路由映射
+    for nav_item in nav_registry.list():
+        plugin_key = f"plugin_{nav_item['route'].strip('/').replace('/', '_')}"
+        PATH_TO_KEY[nav_item['route']] = plugin_key
     KEY_TO_PATH = {v: k for k, v in PATH_TO_KEY.items()}
 
     def nav_tabs(active_key: str):
-        """SPA 顶部导航 tabs：点击仅前端切换面板，无整页刷新；插件导航使用整页跳转"""
+        """SPA 顶部导航 tabs：点击仅前端切换面板，无整页刷新（包含插件页面tab）"""
         page_head()
         with ui.header().classes('header-gradient items-center justify-between px-6 shadow-lg'):
             with ui.row().classes('items-center gap-4'):
                 ui.label('🐑').classes('text-4xl')
                 ui.label('WoolGate').classes('text-2xl font-bold text-white')
-            with ui.row().classes('items-center gap-2'):
-                with ui.tabs().props('dense active-color=white indicator-color=white text-color=white').classes('gap-1') as tabs:
-                    for label, path, key in NAV_PAGES:
-                        ui.tab(name=key, label=label)
-                # 插件注册的导航项（使用整页跳转，因为插件页面是独立页面）
+            with ui.tabs().props('dense active-color=white indicator-color=white text-color=white').classes('gap-1') as tabs:
+                for label, path, key in NAV_PAGES:
+                    ui.tab(name=key, label=label)
+                # 插件注册的导航项（集成到SPA tabs中）
                 for nav_item in nav_registry.list():
                     plugin_key = f"plugin_{nav_item['route'].strip('/').replace('/', '_')}"
-                    if plugin_key == active_key:
-                        ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.run_javascript(f"window.location.href = '/admin{p}'")) \
-                            .props('no-caps') \
-                            .style('background-color:#ffffff !important; color:#764ba2 !important; font-weight:700; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.18);')
-                    else:
-                        ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.run_javascript(f"window.location.href = '/admin{p}'")) \
-                            .props('flat no-caps text-color=white')
+                    ui.tab(name=plugin_key, label=nav_item['label'])
         return tabs
 
     async def build_spa(active_key: str, request: Optional[Request] = None):
@@ -423,6 +420,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 await logs_view()
             with ui.tab_panel('plugins'):
                 await plugins_view()
+            # 动态添加插件页面的tab_panel
+            for nav_item in nav_registry.list():
+                plugin_key = f"plugin_{nav_item['route'].strip('/').replace('/', '_')}"
+                with ui.tab_panel(plugin_key):
+                    page_info = page_registry.get(nav_item['route'])
+                    if page_info and callable(page_info['render']):
+                        try:
+                            render_func = page_info['render']
+                            result = render_func(request) if 'request' in render_func.__code__.co_varnames else render_func()
+                            if hasattr(result, '__await__'):
+                                await result
+                        except Exception as e:
+                            with ui.card().classes('w-full bg-red-50 border-l-4 border-red-500 p-4'):
+                                ui.label(f'插件页面渲染异常: {e}').classes('text-red-700')
 
     @ui.page('/')
     async def index(request: Request):
@@ -1559,6 +1570,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         """插件管理（SPA）"""
         await build_spa('plugins')
 
+    # 动态为插件页面创建SPA路由（刷新后显示完整导航栏的SPA页面）
+    for nav_item in nav_registry.list():
+        plugin_key = f"plugin_{nav_item['route'].strip('/').replace('/', '_')}"
+        plugin_route = nav_item['route']
+        def _make_plugin_spa_page(pk, pr):
+            @ui.page(pr)
+            async def plugin_spa_page(request: Request):
+                await build_spa(pk, request)
+            return plugin_spa_page
+        _make_plugin_spa_page(plugin_key, plugin_route)
+
     async def logs_view():
         """请求日志视图（SPA tab 面板内容）"""
 
@@ -2154,35 +2176,13 @@ def _type_label(t):
 _plugin_page_refs = []
 
 def _register_plugin_pages():
+    """插件页面已集成到SPA架构中，此处仅记录日志，不再注册独立页面路由"""
     from app.extensions.sdk import page_registry
-    print(f"[插件系统] 模块级别注册插件页面，page_registry 内容: {page_registry.list()}")
+    print(f"[插件系统] 插件页面已集成到SPA架构，page_registry 内容: {page_registry.list()}")
     for route, page_info in page_registry.list().items():
         full_route = route if route.startswith('/') else '/' + route
-        render_func = page_info['render']
         page_title = page_info.get('title', '插件页面')
-        print(f"[插件系统] 注册插件页面: {full_route} ({page_title})")
-
-        def _make_plugin_page(rf, pt, fr):
-            @ui.page(fr)
-            async def plugin_page(request: Request):
-                ui.colors(primary='#667eea', secondary='#764ba2')
-                with ui.header().classes('items-center justify-between px-6 shadow-lg').style('background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);'):
-                    with ui.row().classes('items-center gap-4'):
-                        ui.label('🐑').classes('text-4xl')
-                        ui.label('WoolGate').classes('text-2xl font-bold text-white')
-                    ui.button('← 返回首页', on_click=lambda: ui.navigate.to('/admin/')).props('flat no-caps text-color=white')
-                with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
-                    try:
-                        if callable(rf):
-                            result = rf(request) if 'request' in rf.__code__.co_varnames else rf()
-                            if hasattr(result, '__await__'):
-                                await result
-                    except Exception as e:
-                        ui.card().classes('w-full bg-red-50 border-l-4 border-red-500 p-4')
-                        ui.label(f'插件页面渲染异常: {e}').classes('text-red-700')
-            return plugin_page
-
-        _plugin_page_refs.append(_make_plugin_page(render_func, page_title, full_route))
+        print(f"[插件系统] SPA插件页面: {full_route} ({page_title})")
 
 
 def init_ui(fastapi_app):

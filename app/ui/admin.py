@@ -338,6 +338,40 @@ function toggleDropdown(id) {
         el.classList.toggle('hidden');
     }
 }
+function showDropdown(id) {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('hidden');
+}
+function hideDropdown(id) {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('hidden');
+}
+// 插件按钮hover显示下拉菜单（轮询等待NiceGUI内容加载）
+function initPluginDropdownHover() {
+    const pluginBtn = document.getElementById('c17');
+    const dropdown = document.getElementById('plugin-dropdown-menu');
+    if (!pluginBtn || !dropdown) {
+        setTimeout(initPluginDropdownHover, 200);
+        return;
+    }
+    let hideTimer = null;
+    pluginBtn.addEventListener('mouseenter', function() {
+        if (hideTimer) clearTimeout(hideTimer);
+        showDropdown('plugin-dropdown-menu');
+    });
+    pluginBtn.addEventListener('mouseleave', function() {
+        hideTimer = setTimeout(function() {
+            hideDropdown('plugin-dropdown-menu');
+        }, 200);
+    });
+    dropdown.addEventListener('mouseenter', function() {
+        if (hideTimer) clearTimeout(hideTimer);
+    });
+    dropdown.addEventListener('mouseleave', function() {
+        hideDropdown('plugin-dropdown-menu');
+    });
+}
+initPluginDropdownHover();
 document.addEventListener('click', function(e) {
     const dropdowns = document.querySelectorAll('[id$="-dropdown-menu"]');
     dropdowns.forEach(function(d) {
@@ -405,9 +439,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                             ui.tab(name=key, label=label)
                 # 插件聚合入口：按钮+自定义下拉面板（JavaScript控制显示）
                 plugin_dropdown_id = 'plugin-dropdown-menu'
-                def _toggle_plugin_dropdown():
-                    ui.run_javascript(f"toggleDropdown('{plugin_dropdown_id}')")
-                ui.button('🔌 插件 ▼', on_click=_toggle_plugin_dropdown).props('flat color=white dense').classes('text-white')
+                ui.button('🔌 插件 ▼').props('flat color=white dense').classes('text-white')
                 # 下拉面板（默认隐藏）
                 with ui.card().classes('absolute top-full right-0 mt-1 shadow-xl z-50 hidden').style('min-width: 240px;') as dropdown_card:
                     dropdown_card.props(f'id={plugin_dropdown_id}')

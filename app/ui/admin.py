@@ -363,31 +363,38 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 for nav_item in nav_registry.list():
                     plugin_key = f"plugin_{nav_item['route'].strip('/').replace('/', '_')}"
                     if plugin_key == current:
-                        ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.navigate.to('/admin' + p)) \
+                        ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.run_javascript(f"window.location.href = '/admin{p}'")) \
                             .props('no-caps') \
                             .style('background-color:#ffffff !important; color:#764ba2 !important; font-weight:700; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.18);')
                     else:
-                        ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.navigate.to('/admin' + p)) \
+                        ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.run_javascript(f"window.location.href = '/admin{p}'")) \
                             .props('flat no-caps text-color=white')
 
-    # SPA 路由映射：路由路径 ↔ tab key
+    # SPA 路由映射：路由路径 ↔ tab key（插件页面使用整页跳转，不在此映射中）
     PATH_TO_KEY = {'/': 'home', '/wizard': 'wizard', '/accounts': 'accounts', '/config': 'config', '/pipeline': 'pipeline', '/logs': 'logs', '/plugins': 'plugins'}
     KEY_TO_PATH = {v: k for k, v in PATH_TO_KEY.items()}
 
     def nav_tabs(active_key: str):
-        """SPA 顶部导航 tabs：点击仅前端切换面板，无整页刷新"""
+        """SPA 顶部导航 tabs：点击仅前端切换面板，无整页刷新；插件导航使用整页跳转"""
         page_head()
         with ui.header().classes('header-gradient items-center justify-between px-6 shadow-lg'):
             with ui.row().classes('items-center gap-4'):
                 ui.label('🐑').classes('text-4xl')
                 ui.label('WoolGate').classes('text-2xl font-bold text-white')
-            with ui.tabs().props('dense active-color=white indicator-color=white text-color=white').classes('gap-1') as tabs:
-                for label, path, key in NAV_PAGES:
-                    ui.tab(name=key, label=label)
-                # 插件注册的导航项
+            with ui.row().classes('items-center gap-2'):
+                with ui.tabs().props('dense active-color=white indicator-color=white text-color=white').classes('gap-1') as tabs:
+                    for label, path, key in NAV_PAGES:
+                        ui.tab(name=key, label=label)
+                # 插件注册的导航项（使用整页跳转，因为插件页面是独立页面）
                 for nav_item in nav_registry.list():
                     plugin_key = f"plugin_{nav_item['route'].strip('/').replace('/', '_')}"
-                    ui.tab(name=plugin_key, label=nav_item['label'])
+                    if plugin_key == active_key:
+                        ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.run_javascript(f"window.location.href = '/admin{p}'")) \
+                            .props('no-caps') \
+                            .style('background-color:#ffffff !important; color:#764ba2 !important; font-weight:700; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.18);')
+                    else:
+                        ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.run_javascript(f"window.location.href = '/admin{p}'")) \
+                            .props('flat no-caps text-color=white')
         return tabs
 
     async def build_spa(active_key: str, request: Optional[Request] = None):

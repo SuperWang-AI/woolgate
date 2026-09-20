@@ -1754,11 +1754,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
                 # ═══ 一、概览统计 ═══
                 def stat_card(icon, title, value, sub=None, color='blue'):
-                    with ui.card().classes(f'flex-1 border-l-4 border-{color}-500').style('height:100px'):
-                        with ui.column().classes('w-full items-center gap-1 justify-center').style('height:100%'):
-                            ui.label(icon).classes('text-xl')
-                            ui.label(str(value)).classes('text-2xl font-bold')
-                            ui.label(title).classes('text-xs text-gray-500')
+                    with ui.card().classes(f'flex-1 border-l-4 border-{color}-500 p-4').style('min-height:120px'):
+                        with ui.column().classes('w-full items-center gap-2 justify-center').style('min-height:100%'):
+                            ui.label(icon).classes('text-2xl')
+                            ui.label(str(value)).classes('text-3xl font-bold')
+                            ui.label(title).classes('text-sm text-gray-600 font-medium')
                             if sub:
                                 ui.label(sub).classes('text-xs text-gray-400')
 

@@ -1817,6 +1817,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         """插件管理视图（SPA tab 面板内容）——统一refreshable渲染，支持SPA内切换插件"""
         nonlocal _plugin_refresh
 
+        def make_plugin_click_handler(p):
+            def handler():
+                js = (
+                    'var container=document.getElementById("plugin-detail-scroll");'
+                    f"var el=container?container.querySelector('[data-plugin=\"{p}\"]'):document.querySelector('[data-plugin=\"{p}\"]');"
+                    'if(el&&container){'
+                    'var targetTop=el.offsetTop-container.offsetTop+container.scrollTop-16;'
+                    'container.scrollTo({top:targetTop,behavior:"smooth"});'
+                    'var blinkCount=0;var blinkInterval=setInterval(function(){'
+                    'if(blinkCount%2===0){el.classList.add("ring-2","ring-blue-400")}else{el.classList.remove("ring-2","ring-blue-400")};'
+                    'blinkCount++;if(blinkCount>=10){clearInterval(blinkInterval);el.classList.remove("ring-2","ring-blue-400")}},500);'
+                    '}else if(el){el.scrollIntoView({behavior:"smooth",block:"center"});}'
+                )
+                ui.run_javascript(js)
+            return handler
+
         @ui.refreshable
         async def render():
             """统一渲染：根据_plugin_active全局状态决定显示插件详情或插件管理"""
@@ -2037,16 +2053,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                                                 target_name = display_name.lower()
                                                                 ui.button(
                                                                     f'📦 {display_name}',
-                                                                    on_click=lambda p=target_name: ui.run_javascript(
-                                                                        f'var container=document.getElementById("plugin-detail-scroll");'
-                                                                        f'var el=container?container.querySelector("[data-plugin=\"{p}\"]"):document.querySelector("[data-plugin=\"{p}\"]");'
-                                                                        f'if(el&&container){{var targetTop=el.offsetTop-container.offsetTop+container.scrollTop-16;'
-                                                                        f'container.scrollTo({{top:targetTop,behavior:"smooth"}});'
-                                                                        f'var blinkCount=0;var blinkInterval=setInterval(function(){{'
-                                                                        f'if(blinkCount%2===0){{el.classList.add("ring-2","ring-blue-400")}}else{{el.classList.remove("ring-2","ring-blue-400")}};'
-                                                                        f'blinkCount++;if(blinkCount>=10){{clearInterval(blinkInterval);el.classList.remove("ring-2","ring-blue-400")}}}},500);}}'
-                                                                        f'else if(el){{el.scrollIntoView({{behavior:"smooth",block:"center"}});}}'
-                                                                    )
+                                                                    on_click=make_plugin_click_handler(target_name)
                                                                 ).props('flat dense color=green text-xs').classes('text-xs')
                                                             # 显示函数名和类型
                                                             ui.label(f'{item.get("type", "")}:{item.get("function", "")}').classes('text-xs text-gray-400 font-mono')

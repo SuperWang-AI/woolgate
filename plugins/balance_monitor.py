@@ -302,7 +302,6 @@ async def render_balance_page(request=None):
                 ui.label('💰 余额监控与额度预警').classes('text-3xl font-bold text-gray-800')
                 with ui.row().classes('gap-2'):
                     ui.button('🔄 手动同步', on_click=lambda: ui.notify('正在同步所有账号余额...', type='info')).props('outline color=primary')
-                    ui.button('⚙️ 插件配置', on_click=lambda: ui.navigate.to('/admin/plugins')).props('outline color=secondary')
 
             # 统计卡片
             async with AsyncSessionLocal() as session:
@@ -417,6 +416,7 @@ register_page(
 register_nav_item(
     label="💰 余额监控",
     route="/balance",
+    description="监控各平台账号余额与额度，低余额预警",
 )
 
 
@@ -475,7 +475,7 @@ async def render_dashboard_widget():
                     ui.label(f'已监控 {len(accounts)} 个账号').classes('text-xs text-gray-500')
                 if balance_count > 0:
                     ui.label(f'总余额 ¥{total_balance:.2f}').classes('text-xs text-gray-400 mt-1')
-                ui.button('查看详情 →', on_click=lambda: ui.navigate.to('/admin/balance')).props('flat color=primary text-xs').classes('mt-2')
+                ui.button('查看详情 →', on_click=lambda: ui.navigate.to('/balance')).props('flat color=primary text-xs').classes('mt-2')
 
     except Exception as e:
         logger.warning(f"[{PLUGIN_NAME}] 渲染首页小部件异常: {e}")

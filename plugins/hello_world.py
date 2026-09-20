@@ -143,7 +143,7 @@ register_page("/hello-world", "Hello World", render_hello_page)
 #   label: 菜单显示名称
 #   route: 点击跳转的路由（与 register_page 的 route 对应）
 #   icon: 可选图标（emoji 或字符）
-register_nav_item("🧪 Hello World", "/hello-world", icon="science")
+register_nav_item("🧪 Hello World", "/hello-world", icon="science", description="插件开发示例，演示Hook/SPI/UI扩展点用法")
 
 
 # ══════════════════════════════════════════════════════════════

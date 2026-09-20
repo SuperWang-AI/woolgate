@@ -331,6 +331,22 @@ def create_ui():
         ui.add_head_html('''
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐑%3C/text%3E%3C/svg%3E">
 <script>document.querySelectorAll('link[rel="shortcut icon"]').forEach(function(l){l.remove()})</script>
+<script>
+function toggleDropdown(id) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.classList.toggle('hidden');
+    }
+}
+document.addEventListener('click', function(e) {
+    const dropdowns = document.querySelectorAll('[id$="-dropdown-menu"]');
+    dropdowns.forEach(function(d) {
+        if (!d.contains(e.target) && !e.target.closest('button')) {
+            d.classList.add('hidden');
+        }
+    });
+});
+</script>
 <style>
 .header-gradient { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
 .stat-card { transition: transform 0.2s, box-shadow 0.2s; }
@@ -345,7 +361,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
     def nav_header(current: str):
         """独立页面顶部导航（vendors 等保留整页跳转）"""
         page_head()
-        with ui.header().classes('header-gradient items-center justify-between px-6 shadow-lg'):
+        with ui.header().classes('header-gradient items-center justify-between px-6 shadow-lg').style('overflow: visible'):
             with ui.row().classes('items-center gap-4'):
                 ui.label('🐑').classes('text-4xl')
                 ui.label('WoolGate').classes('text-2xl font-bold text-white')
@@ -370,28 +386,43 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.run_javascript(f"window.location.href = '/admin{p}'")) \
                             .props('flat no-caps text-color=white')
 
-    # SPA 路由映射：路由路径 ↔ tab key（动态包含插件页面）
+    # SPA 路由映射：路由路径 ↔ tab key（插件统一使用/plugins?active=xxx）
     PATH_TO_KEY = {'/': 'home', '/wizard': 'wizard', '/accounts': 'accounts', '/config': 'config', '/pipeline': 'pipeline', '/logs': 'logs', '/plugins': 'plugins'}
-    # 动态添加插件页面路由映射
-    for nav_item in nav_registry.list():
-        plugin_key = f"plugin_{nav_item['route'].strip('/').replace('/', '_')}"
-        PATH_TO_KEY[nav_item['route']] = plugin_key
     KEY_TO_PATH = {v: k for k, v in PATH_TO_KEY.items()}
 
     def nav_tabs(active_key: str):
-        """SPA 顶部导航 tabs：点击仅前端切换面板，无整页刷新（包含插件页面tab）"""
+        """SPA 顶部导航 tabs：点击仅前端切换面板，无整页刷新（插件统一聚合入口，带下拉列表）"""
         page_head()
-        with ui.header().classes('header-gradient items-center justify-between px-6 shadow-lg'):
+        with ui.header().classes('header-gradient items-center justify-between px-6 shadow-lg').style('overflow: visible'):
             with ui.row().classes('items-center gap-4'):
                 ui.label('🐑').classes('text-4xl')
                 ui.label('WoolGate').classes('text-2xl font-bold text-white')
-            with ui.tabs().props('dense active-color=white indicator-color=white text-color=white').classes('gap-1') as tabs:
-                for label, path, key in NAV_PAGES:
-                    ui.tab(name=key, label=label)
-                # 插件注册的导航项（集成到SPA tabs中）
-                for nav_item in nav_registry.list():
-                    plugin_key = f"plugin_{nav_item['route'].strip('/').replace('/', '_')}"
-                    ui.tab(name=plugin_key, label=nav_item['label'])
+            with ui.row().classes('items-center gap-1'):
+                with ui.tabs().props('dense active-color=white indicator-color=white text-color=white').classes('gap-1') as tabs:
+                    # 内置页面tab（除了插件管理）
+                    for label, path, key in NAV_PAGES:
+                        if key != 'plugins':
+                            ui.tab(name=key, label=label)
+                # 插件聚合入口：按钮+自定义下拉面板（JavaScript控制显示）
+                plugin_dropdown_id = 'plugin-dropdown-menu'
+                def _toggle_plugin_dropdown():
+                    ui.run_javascript(f"toggleDropdown('{plugin_dropdown_id}')")
+                ui.button('🔌 插件 ▼', on_click=_toggle_plugin_dropdown).props('flat color=white dense').classes('text-white')
+                # 下拉面板（默认隐藏）
+                with ui.card().classes('absolute top-full right-0 mt-1 shadow-xl z-50 hidden').style('min-width: 240px;') as dropdown_card:
+                    dropdown_card.props(f'id={plugin_dropdown_id}')
+                    with ui.column().classes('gap-0 p-0'):
+                        # 插件管理入口
+                        ui.button('📋 插件管理', on_click=lambda: ui.run_javascript("window.location.href = '/admin/plugins'")).props('flat align=left').classes('w-full text-left text-gray-700 hover:bg-gray-100')
+                        ui.separator()
+                        # 已启用插件列表（只有注入前端页面的插件才会注册到nav_registry）
+                        for nav_item in nav_registry.list():
+                            plugin_key = nav_item['route'].strip('/')
+                            desc = nav_item.get('description', '')
+                            label_text = nav_item['label']
+                            if desc:
+                                label_text = f"{label_text}  —  {desc}"
+                            ui.button(label_text, on_click=lambda k=plugin_key: ui.run_javascript(f"window.location.href = '/admin/plugins?active={k}'")).props('flat align=left').classes('w-full text-left text-gray-700 hover:bg-gray-100')
         return tabs
 
     async def build_spa(active_key: str, request: Optional[Request] = None):
@@ -419,21 +450,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             with ui.tab_panel('logs'):
                 await logs_view()
             with ui.tab_panel('plugins'):
-                await plugins_view()
-            # 动态添加插件页面的tab_panel
-            for nav_item in nav_registry.list():
-                plugin_key = f"plugin_{nav_item['route'].strip('/').replace('/', '_')}"
-                with ui.tab_panel(plugin_key):
-                    page_info = page_registry.get(nav_item['route'])
-                    if page_info and callable(page_info['render']):
-                        try:
-                            render_func = page_info['render']
-                            result = render_func(request) if 'request' in render_func.__code__.co_varnames else render_func()
-                            if hasattr(result, '__await__'):
-                                await result
-                        except Exception as e:
-                            with ui.card().classes('w-full bg-red-50 border-l-4 border-red-500 p-4'):
-                                ui.label(f'插件页面渲染异常: {e}').classes('text-red-700')
+                await plugins_view(request)
 
     @ui.page('/')
     async def index(request: Request):
@@ -1566,20 +1583,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         await build_spa('logs')
 
     @ui.page('/plugins')
-    async def plugins_page():
-        """插件管理（SPA）"""
-        await build_spa('plugins')
-
-    # 动态为插件页面创建SPA路由（刷新后显示完整导航栏的SPA页面）
-    for nav_item in nav_registry.list():
-        plugin_key = f"plugin_{nav_item['route'].strip('/').replace('/', '_')}"
-        plugin_route = nav_item['route']
-        def _make_plugin_spa_page(pk, pr):
-            @ui.page(pr)
-            async def plugin_spa_page(request: Request):
-                await build_spa(pk, request)
-            return plugin_spa_page
-        _make_plugin_spa_page(plugin_key, plugin_route)
+    async def plugins_page(request: Request):
+        """插件管理（SPA，支持?active=xxx显示指定插件内容）"""
+        await build_spa('plugins', request)
 
     async def logs_view():
         """请求日志视图（SPA tab 面板内容）"""
@@ -1763,13 +1769,61 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
         await logs_content()
 
-    async def plugins_view():
-        """插件管理视图（SPA tab 面板内容）——重新设计版"""
+    async def plugins_view(request: Optional[Request] = None):
+        """插件管理视图（SPA tab 面板内容）——支持?active=xxx显示指定插件内容"""
 
+        # 从URL读取active参数
+        active_plugin = None
+        if request is not None:
+            active_plugin = request.query_params.get('active', None)
+
+        # 如果指定了active插件，渲染该插件内容
+        if active_plugin:
+            from app.extensions.sdk import page_registry, nav_registry
+            # 查找插件路由
+            plugin_route = None
+            plugin_info = None
+            for nav_item in nav_registry.list():
+                if nav_item['route'].strip('/') == active_plugin or nav_item['route'] == f'/{active_plugin}':
+                    plugin_route = nav_item['route']
+                    plugin_info = nav_item
+                    break
+
+            with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
+                # 插件页面顶部：返回按钮 + 插件名称
+                with ui.row().classes('items-center justify-between w-full'):
+                    with ui.row().classes('items-center gap-3'):
+                        ui.button('← 返回插件管理', on_click=lambda: ui.run_javascript("window.location.href = '/admin/plugins'")).props('outline color=primary')
+                        ui.label(plugin_info['label'] if plugin_info else active_plugin).classes('text-2xl font-bold text-gray-800')
+                    # 插件切换下拉
+                    plugin_options = {nav_item['route'].strip('/'): nav_item['label'] for nav_item in nav_registry.list()}
+                    current_key = plugin_route.strip('/') if plugin_route else active_plugin
+                    def on_plugin_change(e):
+                        ui.run_javascript(f"window.location.href = '/admin/plugins?active={e.value}'")
+                    ui.select(options=plugin_options, value=current_key, on_change=on_plugin_change, label='切换插件').props('outlined dense').classes('w-48')
+
+                # 插件内容区域
+                if plugin_route and plugin_route in page_registry.list():
+                    page_info = page_registry.get(plugin_route)
+                    if page_info and callable(page_info['render']):
+                        try:
+                            render_func = page_info['render']
+                            result = render_func(request) if 'request' in render_func.__code__.co_varnames else render_func()
+                            if hasattr(result, '__await__'):
+                                await result
+                        except Exception as e:
+                            with ui.card().classes('w-full bg-red-50 border-l-4 border-red-500 p-4'):
+                                ui.label(f'插件页面渲染异常: {e}').classes('text-red-700')
+                else:
+                    with ui.card().classes('w-full p-8 text-center'):
+                        ui.label(f'未找到插件: {active_plugin}').classes('text-xl text-gray-500')
+            return
+
+        # 无active参数：显示插件管理原内容
         @ui.refreshable
         async def plugins_content():
             from app.extensions.loader import get_plugin_registry, get_plugin_stats
-            from app.extensions.sdk import config_registry as _cfg_reg, get_plugin_config, set_plugin_config
+            from app.extensions.sdk import config_registry as _cfg_reg, get_plugin_config, set_plugin_config, nav_registry
 
             stats = get_plugin_stats()
             registry = get_plugin_registry()

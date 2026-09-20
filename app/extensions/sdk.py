@@ -202,10 +202,10 @@ class NavRegistry:
     def __init__(self):
         self._items: list = []
 
-    def register(self, label: str, route: str, icon: Optional[str] = None) -> None:
+    def register(self, label: str, route: str, icon: Optional[str] = None, description: Optional[str] = None) -> None:
         if not route.startswith("/"):
             route = "/" + route
-        self._items.append({"label": label, "route": route, "icon": icon})
+        self._items.append({"label": label, "route": route, "icon": icon, "description": description})
         logger.info(f"[sdk] 插件导航注册: {label} -> {route}")
 
     def list(self) -> list:
@@ -215,7 +215,7 @@ class NavRegistry:
 nav_registry = NavRegistry()
 
 
-def register_nav_item(label: str, route: str, icon: Optional[str] = None) -> None:
+def register_nav_item(label: str, route: str, icon: Optional[str] = None, description: Optional[str] = None) -> None:
     """
     注册导航菜单项。
 
@@ -223,8 +223,9 @@ def register_nav_item(label: str, route: str, icon: Optional[str] = None) -> Non
         label: 菜单显示名称
         route: 点击跳转的路由（如 "/balance"）
         icon: 可选图标（emoji 或字符）
+        description: 可选简介（用于插件聚合入口展示）
     """
-    nav_registry.register(label, route, icon)
+    nav_registry.register(label, route, icon, description)
 
 
 # ── 3. 组件挂载点 ──

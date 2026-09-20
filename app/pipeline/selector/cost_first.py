@@ -36,14 +36,11 @@ class CostFirstSelector(AccountSelector):
         if not available_accounts:
             return None
 
-        # 与 free-first 一致：优先只候选目标模型账号；无匹配则回退全部（兜底可用性）
+        # 注意：available_accounts 已由上游 _filter_available_accounts 按 ModelCatalog.model_name 正确过滤
+        # 此处不再用 default_model_name 二次过滤（主从架构下一个账号有多个模型）
         candidates = available_accounts
         if model_name:
-            matched = [a for a in available_accounts if a.model_name == model_name]
-            if matched:
-                candidates = matched
-            else:
-                logger.warning(f"[cost-first] 无账号匹配模型 {model_name}，回退到全部可用账号")
+            logger.info(f"[cost-first] 目标模型 {model_name}，候选账号 {len(candidates)} 个（上游已按 ModelCatalog 过滤）")
 
         if not candidates:
             return None
@@ -51,7 +48,7 @@ class CostFirstSelector(AccountSelector):
         selected = sorted(candidates, key=self._rank)[0]
         inp = getattr(selected, "_cost_input", None)
         logger.info(
-            f"[cost-first] 选中账号: {selected.id} ({selected.vendor}, 模型: {selected.model_name}, "
+            f"[cost-first] 选中账号: {selected.id} ({selected.vendor}, 模型: {selected.default_model_name}, "
             f"价格: {inp if inp is not None else '未知'})"
         )
         return selected

@@ -222,10 +222,14 @@ class LLMRouter(ModelRouter):
         from app.models.database import ModelAccount
         from sqlalchemy import select
 
-        # 找一个该模型的启用账号
+        # 找一个该模型的启用账号（主从架构：通过 ModelCatalog 查找，不依赖 default_model_name）
+        from app.models.database import ModelCatalog
         result = await self.db.execute(
-            select(ModelAccount).where(
-                ModelAccount.model_name == model,
+            select(ModelAccount)
+            .join(ModelCatalog, ModelCatalog.account_id == ModelAccount.id)
+            .where(
+                ModelCatalog.model_name == model,
+                ModelCatalog.is_active == True,  # noqa: E712
                 ModelAccount.is_enable == True,  # noqa: E712
             )
         )
@@ -238,8 +242,8 @@ class LLMRouter(ModelRouter):
             account=account,
             messages=[{"role": "user", "content": prompt}],
             stream=False,
-            max_tokens=200,
-            temperature=0.3,
+            max_tokens=self.config.classifier_max_tokens,
+            temperature=self.config.classifier_temperature,
         )
 
         content = response.get("choices", [{}])[0].get("message", {}).get("content", "")

@@ -43,6 +43,7 @@ async def _ensure_columns(conn):
         ("daily_used_currency", "FLOAT DEFAULT 0.0"),
         ("total_used_currency", "FLOAT DEFAULT 0.0"),
         ("tenant_id", "VARCHAR(64)"),
+        ("key_verified", "BOOLEAN DEFAULT 1"),
     ]
     for col, coltype in migrations:
         if col not in cols:
@@ -77,7 +78,7 @@ async def _ensure_columns(conn):
     log_migrations = [
         ("request_id", "VARCHAR(64)"),
         ("session_id", "VARCHAR(64)"),
-        ("domain_tag", "VARCHAR(50)"),
+        ("routed_model", "VARCHAR(50)"),
         ("router_strategy", "VARCHAR(20)"),
         ("selector_strategy", "VARCHAR(20)"),
         ("context_strategy", "VARCHAR(20)"),
@@ -109,6 +110,7 @@ async def _ensure_columns(conn):
         ("avg_latency", "FLOAT"),
         ("embedding_vector", "JSON"),
         ("examples", "JSON"),
+        ("param_constraints_json", "JSON"),
     ]
     for col, coltype in catalog_migrations:
         if col not in cols:
@@ -147,6 +149,51 @@ async def _ensure_columns(conn):
     if "model_param_constraints_json" not in cols:
         await conn.execute(text("ALTER TABLE system_config ADD COLUMN model_param_constraints_json JSON"))
         logger.info("迁移: system_config 增加列 model_param_constraints_json")
+
+    # ── system_config 补列（插件系统：统一插件配置存储）──
+    result = await conn.execute(text("PRAGMA table_info(system_config)"))
+    cols = {row[1] for row in result.fetchall()}
+    if "plugin_configs" not in cols:
+        await conn.execute(text("ALTER TABLE system_config ADD COLUMN plugin_configs JSON"))
+        logger.info("迁移: system_config 增加列 plugin_configs")
+
+    # ── 字段改名迁移（语义澄清）──
+    # 1. request_log.domain_tag → routed_model
+    result = await conn.execute(text("PRAGMA table_info(request_log)"))
+    cols = {row[1] for row in result.fetchall()}
+    if "domain_tag" in cols and "routed_model" not in cols:
+        await conn.execute(text("ALTER TABLE request_log RENAME COLUMN domain_tag TO routed_model"))
+        logger.info("迁移: request_log.domain_tag → routed_model")
+
+    # 2. model_performance.domain_tag → routed_model
+    result = await conn.execute(text("PRAGMA table_info(model_performance)"))
+    cols = {row[1] for row in result.fetchall()}
+    if "domain_tag" in cols and "routed_model" not in cols:
+        await conn.execute(text("ALTER TABLE model_performance RENAME COLUMN domain_tag TO routed_model"))
+        logger.info("迁移: model_performance.domain_tag → routed_model")
+
+    # 3. model_account.virtual_model → default_model
+    result = await conn.execute(text("PRAGMA table_info(model_account)"))
+    cols = {row[1] for row in result.fetchall()}
+    if "virtual_model" in cols and "default_model" not in cols:
+        await conn.execute(text("ALTER TABLE model_account RENAME COLUMN virtual_model TO default_model"))
+        logger.info("迁移: model_account.virtual_model → default_model")
+
+    # 4. model_account.model_name → default_model_name
+    result = await conn.execute(text("PRAGMA table_info(model_account)"))
+    cols = {row[1] for row in result.fetchall()}
+    if "model_name" in cols and "default_model_name" not in cols:
+        await conn.execute(text("ALTER TABLE model_account RENAME COLUMN model_name TO default_model_name"))
+        logger.info("迁移: model_account.model_name → default_model_name")
+
+    # ── 清理残留旧列（_ensure_columns 曾误加回 domain_tag）──
+    result = await conn.execute(text("PRAGMA table_info(request_log)"))
+    cols = {row[1] for row in result.fetchall()}
+    if "domain_tag" in cols and "routed_model" in cols:
+        # 数据迁移：routed_model 为空时从 domain_tag 复制
+        await conn.execute(text("UPDATE request_log SET routed_model = domain_tag WHERE routed_model IS NULL AND domain_tag IS NOT NULL"))
+        await conn.execute(text("ALTER TABLE request_log DROP COLUMN domain_tag"))
+        logger.info("迁移: request_log 清理残留列 domain_tag")
 
 
 async def init_database():

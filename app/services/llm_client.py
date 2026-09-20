@@ -85,9 +85,40 @@ def reload_model_param_constraints() -> None:
     _load_constraints_from_db()
 
 
-def _apply_model_param_constraints(model_name: str, payload: Dict[str, Any]) -> None:
-    """根据模型名应用参数约束，原地修改 payload"""
-    constraints = get_model_param_constraints().get(model_name)
+def _apply_model_param_constraints(model_name: str, payload: Dict[str, Any], account_id: int = None) -> None:
+    """根据模型名应用参数约束，原地修改 payload。
+    优先级：ModelCatalog 账号级约束 > 全局默认约束
+    """
+    constraints = None
+    # 优先查 ModelCatalog 账号级约束
+    if account_id and model_name:
+        try:
+            from app.models.database import AsyncSessionLocal, ModelCatalog
+            from sqlalchemy import select
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            async def _fetch_catalog():
+                async with AsyncSessionLocal() as session:
+                    result = await session.execute(
+                        select(ModelCatalog).where(
+                            ModelCatalog.account_id == account_id,
+                            ModelCatalog.model_name == model_name
+                        )
+                    )
+                    catalog = result.scalar_one_or_none()
+                    if catalog and catalog.param_constraints_json:
+                        return catalog.param_constraints_json
+                    return None
+            constraints = loop.run_until_complete(_fetch_catalog())
+        except Exception as e:
+            logger.debug(f"查询 ModelCatalog 参数约束失败，回退全局约束: {e}")
+    # 回退全局默认约束
+    if not constraints:
+        constraints = get_model_param_constraints().get(model_name)
     if not constraints:
         return
     for key, value in constraints.items():
@@ -126,7 +157,7 @@ class LLMClient:
         }
         
         # 确定调用时使用的模型名：优先使用endpoint_id（如豆包/火山引擎），否则用model_name
-        api_model = account.endpoint_id if account.endpoint_id else account.model_name
+        api_model = account.endpoint_id if account.endpoint_id else account.default_model_name
         
         payload = {
             "model": api_model,
@@ -142,7 +173,7 @@ class LLMClient:
         payload["model"] = api_model
         
         # 应用模型参数约束（如 kimi-k2.6 强制 temperature=1）
-        _apply_model_param_constraints(account.model_name, payload)
+        _apply_model_param_constraints(api_model, payload, account.id)
         
         # 确定API地址
         url = self._get_api_url(account)
@@ -195,7 +226,7 @@ class LLMClient:
         }
         
         # 确定调用时使用的模型名：优先使用endpoint_id（如豆包/火山引擎），否则用model_name
-        api_model = account.endpoint_id if account.endpoint_id else account.model_name
+        api_model = account.endpoint_id if account.endpoint_id else account.default_model_name
         
         payload = {
             "model": api_model,
@@ -211,7 +242,7 @@ class LLMClient:
         payload["model"] = api_model
         
         # 应用模型参数约束（如 kimi-k2.6 强制 temperature=1）
-        _apply_model_param_constraints(account.model_name, payload)
+        _apply_model_param_constraints(api_model, payload, account.id)
         
         # 确定API地址
         url = self._get_api_url(account)

@@ -14,6 +14,9 @@
 import httpx
 import logging
 
+# 余额/模型查询超时（秒）——统一配置，避免多处硬编码
+BALANCE_QUERY_TIMEOUT = 20.0
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,7 +69,7 @@ async def fetch_balance(account):
     if any(k in vendor_lower for k in ('kimi', 'moonshot', '月之暗面')):
         host = _extract_host(account.base_url) or 'https://api.moonshot.cn'
         url = f'{host}/v1/users/me/balance'
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=BALANCE_QUERY_TIMEOUT) as client:
             r = await client.get(url, headers=headers)
             r.raise_for_status()
             data = r.json()
@@ -83,7 +86,7 @@ async def fetch_balance(account):
     # DeepSeek / 深度求索
     if any(k in vendor_lower for k in ('deepseek', '深度求索')):
         url = 'https://api.deepseek.com/user/balance'
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=BALANCE_QUERY_TIMEOUT) as client:
             r = await client.get(url, headers=headers)
             r.raise_for_status()
             data = r.json()
@@ -97,7 +100,7 @@ async def fetch_balance(account):
     # SiliconFlow / 硅基流动
     if any(k in vendor_lower for k in ('siliconflow', '硅基流动')):
         url = 'https://api.siliconflow.cn/v1/user/info'
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=BALANCE_QUERY_TIMEOUT) as client:
             r = await client.get(url, headers=headers)
             r.raise_for_status()
             data = r.json()
@@ -157,7 +160,7 @@ async def fetch_models(account):
         return []
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=BALANCE_QUERY_TIMEOUT) as client:
             r = await client.get(url, headers=headers)
             if r.status_code != 200:
                 return []

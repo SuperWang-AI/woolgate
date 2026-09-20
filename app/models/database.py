@@ -33,13 +33,13 @@ class SystemConfig(Base):
 
     # ── M1 架构重构：模型路由（选羊）──
     router_strategy = Column(String(20), default="off",
-                             comment="off/rules/vector/llm")
+                             comment="路由策略: off/vector/llm（rules 策略已废弃）")
     router_config_json = Column(JSON, nullable=True,
                                 comment="RouterConfig 序列化（领域原型、阈值、关键词表等）")
 
     # ── M1 架构重构：账号调度（薅羊毛）──
     selector_strategy = Column(String(20), default="pin",
-                               comment="pin/free-first/cost-first/sticky/failover")
+                               comment="选号策略: pin/free-first/cost-first/sticky/failover/round-robin")
     selector_config_json = Column(JSON, nullable=True,
                                   comment="SelectorConfig 序列化（pin_model/pin_account_id 等）")
 
@@ -65,11 +65,15 @@ class SystemConfig(Base):
 
     # ── M5 对外模型名（网关统一入口）──
     virtual_entry_name = Column(String(50), default="woolgate",
-                                comment="对外暴露的虚拟模型名（客户端统一入口，智能路由自动映射真实模型）")
+                                comment="对外暴露的入口模型名（全局级，客户端统一用这个，智能路由自动映射真实模型；跟账号级的 default_model 不是一个层级）")
 
     # ── P0 技术债：模型参数约束配置化 ──
     model_param_constraints_json = Column(JSON, nullable=True,
         comment="模型参数约束覆盖表 {model_name: {param: value}}，为空则用内置默认值")
+
+    # ── 插件系统：统一插件配置存储 ──
+    plugin_configs = Column(JSON, nullable=True, default=dict,
+        comment="所有插件的配置存储 {plugin_name: {config_key: value}}，通过插件SDK get_plugin_config/set_plugin_config 读写")
 
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -80,7 +84,7 @@ class ModelAccount(Base):
     主从架构（T1 改造后）：
     - 本表承载账号级信息：key/base_url/余额/健康度/厂商
     - 模型级信息（能力/示例/向量/价格）在 ModelCatalog（挂 account_id）
-    - virtual_model/model_name 语义降级为"默认模型"（兼容旧查询；匹配优先走 ModelCatalog）
+    - default_model/default_model_name 语义为"账号默认模型"（兼容旧查询；匹配优先走 ModelCatalog）
     """
     __tablename__ = "model_account"
     
@@ -88,8 +92,8 @@ class ModelAccount(Base):
     
     # 基础信息
     vendor = Column(String(50), nullable=False, comment="厂商名称")
-    virtual_model = Column(String(100), default="woolgate", comment="虚拟模型名(客户端请求)")
-    model_name = Column(String(100), nullable=False, comment="真实模型名(用于显示和路由)")
+    default_model = Column(String(100), default="woolgate", comment="【已废弃，勿用】历史遗留字段，无代码使用；账号默认模型请用 default_model_name")
+    default_model_name = Column(String(100), nullable=False, comment="账号默认模型名（T1 后降级，模型级信息在 ModelCatalog；原 model_name）")
     endpoint_id = Column(String(100), nullable=True, comment="Endpoint ID(如豆包/火山引擎需要,调用时优先使用)")
     api_key_encrypted = Column(Text, nullable=False, comment="加密后的API Key")
     base_url = Column(String(255), nullable=True, comment="接口地址")
@@ -98,7 +102,7 @@ class ModelAccount(Base):
     is_enable = Column(Boolean, default=True, comment="是否启用")
     
     # 调度配置
-    priority = Column(Integer, default=50, comment="优先级(数值越大越优先)")
+    priority = Column(Integer, default=50, comment="历史遗留优先级字段，CostFirstSelector 已不按此排序")
     # 重试配置
     retry_enable = Column(Boolean, default=True, comment="是否允许重试")
     cool_down_seconds = Column(Integer, default=300, comment="故障冷却时间")
@@ -127,6 +131,9 @@ class ModelAccount(Base):
     
     # 扩展参数
     extra_json = Column(JSON, nullable=True, comment="模型默认参数")
+    
+    # Key 验证状态（向导探测结果）
+    key_verified = Column(Boolean, default=True, comment="API Key 是否已验证（向导探测结果）")
 
     # ── M1 架构重构：多租户地基（企业版）──
     tenant_id = Column(String(64), nullable=True, comment="租户ID（企业版，NULL=单租户模式）")
@@ -167,7 +174,7 @@ class RequestLog(Base):
     # ── M1 架构重构：观测埋点 ──
     request_id = Column(String(64), nullable=True, comment="请求唯一ID，关联管线上下文")
     session_id = Column(String(64), nullable=True, comment="会话ID，用于学习型路由按会话聚合")
-    domain_tag = Column(String(50), nullable=True, comment="路由领域标签")
+    routed_model = Column(String(100), nullable=True, comment="实际路由到的目标模型名（M4 后复用，原 domain_tag）")
     router_strategy = Column(String(20), nullable=True, comment="实际路由策略")
     selector_strategy = Column(String(20), nullable=True, comment="实际调度策略")
     context_strategy = Column(String(20), nullable=True, comment="实际上下文策略")
@@ -179,14 +186,14 @@ class RequestLog(Base):
     user_feedback = Column(String(20), nullable=True, comment="用户显式反馈: up/down/neutral")
     feedback_at = Column(DateTime, nullable=True, comment="反馈时间")
     implicit_signal = Column(String(50), nullable=True,
-                             comment="隐式信号: switch_retry(失败切换)/stream_interrupted(输出中断)/followup(继续追问)")
+                             comment="隐式信号: stream_interrupted(流式中断)/switch_retry(失败切换)/followup(继续追问)")
 
     # ── C5 学习型路由：成本/决策明细/分类引擎（样本标签）──
     estimated_cost = Column(Float, default=0.0, comment="估算成本(元)，路由后按预估token×单价")
     actual_cost = Column(Float, default=0.0, comment="实际成本(元)，执行后按实际token×单价")
-    router_decision = Column(String(100), nullable=True, comment="路由决策明细（目标模型+置信度等）")
-    selector_decision = Column(String(100), nullable=True, comment="选号决策明细")
-    classify_engine = Column(String(20), nullable=True, comment="实际分类引擎: vector/llm/local/auto")
+    router_decision = Column(String(200), nullable=True, comment="路由决策明细（字符串格式：策略: 说明）")
+    selector_decision = Column(String(200), nullable=True, comment="选号决策明细（字符串格式：策略: 说明）")
+    classify_engine = Column(String(20), nullable=True, comment="实际分类引擎: vector/llm/off（local 预留未实现）")
     degraded = Column(Boolean, default=False, comment="是否降级兜底（分类失败/无可用账号回退等）")
     degrade_reason = Column(String(100), nullable=True, comment="降级原因描述")
 
@@ -206,18 +213,18 @@ class ModelPerformance(Base):
     """模型历史表现表（学习型路由选号信号）"""
     __tablename__ = "model_performance"
     __table_args__ = (
-        UniqueConstraint("account_id", "model_name", "domain_tag", name="uq_perf_key"),
+        UniqueConstraint("account_id", "model_name", "routed_model", name="uq_perf_key"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     account_id = Column(Integer, nullable=False, comment="账号ID")
     model_name = Column(String(100), nullable=False, comment="模型名")
-    domain_tag = Column(String(50), nullable=True, comment="任务类型（分类结果）")
+    routed_model = Column(String(50), nullable=True, comment="实际路由到的目标模型名（M4 后复用，原 domain_tag）")
 
     request_count = Column(Integer, default=0, comment="总请求数")
     success_count = Column(Integer, default=0, comment="成功数")
-    interrupted_count = Column(Integer, default=0, comment="流式中断数")
-    retry_count = Column(Integer, default=0, comment="切换重试数")
+    interrupted_count = Column(Integer, default=0, comment="流式中断次数（stream_interrupted 信号统计）")
+    retry_count = Column(Integer, default=0, comment="失败切换重试次数（switch_retry 信号统计）")
     avg_actual_cost = Column(Float, default=0.0, comment="平均实际成本(元)")
 
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -261,7 +268,7 @@ class ModelCatalog(Base):
     account_id = Column(Integer, nullable=False, comment="关联账号ID（一账号 N 模型；同模型跨账号可多行）")
     vendor = Column(String(50), nullable=False, comment="厂商名称")
     model_name = Column(String(100), nullable=False, comment="真实模型ID（唯一性由 account_id+model_name 保证）")
-    model_type = Column(String(20), default="chat", comment="模型类型: chat/embedding/image/audio")
+    model_type = Column(String(20), default="chat", comment="模型类型: chat/embedding（image/audio 规划中，暂未实现）")
     display_name = Column(String(100), nullable=True, comment="展示名")
     capability_description = Column(Text, nullable=True, comment="能力描述（给 LLM 路由和 embedding 用）")
     capability_tags = Column(JSON, nullable=True, comment="能力标签: ['code','chat','vision']")
@@ -271,6 +278,7 @@ class ModelCatalog(Base):
     avg_latency = Column(Float, nullable=True, comment="平均延迟（秒），LLM 路由做延迟优化参考")
     context_window = Column(Integer, nullable=True, comment="上下文窗口")
     embedding_vector = Column(JSON, nullable=True, comment="能力描述的向量（List[float]，自动计算）")
+    param_constraints_json = Column(JSON, nullable=True, comment="模型参数约束（如推理模型强制 temperature=1），JSON 格式；优先于全局默认约束")
     is_active = Column(Boolean, default=True, comment="是否启用")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -41,7 +41,6 @@ class StickySelector(AccountSelector):
             logger.debug(f"[sticky] 上次账号 {previous_account_id} 不可用，回退")
 
         # 回退到 free-first
-        sorted_accounts = sorted(available_accounts, key=lambda x: x.priority, reverse=True)
-        selected = sorted_accounts[0]
+        selected = self._pick_highest_priority(available_accounts)
         logger.info(f"[sticky] 回退 free-first: {selected.id}")
         return selected

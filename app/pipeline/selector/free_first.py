@@ -29,18 +29,14 @@ class FreeFirstSelector(AccountSelector):
         if not available_accounts:
             return None
 
-        # 如果指定了目标模型，先过滤出匹配该模型的账号
+        # 注意：available_accounts 已由上游 _filter_available_accounts 按 ModelCatalog.model_name 正确过滤
+        # 此处不再用 default_model_name 二次过滤（主从架构下一个账号有多个模型，default_model_name 仅为默认模型）
         candidates = available_accounts
         if model_name:
-            matched = [a for a in available_accounts if a.model_name == model_name]
-            if matched:
-                candidates = matched
-                logger.info(f"[free-first] 按目标模型 {model_name} 过滤: {len(matched)}/{len(available_accounts)} 个账号匹配")
-            else:
-                logger.warning(f"[free-first] 无账号匹配模型 {model_name}，回退到全部可用账号")
+            logger.info(f"[free-first] 目标模型 {model_name}，候选账号 {len(candidates)} 个（上游已按 ModelCatalog 过滤）")
 
         # 按优先级降序排序（priority 已从界面退场，全为默认值时退化为 id 降序：新账号优先）
         sorted_accounts = sorted(candidates, key=lambda x: (x.priority, x.id), reverse=True)
         selected = sorted_accounts[0]
-        logger.info(f"[free-first] 选中账号: {selected.id} (模型: {selected.model_name}, 优先级: {selected.priority})")
+        logger.info(f"[free-first] 选中账号: {selected.id} (模型: {selected.default_model_name}, 优先级: {selected.priority})")
         return selected

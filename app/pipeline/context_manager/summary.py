@@ -131,10 +131,14 @@ class SummaryManager(ContextManager):
         if not model_name:
             raise RuntimeError("未配置摘要模型（summary_model）")
 
-        # 查找该模型的启用账号
+        # 查找该模型的启用账号（主从架构：通过 ModelCatalog 查找，不依赖 default_model_name）
+        from app.models.database import ModelCatalog
         result = await self.db.execute(
-            select(ModelAccount).where(
-                ModelAccount.model_name == model_name,
+            select(ModelAccount)
+            .join(ModelCatalog, ModelCatalog.account_id == ModelAccount.id)
+            .where(
+                ModelCatalog.model_name == model_name,
+                ModelCatalog.is_active == True,  # noqa: E712
                 ModelAccount.is_enable == True,  # noqa: E712
             ).order_by(ModelAccount.priority.desc())
         )
@@ -146,7 +150,7 @@ class SummaryManager(ContextManager):
         from app.services.llm_client import LLMClient
         client = LLMClient()
         messages = [{"role": "user", "content": prompt}]
-        resp = await client.chat_completion(account, messages, max_tokens=500)
+        resp = await client.chat_completion(account, messages, max_tokens=self.config.summary_max_tokens)
 
         # 解析响应（OpenAI 兼容格式）
         if isinstance(resp, dict):

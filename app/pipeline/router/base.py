@@ -19,10 +19,10 @@ class ModelRouter(ABC):
     @abstractmethod
     async def route(self, ctx: "PipelineContext") -> None:
         """
-        执行路由决策，结果写入 ctx.domain_tag / ctx.target_model。
+        执行路由决策，结果写入 ctx.target_model。
 
         Args:
-            ctx: 管线上下文，读取 ctx.original_messages，写入 ctx.domain_tag/target_model
+            ctx: 管线上下文，读取 ctx.original_messages，写入 ctx.target_model
         """
         ...
 

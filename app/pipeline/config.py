@@ -59,7 +59,8 @@ class RouterConfig:
 
     # ── llm 策略：路由模型 ──
     router_model: str = ""  # 空=自动选最便宜最快的启用模型
-    classifier_max_tokens: int = 200
+    classifier_max_tokens: int = 200   # 路由分类模型输出上限
+    classifier_temperature: float = 0.3  # 路由分类模型温度（低=更确定的分类）
 
 
 @dataclass
@@ -76,6 +77,7 @@ class ContextConfig:
     summary_trigger_tokens: int = 4000
     summary_trigger_turns: int = 20
     summary_window_turns: int = 5  # 摘要后保留最近 N 轮原文
+    summary_max_tokens: int = 500   # 摘要模型输出上限
 
 
 @dataclass

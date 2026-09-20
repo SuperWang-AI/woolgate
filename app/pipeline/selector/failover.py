@@ -29,7 +29,6 @@ class FailoverSelector(AccountSelector):
         if not available_accounts:
             return None
 
-        sorted_accounts = sorted(available_accounts, key=lambda x: x.priority, reverse=True)
-        selected = sorted_accounts[0]
+        selected = self._pick_highest_priority(available_accounts)
         logger.info(f"[failover] 选中账号: {selected.id} (优先级: {selected.priority})")
         return selected

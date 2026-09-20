@@ -35,3 +35,11 @@ class AccountSelector(ABC):
             选中的账号，无可用账号返回 None
         """
         ...
+
+    @staticmethod
+    def _pick_highest_priority(accounts: List["ModelAccount"]) -> Optional["ModelAccount"]:
+        """按 priority 降序选第一个（priority 相同则 id 降序，优先选最新添加的账号）。
+        多个选择器（failover/pin/sticky）共用此逻辑，避免重复代码。"""
+        if not accounts:
+            return None
+        return sorted(accounts, key=lambda x: (x.priority, x.id), reverse=True)[0]

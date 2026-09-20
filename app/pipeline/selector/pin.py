@@ -45,16 +45,15 @@ class PinSelector(AccountSelector):
                     return acc
             logger.warning(f"[pin] 指定的账号ID {self.pin_account_id} 不在可用列表中，回退")
 
-        # 2. 其次按模型名指定（匹配真实模型名 model_name 字段）
+        # 2. 其次按模型名指定（上游 _filter_available_accounts 已按 ModelCatalog.model_name 过滤，直接选第一个即可）
         if self.pin_model:
-            for acc in available_accounts:
-                if acc.model_name == self.pin_model:
-                    logger.info(f"[pin] 按模型名选中: {acc.id} ({acc.model_name})")
-                    return acc
+            if available_accounts:
+                selected = available_accounts[0]
+                logger.info(f"[pin] 按模型名 {self.pin_model} 选中: {selected.id}（上游已按 ModelCatalog 过滤）")
+                return selected
             logger.warning(f"[pin] 指定的模型 {self.pin_model} 不在可用列表中，回退")
 
         # 3. 都没指定或都没匹配到，回退到 free-first（按优先级选第一个）
-        sorted_accounts = sorted(available_accounts, key=lambda x: x.priority, reverse=True)
-        selected = sorted_accounts[0]
+        selected = self._pick_highest_priority(available_accounts)
         logger.info(f"[pin] 无指定，回退 free-first: {selected.id}")
         return selected

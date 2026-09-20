@@ -326,7 +326,7 @@ class Executor:
                 ctx.original_messages, ctx.requested_model, ctx.estimated_tokens
             )
             # 粘性只在同一模型内有效：路由决策切换模型时不保持旧账号粘性
-            if prev_account and (not ctx.target_model or prev_account.model_name == ctx.target_model):
+            if prev_account and (not ctx.target_model or prev_account.default_model_name == ctx.target_model):
                 ctx.selector_strategy = self._account_selector.name
                 ctx.selector_decision = f"sticky: 继续使用账号 {prev_account.id}"
                 ctx.account = prev_account
@@ -334,7 +334,7 @@ class Executor:
                 await emit_hooks(HOOK_SELECT_AFTER, ctx)
                 return prev_account
             elif prev_account:
-                logger.info(f"模型切换（{prev_account.model_name} → {ctx.target_model}），跳过会话粘性")
+                logger.info(f"模型切换（{prev_account.default_model_name} → {ctx.target_model}），跳过会话粘性")
 
         # 2. 过滤可用账号
         # 入口名场景：按路由决策的 target_model（真实模型）过滤；决策模型不可用时回退全量候选
@@ -374,7 +374,7 @@ class Executor:
             from app.services.performance_learner import get_effective_cost_map
             _svc = ModelCatalogService(self.db)
             # 历史有效成本（学习型选号信号）
-            _eff_cost_map = await get_effective_cost_map(self.db, target, ctx.domain_tag or "general")
+            _eff_cost_map = await get_effective_cost_map(self.db, target, ctx.target_model or "general")
             for _a in available:
                 _row = await _svc.get_by_account_model(_a.id, target)
                 _a._cost_input = _row.input_price if _row else None
@@ -390,12 +390,12 @@ class Executor:
             ctx.selector_decision = f"{self._account_selector.name}: 选中账号 {account.id}"
             ctx.account = account
             # 回退全量场景：路由决策模型与选中账号实际模型不一致 → 以账号实际模型为准
-            if is_entry and "fallback" in (ctx.router_decision or "") and account.model_name:
-                if account.model_name != ctx.target_model:
+            if is_entry and "fallback" in (ctx.router_decision or "") and account.default_model_name:
+                if account.default_model_name != ctx.target_model:
                     logger.info(
-                        f"[executor] 目标模型修正 {ctx.target_model} → {account.model_name}（回退兜底）"
+                        f"[executor] 目标模型修正 {ctx.target_model} → {account.default_model_name}（回退兜底）"
                     )
-                    ctx.target_model = account.model_name
+                    ctx.target_model = account.default_model_name
             await emit_hooks(HOOK_SELECT_AFTER, ctx)
         return account
 
@@ -725,7 +725,7 @@ class Executor:
             log = RequestLog(
                 account_id=account.id,
                 vendor=account.vendor,
-                model_name=account.model_name,
+                model_name=account.default_model_name,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
@@ -737,7 +737,7 @@ class Executor:
                 # ── M1 观测埋点 ──
                 request_id=ctx.request_id,
                 session_id=ctx.session_id,
-                domain_tag=ctx.target_model,  # M4 后存目标模型名
+                routed_model=ctx.target_model,  # 实际路由到的目标模型名
                 router_strategy=ctx.router_strategy,
                 selector_strategy=ctx.selector_strategy,
                 context_strategy=ctx.context_strategy,
@@ -773,7 +773,7 @@ class Executor:
         """读取账号+模型维度单价（ModelCatalog 行）；无数据返回 (None, None)"""
         try:
             from app.services.model_catalog_service import ModelCatalogService
-            row = await ModelCatalogService(self.db).get_by_account_model(account.id, model_name or account.model_name)
+            row = await ModelCatalogService(self.db).get_by_account_model(account.id, model_name or account.default_model_name)
             if row:
                 return row.input_price, row.output_price
         except Exception as e:

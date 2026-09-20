@@ -43,15 +43,6 @@ async def lifespan(app: FastAPI):
     # 初始化数据库
     await init_database()
 
-    # 加载插件（v0.6.0 组件化/插件化：WOOLGATE_PLUGINS 环境变量，失败跳过不影响启动）
-    try:
-        from app.extensions.loader import load_plugins
-        loaded = load_plugins()
-        if loaded:
-            logger.info(f"已加载插件: {', '.join(loaded)}")
-    except Exception as e:
-        logger.error(f"插件加载器异常: {e}", exc_info=True)
-
     # 初始化模型能力清单（M4 LLM 智能路由用）
     try:
         from app.models import AsyncSessionLocal
@@ -149,6 +140,15 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(api_router, tags=["OpenAI Compatible API"])
+
+# 加载插件（必须在 init_ui 之前，因为插件会注册页面/导航/组件，create_ui 需要读取这些注册表）
+try:
+    from app.extensions.loader import load_plugins
+    loaded = load_plugins()
+    if loaded:
+        logger.info(f"已加载插件: {', '.join(loaded)}")
+except Exception as e:
+    logger.warning(f"插件加载失败（不影响启动）: {e}")
 
 # 挂载 NiceGUI 管理界面
 init_ui(app)

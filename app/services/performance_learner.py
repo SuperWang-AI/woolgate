@@ -1,7 +1,7 @@
 """
 学习型路由：模型历史表现统计 job
 
-每小时从 RequestLog 聚合一次，按 (account_id, model_name, domain_tag) 分组，
+每小时从 RequestLog 聚合一次，按 (account_id, model_name, routed_model) 分组，
 更新 ModelPerformance 表，供 CostFirstSelector 选号时读历史表现。
 """
 import logging
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 async def aggregate_performance(hours: int = 24):
     """
     聚合最近 N 小时的请求日志到 model_performance 表。
-    幂等：每次按 (account_id, model_name, domain_tag) upsert。
+    幂等：每次按 (account_id, model_name, routed_model) upsert。
     """
     since = datetime.utcnow() - timedelta(hours=hours)
 
@@ -28,7 +28,7 @@ async def aggregate_performance(hours: int = 24):
             select(
                 RequestLog.account_id,
                 RequestLog.model_name,
-                RequestLog.domain_tag,
+                RequestLog.routed_model,
                 func.count(RequestLog.id).label("req_count"),
                 func.sum(case((RequestLog.status == "success", 1), else_=0)).label("ok_count"),
                 func.sum(case((RequestLog.implicit_signal == "stream_interrupted", 1), else_=0)).label("interrupted"),
@@ -37,7 +37,7 @@ async def aggregate_performance(hours: int = 24):
             )
             .where(RequestLog.request_time >= since)
             .where(RequestLog.account_id.isnot(None))
-            .group_by(RequestLog.account_id, RequestLog.model_name, RequestLog.domain_tag)
+            .group_by(RequestLog.account_id, RequestLog.model_name, RequestLog.routed_model)
         )
         rows = (await session.execute(stmt)).all()
 
@@ -52,7 +52,7 @@ async def aggregate_performance(hours: int = 24):
                     select(ModelPerformance).where(
                         ModelPerformance.account_id == row.account_id,
                         ModelPerformance.model_name == row.model_name,
-                        ModelPerformance.domain_tag == (row.domain_tag or "general"),
+                        ModelPerformance.routed_model == (row.routed_model or "general"),
                     )
                 )
             ).scalar_one_or_none()
@@ -76,7 +76,7 @@ async def aggregate_performance(hours: int = 24):
                 perf = ModelPerformance(
                     account_id=row.account_id,
                     model_name=row.model_name,
-                    domain_tag=row.domain_tag or "general",
+                    routed_model=row.routed_model or "general",
                     request_count=row.req_count,
                     success_count=row.ok_count or 0,
                     interrupted_count=row.interrupted or 0,
@@ -88,19 +88,19 @@ async def aggregate_performance(hours: int = 24):
             updated += 1
 
         await session.commit()
-        logger.info(f"[performance_learner] 聚合完成: {updated} 个 (账号×模型×任务) 组合已更新")
+        logger.info(f"[performance_learner] 聚合完成: {updated} 个 (账号×模型×路由模型) 组合已更新")
 
 
-async def get_effective_cost_map(session, model_name: str, domain_tag: str) -> dict:
+async def get_effective_cost_map(session, model_name: str, routed_model: str) -> dict:
     """
-    查询某模型某任务类型下，各账号的历史有效成本。
+    查询某模型某路由模型下，各账号的历史有效成本。
     返回 {account_id: effective_cost}，无数据的账号不在 dict 里。
     """
     rows = (
         await session.execute(
             select(ModelPerformance).where(
                 ModelPerformance.model_name == model_name,
-                ModelPerformance.domain_tag == domain_tag,
+                ModelPerformance.routed_model == routed_model,
                 ModelPerformance.request_count >= 5,  # 样本量太小不采信
             )
         )

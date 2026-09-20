@@ -4,7 +4,7 @@ NiceGUI管理界面
 """
 from nicegui import ui, app
 from fastapi import Request
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -123,6 +123,45 @@ async def get_stats():
         )
         total_free_requests = result.scalar() or 0
 
+        # ── P5 分类学习：分类准确率统计 ──
+        # 总成功率（成功请求 / 总请求）
+        result = await session.execute(
+            select(func.count(RequestLog.id))
+            .where(RequestLog.status == "success")
+        )
+        total_success = result.scalar() or 0
+        overall_success_rate = (total_success / total_requests_all * 100) if total_requests_all > 0 else 0
+
+        # 总降级率（降级请求 / 总请求）
+        result = await session.execute(
+            select(func.count(RequestLog.id))
+            .where(RequestLog.degraded == True)
+        )
+        total_degraded = result.scalar() or 0
+        overall_degrade_rate = (total_degraded / total_requests_all * 100) if total_requests_all > 0 else 0
+
+        # 各路由模型成功率（P5 核心指标）
+        result = await session.execute(
+            select(
+                RequestLog.routed_model,
+                func.count(RequestLog.id).label("total"),
+                func.sum(case((RequestLog.status == "success", 1), else_=0)).label("success"),
+            )
+            .where(RequestLog.routed_model.isnot(None))
+            .group_by(RequestLog.routed_model)
+        )
+        domain_stats = []
+        for row in result.all():
+            rate = (row.success / row.total * 100) if row.total > 0 else 0
+            domain_stats.append({
+                "domain": row.routed_model,
+                "total": row.total,
+                "success": row.success,
+                "rate": round(rate, 1),
+            })
+        # 按成功率升序排（最差的在前面，优先优化）
+        domain_stats.sort(key=lambda x: x["rate"])
+
         return {
             "total_accounts": total_accounts,
             "enabled_accounts": enabled_accounts,
@@ -136,6 +175,9 @@ async def get_stats():
             "total_cost": total_cost,
             "total_requests_all": total_requests_all,
             "total_free_requests": total_free_requests,
+            "overall_success_rate": round(overall_success_rate, 1),
+            "overall_degrade_rate": round(overall_degrade_rate, 1),
+            "domain_stats": domain_stats,
         }
 
 
@@ -263,8 +305,15 @@ async def apply_onboard_profile(answers: dict):
 
 def create_ui():
     """创建UI"""
-    
-    
+    print(f"[DEBUG] create_ui() 被调用")
+
+    # 插件系统 v2：UI 扩展点注册表
+    from app.extensions.sdk import (
+        page_registry, nav_registry, component_registry, config_registry,
+        UI_HOOK_DASHBOARD_WIDGETS, UI_HOOK_ACCOUNT_CARD_FOOTER,
+        UI_HOOK_LOG_DETAIL_EXTRA, UI_HOOK_CONFIG_PAGE_EXTRA,
+    )
+
     # 导航页面定义（label, path, key）
     NAV_PAGES = [
         ('首页', '/', 'home'),
@@ -273,6 +322,7 @@ def create_ui():
         ('系统配置', '/config', 'config'),
         ('管线策略', '/pipeline', 'pipeline'),
         ('请求日志', '/logs', 'logs'),
+        ('插件管理', '/plugins', 'plugins'),
     ]
 
     def page_head():
@@ -309,9 +359,19 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     else:
                         ui.button(label, on_click=lambda p=path: ui.navigate.to(p)) \
                             .props('flat no-caps text-color=white')
+                # 插件注册的导航项
+                for nav_item in nav_registry.list():
+                    plugin_key = f"plugin_{nav_item['route'].strip('/').replace('/', '_')}"
+                    if plugin_key == current:
+                        ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.navigate.to('/admin' + p)) \
+                            .props('no-caps') \
+                            .style('background-color:#ffffff !important; color:#764ba2 !important; font-weight:700; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.18);')
+                    else:
+                        ui.button(nav_item['label'], on_click=lambda p=nav_item['route']: ui.navigate.to('/admin' + p)) \
+                            .props('flat no-caps text-color=white')
 
     # SPA 路由映射：路由路径 ↔ tab key
-    PATH_TO_KEY = {'/': 'home', '/wizard': 'wizard', '/accounts': 'accounts', '/config': 'config', '/pipeline': 'pipeline', '/logs': 'logs'}
+    PATH_TO_KEY = {'/': 'home', '/wizard': 'wizard', '/accounts': 'accounts', '/config': 'config', '/pipeline': 'pipeline', '/logs': 'logs', '/plugins': 'plugins'}
     KEY_TO_PATH = {v: k for k, v in PATH_TO_KEY.items()}
 
     def nav_tabs(active_key: str):
@@ -324,6 +384,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             with ui.tabs().props('dense active-color=white indicator-color=white text-color=white').classes('gap-1') as tabs:
                 for label, path, key in NAV_PAGES:
                     ui.tab(name=key, label=label)
+                # 插件注册的导航项
+                for nav_item in nav_registry.list():
+                    plugin_key = f"plugin_{nav_item['route'].strip('/').replace('/', '_')}"
+                    ui.tab(name=plugin_key, label=nav_item['label'])
         return tabs
 
     async def build_spa(active_key: str, request: Optional[Request] = None):
@@ -350,6 +414,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 await pipeline_view()
             with ui.tab_panel('logs'):
                 await logs_view()
+            with ui.tab_panel('plugins'):
+                await plugins_view()
 
     @ui.page('/')
     async def index(request: Request):
@@ -506,6 +572,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                           [f"输入 {stats['total_prompt_tokens'] / 1_000_000:.4f}M",
                            f"输出 {stats['total_completion_tokens'] / 1_000_000:.4f}M"])
             
+            # ── 插件挂载点：dashboard.widgets ──
+            dashboard_widgets = component_registry.get_sorted(UI_HOOK_DASHBOARD_WIDGETS)
+            if dashboard_widgets:
+                ui.label('插件扩展').classes('text-2xl font-bold text-gray-800 mt-4')
+                with ui.row().classes('w-full gap-4 flex-wrap'):
+                    for widget in dashboard_widgets:
+                        try:
+                            render_fn = widget['render']
+                            if callable(render_fn):
+                                result = render_fn()
+                                if hasattr(result, '__await__'):
+                                    await result
+                        except Exception as e:
+                            with ui.card().classes('flex-1 bg-red-50 border-l-4 border-red-500 p-3'):
+                                ui.label(f'插件组件异常: {e}').classes('text-red-700 text-sm')
+
             # 省钱统计卡片
             ui.label('省钱统计').classes('text-2xl font-bold text-gray-800 mt-4')
             with ui.row().classes('w-full gap-4'):
@@ -527,6 +609,29 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 stat_card('emoji_events', 'yellow-500', '累计免费占比',
                           f"{total_free_pct:.1f}%",
                           [f"{stats['total_free_requests']} 次免费", "走免费模型"])
+            
+            # ── P5 分类学习统计 ──
+            if stats['total_requests_all'] > 0:
+                ui.label('分类学习统计').classes('text-2xl font-bold text-gray-800 mt-4')
+                with ui.row().classes('w-full gap-4'):
+                    stat_card('check_circle', 'green-500', '总成功率',
+                              f"{stats['overall_success_rate']:.1f}%",
+                              f"{stats['total_requests_all']} 次请求")
+                    stat_card('warning', 'orange-500', '降级率',
+                              f"{stats['overall_degrade_rate']:.1f}%",
+                              "分类失败时兜底")
+                
+                # 各模型路由成功率
+                if stats.get('domain_stats'):
+                    with ui.card().classes('w-full shadow-lg mt-2'):
+                        ui.label('各模型路由成功率（按成功率升序）').classes('text-sm font-bold text-gray-600 mb-2')
+                        _cols = [
+                            {'name': 'domain', 'label': '模型', 'field': 'domain'},
+                            {'name': 'total', 'label': '总请求', 'field': 'total'},
+                            {'name': 'success', 'label': '成功', 'field': 'success'},
+                            {'name': 'rate', 'label': '成功率', 'field': 'rate'},
+                        ]
+                        ui.table(columns=_cols, rows=stats['domain_stats']).classes('w-full').props('dense flat')
             
             # API 配置信息卡片
             ui.label('API 配置信息').classes('text-2xl font-bold text-gray-800 mt-4')
@@ -617,8 +722,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         # 合并目录（内置 + DB 用户覆盖）+ 已接入厂商标记（按别名匹配，避免同名不同写法漏判）
         async with AsyncSessionLocal() as _s:
             vendors = await list_vendors_merged(_s)
-            acc_res = await _s.execute(select(ModelAccount.vendor, ModelAccount.model_name))
-            _vendor_models = [(r[0] or '', r[1]) for r in acc_res.all()]
+            # 主从架构：模型挂在 ModelCatalog 下，从 catalog 统计已接入模型
+            from app.models.database import ModelCatalog
+            cat_res = await _s.execute(select(ModelCatalog.vendor, ModelCatalog.model_name))
+            _vendor_models = [(r[0] or '', r[1]) for r in cat_res.all()]
         state = {'selected': (vendors[1] if len(vendors) > 1 else (vendors[0] if vendors else None))}   # 默认选中第二个厂商（右侧详情同步打开）
 
         def vendor_connected(v):
@@ -683,11 +790,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     parts.append(f"统一更新 {len(res['keys_updated'])} 个模型 Key")
                 if res['errors']:
                     parts.append(f"错误 {len(res['errors'])} 个: {'; '.join(res['errors'][:2])}")
-                ui.notify(res['vendor'] + " 配置完成 " + " | ".join(parts), type='positive', timeout=6000)
-                # 重新查询已接入信息并局部刷新
+                # Key 验证状态
+                notify_type = 'positive'
+                if not res.get('key_validated', True):
+                    notify_type = 'warning'
+                    err = res.get('key_validation_error') or ''
+                    parts.append(f"⚠ Key 未验证（可能无效）: {err[:60]}")
+                ui.notify(res['vendor'] + " 配置完成 " + " | ".join(parts), type=notify_type, timeout=8000)
+                # 重新查询已接入信息并局部刷新（从 ModelCatalog 统计）
                 async with AsyncSessionLocal() as session:
-                    acc_res = await session.execute(select(ModelAccount.vendor, ModelAccount.model_name))
-                    _vendor_models = [(r[0] or '', r[1]) for r in acc_res.all()]
+                    from app.models.database import ModelCatalog
+                    cat_res = await session.execute(select(ModelCatalog.vendor, ModelCatalog.model_name))
+                    _vendor_models = [(r[0] or '', r[1]) for r in cat_res.all()]
                 cards.refresh()
                 detail.refresh()
             except Exception as e:
@@ -708,11 +822,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             try:
                 enc = encryption_service.encrypt(key)
                 async with AsyncSessionLocal() as session:
-                    exists = (await session.execute(
-                        select(ModelAccount).where(ModelAccount.api_key_encrypted == enc)
-                    )).scalar_one_or_none()
+                    # 注意：Fernet 加密非确定性，必须解密后比较明文，不能用密文查询
+                    all_accs = (await session.execute(select(ModelAccount))).scalars().all()
+                    exists = None
+                    for a in all_accs:
+                        try:
+                            if a.api_key_encrypted and encryption_service.decrypt(a.api_key_encrypted) == key:
+                                exists = a
+                                break
+                        except Exception:
+                            continue
                     if exists:
-                        ui.notify(f'该 Key 已接入（厂商「{exists.vendor} · {exists.model_name}」），无需重复配置；如需加模型请到账号管理编辑', type='warning')
+                        ui.notify(f'该 Key 已接入（厂商「{exists.vendor} · {exists.default_model_name}」），无需重复配置；如需加模型请到账号管理编辑', type='warning')
                         return
                     acc = ModelAccount(vendor=name, api_key_encrypted=enc, model_name=model, is_enable=True)
                     session.add(acc)
@@ -721,10 +842,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     svc = ModelCatalogService(session)
                     await svc.ensure_model(model, name, account_id=acc.id)
                     await session.commit()
-                # 刷新已接入标记
+                # 刷新已接入标记（从 ModelCatalog 统计）
                 async with AsyncSessionLocal() as session:
-                    acc_res = await session.execute(select(ModelAccount.vendor, ModelAccount.model_name))
-                    _vendor_models = [(r[0] or '', r[1]) for r in acc_res.all()]
+                    from app.models.database import ModelCatalog
+                    cat_res = await session.execute(select(ModelCatalog.vendor, ModelCatalog.model_name))
+                    _vendor_models = [(r[0] or '', r[1]) for r in cat_res.all()]
                 ui.notify(f'已接入「{name} · {model}」，向量/能力已智能计算', type='positive', timeout=5000)
                 cards.refresh()
                 detail.refresh()
@@ -761,7 +883,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                             ui.label(v['name']).classes('text-base font-bold')
                                         ui.label(v['tag']).classes(('text-xs text-cyan-600 font-bold' if is_local else 'text-xs text-green-600 font-bold'))
                                         with ui.row().classes('items-center gap-1 w-full'):
-                                            ui.label(f"{v.get('free_count', len(v['models']))} 个免费模型").classes('text-xs text-gray-500')
+                                            _fc = v.get('free_count', 0)
+                                            ui.label(f"{_fc} 个免费模型" if _fc > 0 else f"{len(v['models'])} 个模型").classes('text-xs text-gray-500')
                                             if vendor_connected(v):
                                                 ui.label(f'已接入 {len(vendor_connected_models(v))} 个').classes('text-xs text-green-600 font-bold')
                                         # 免费模型具体名称（与模型菜单卡片一致；list_vendors_merged 已预计算 free_models）
@@ -824,10 +947,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                             free_cnt = v.get('free_count', 0)
                             total_cnt = len(v['models'])
                             if connected_models:
+                                _has_free = free_cnt > 0
+                                _model_word = '免费模型' if _has_free else '模型'
                                 if total_cnt > 0 and len(connected_models) >= total_cnt:
-                                    ui.label('该厂商免费模型已全部接入，无需重复配置；如需更换 Key 请到账号管理编辑').classes('text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded mt-0.5')
+                                    ui.label(f'该厂商{_model_word}已全部接入，无需重复配置；如需更换 Key 请到账号管理编辑').classes('text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded mt-0.5')
                                 else:
-                                    ui.label(f"已接入 {len(connected_models)}/{total_cnt} 个，只补充未接入的免费模型").classes('text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded mt-0.5')
+                                    ui.label(f"已接入 {len(connected_models)}/{total_cnt} 个，只补充未接入的{_model_word}").classes('text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded mt-0.5')
                             free_displays = v.get('free_models', [])
                             if free_displays:
                                 ui.label(f"免费模型：{'、'.join(free_displays[:4])}{'…' if len(free_displays) > 4 else ''}").classes('text-xs text-gray-600 mt-0.5')
@@ -886,6 +1011,25 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
     async def accounts_view():
         """账号管理视图（SPA）——主从结构：厂商 → 账号（主）→ 模型清单（从）"""
 
+        # 页面获得焦点时自动刷新（多标签页同步：向导修改后切回账号管理自动更新）
+        ui.run_javascript("""
+            (function() {
+                let _lastFocus = Date.now();
+                let _reloadTimer = null;
+                document.addEventListener('visibilitychange', function() {
+                    if (!document.hidden) {
+                        if (Date.now() - _lastFocus > 3000) {
+                            clearTimeout(_reloadTimer);
+                            _reloadTimer = setTimeout(function() { location.reload(); }, 800);
+                        }
+                    } else {
+                        _lastFocus = Date.now();
+                        clearTimeout(_reloadTimer);
+                    }
+                });
+            })();
+        """)
+
         with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
 
             async def recompute_all_vectors():
@@ -905,7 +1049,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     ui.notify(f'重算失败: {e}', type='negative')
 
             with ui.row().classes('items-center justify-between w-full'):
-                ui.label('模型账号管理').classes('text-3xl font-bold text-gray-800')
+                ui.label('账号模型管理').classes('text-3xl font-bold text-gray-800')
                 with ui.row().classes('gap-2'):
                     ui.button('新增账号', on_click=lambda: show_account_dialog()).props('color=primary size=lg')
 
@@ -980,10 +1124,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                         acc_key = mask_key(acc)
                                         with ui.column().classes('gap-0'):
                                             ui.label(acc_key if acc_key else '本地模型（无密钥）').classes('text-sm font-bold text-gray-800 font-mono')
-                                            ui.label(f'默认模型 {acc.model_name or "未命名"}').classes('text-xs text-gray-400')
+                                            ui.label(f'默认模型 {acc.default_model_name or "未命名"}').classes('text-xs text-gray-400')
                                         ui.badge(f'{len(models)} 个模型', color='purple').classes('text-xs')
                                         ui.badge('✅ 启用' if acc.is_enable else '❌ 停用',
                                                  color='positive' if acc.is_enable else 'negative').props(f'data-acc-badge="{acc.id}"').classes('text-xs')
+                                        if not getattr(acc, 'key_verified', True):
+                                            ui.badge('⚠ Key未验证', color='warning').props(f'data-acc-keywarn="{acc.id}"').classes('text-xs')
                                         ui.button('编辑', on_click=lambda aid=acc.id: show_account_dialog(account_id=aid)).props('outline size=xs color=primary').classes('text-xs').on('click', lambda: None, ['stop'])
                                         ui.button('停用', on_click=lambda aid=acc.id: toggle_account_enable(aid, False)).props(f'outline size=xs color=warning data-acc-btn="{acc.id}" data-acc-action="disable"').classes('text-xs' + ('' if acc.is_enable else ' hidden')).on('click', lambda: None, ['stop'])
                                         ui.button('启用', on_click=lambda aid=acc.id: toggle_account_enable(aid, True)).props(f'outline size=xs color=positive data-acc-btn="{acc.id}" data-acc-action="enable"').classes('text-xs' + ('' if not acc.is_enable else ' hidden')).on('click', lambda: None, ['stop'])
@@ -1046,6 +1192,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                         area.visible = not area.visible
                                         icon.props(f'name={"expand_more" if not area.visible else "expand_less"}')
                                     a_header.on('click', toggle_a)
+
+                                    # ── 插件挂载点：account.card.footer ──
+                                    account_footer_components = component_registry.get_sorted(UI_HOOK_ACCOUNT_CARD_FOOTER)
+                                    if account_footer_components:
+                                        ui.separator().classes('my-1')
+                                        for comp in account_footer_components:
+                                            try:
+                                                render_fn = comp['render']
+                                                if callable(render_fn):
+                                                    result = render_fn(acc)
+                                                    if hasattr(result, '__await__'):
+                                                        await result
+                                            except Exception as e:
+                                                with ui.row().classes('items-center gap-2 px-2 py-1 bg-red-50 rounded'):
+                                                    ui.icon('error', size='sm').classes('text-red-500')
+                                                    ui.label(f'插件组件异常: {e}').classes('text-xs text-red-600')
 
                         async def toggle_v(area=v_area, icon=v_icon):
                             area.visible = not area.visible
@@ -1145,6 +1307,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 ui.label('企业版计划即将推出，如需提前接入请通过项目主页联系作者').classes('text-xs text-amber-600 mt-2')
 
 
+
+                # ── 插件挂载点：config.page.extra ──
+                config_extras = component_registry.get_sorted(UI_HOOK_CONFIG_PAGE_EXTRA)
+                if config_extras:
+                    ui.separator().classes('my-4')
+                    ui.label('🔌 插件扩展配置').classes('text-2xl font-bold text-gray-800')
+                    for extra in config_extras:
+                        try:
+                            render_fn = extra['render']
+                            if callable(render_fn):
+                                result = render_fn()
+                                if hasattr(result, '__await__'):
+                                    await result
+                        except Exception as e:
+                            with ui.card().classes('w-full bg-red-50 border-l-4 border-red-500 p-3'):
+                                ui.label(f'插件组件异常: {e}').classes('text-red-700 text-sm')
 
     @ui.page('/pipeline')
     async def pipeline_page():
@@ -1369,6 +1547,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         """请求日志（SPA）"""
         await build_spa('logs')
 
+    @ui.page('/plugins')
+    async def plugins_page():
+        """插件管理（SPA）"""
+        await build_spa('plugins')
+
     async def logs_view():
         """请求日志视图（SPA tab 面板内容）"""
 
@@ -1488,881 +1671,517 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                                         ui.label(f'输出: {log_completion_tokens:,}').classes('text-gray-600')
                                         ui.label(f'总计: {log_total_tokens:,}').classes('text-gray-600 font-bold')
                                         ui.label(f'{log_response_time}ms').classes('text-gray-600')
-                                
+
+                                    # C5: 成本/决策/分类引擎明细
+                                    log_est_cost = getattr(log, 'estimated_cost', 0) or 0
+                                    log_act_cost = getattr(log, 'actual_cost', 0) or 0
+                                    log_router_dec = getattr(log, 'router_decision', None)
+                                    log_selector_dec = getattr(log, 'selector_decision', None)
+                                    log_classify_eng = getattr(log, 'classify_engine', None)
+                                    log_degraded = getattr(log, 'degraded', False)
+                                    log_degrade_reason = getattr(log, 'degrade_reason', None)
+
+                                    has_c5_detail = any([
+                                        log_est_cost > 0, log_act_cost > 0,
+                                        log_router_dec, log_selector_dec,
+                                        log_classify_eng, log_degraded,
+                                    ])
+                                    if has_c5_detail:
+                                        ui.separator().classes('my-1')
+                                        with ui.column().classes('gap-1'):
+                                            with ui.row().classes('items-center gap-4 text-sm'):
+                                                ui.label('💰 成本').classes('text-gray-500 font-medium')
+                                                ui.label(f'估算: ¥{log_est_cost:.6f}').classes('text-gray-600')
+                                                ui.label(f'实际: ¥{log_act_cost:.6f}').classes('text-gray-600 font-bold')
+                                            with ui.row().classes('items-center gap-2 text-xs flex-wrap'):
+                                                if log_classify_eng:
+                                                    eng_label = {'vector': '向量分类', 'llm': 'LLM分类', 'off': '未分类'}.get(log_classify_eng, log_classify_eng)
+                                                    ui.badge(f'分类: {eng_label}', color='info').props('outline')
+                                                if log_router_dec:
+                                                    ui.badge(f'路由: {log_router_dec[:50]}', color='primary').props('outline')
+                                                if log_selector_dec:
+                                                    ui.badge(f'选号: {log_selector_dec[:50]}', color='secondary').props('outline')
+                                                if log_degraded:
+                                                    degrade_text = f'降级: {log_degrade_reason}' if log_degrade_reason else '已降级'
+                                                    ui.badge(degrade_text[:60], color='warning').props('outline')
+
                                     # 错误信息
                                     if log_error:
                                         ui.separator().classes('my-1')
                                         with ui.row().classes('items-start gap-2'):
                                             ui.icon('warning', size='sm').classes('text-red-500')
                                             ui.label(str(log_error)).classes('text-sm text-red-600 flex-1')
+
+                                    # ── 插件挂载点：log.detail.extra ──
+                                    log_detail_components = component_registry.get_sorted(UI_HOOK_LOG_DETAIL_EXTRA)
+                                    if log_detail_components:
+                                        ui.separator().classes('my-1')
+                                        for comp in log_detail_components:
+                                            try:
+                                                render_fn = comp['render']
+                                                if callable(render_fn):
+                                                    result = render_fn(log)
+                                                    if hasattr(result, '__await__'):
+                                                        await result
+                                            except Exception as e:
+                                                with ui.row().classes('items-center gap-2 px-2 py-1 bg-red-50 rounded'):
+                                                    ui.icon('error', size='sm').classes('text-red-500')
+                                                    ui.label(f'插件组件异常: {e}').classes('text-xs text-red-600')
                 else:
                     with ui.card().classes('w-full text-center p-12'):
                         ui.icon('inbox', size='4rem').classes('text-gray-400')
                         ui.label('暂无日志记录').classes('text-xl text-gray-500 mt-4')
 
         await logs_content()
-    @ui.page('/vendors')
-    async def vendors_page():
-        """模型菜单维护页：内置菜单 + DB 用户覆盖 = 最终目录（B/C 迭代）"""
-        ui.page_title('WoolGate AI 聚合网关')
-        nav_header('vendors')
 
-        from app.services.free_tier_catalog import _merged_vendors, FREE_TIER_VENDORS, vendor_matches
-        from app.models.database import VendorOverride
-
-        def builtin_ids():
-            return {v['id'] for v in FREE_TIER_VENDORS}
-
-        async def set_deleted(vendor_id: str, deleted: bool):
-            async with AsyncSessionLocal() as s:
-                existing = (await s.execute(select(VendorOverride).where(VendorOverride.id == vendor_id))).scalar_one_or_none()
-                if existing:
-                    existing.is_deleted = deleted
-                    existing.enabled = not deleted
-                    await s.commit()
-                else:
-                    # 停用内置厂商：保存一条 is_deleted 标记
-                    from app.services.free_tier_catalog import get_vendor
-                    v = get_vendor(vendor_id)
-                    if v:
-                        s.add(VendorOverride(id=vendor_id, vendor_json=json.dumps(v, ensure_ascii=False), is_deleted=deleted, enabled=not deleted))
-                        await s.commit()
-            vendor_table.refresh()
-            ui.notify('已更新' if not deleted else '已停用', type='positive')
-
-        async def delete_override(vendor_id: str):
-            async with AsyncSessionLocal() as s:
-                row = (await s.execute(select(VendorOverride).where(VendorOverride.id == vendor_id))).scalar_one_or_none()
-                if row:
-                    await s.delete(row)
-                    await s.commit()
-            vendor_table.refresh()
-            ui.notify('已删除自定义厂商', type='positive')
-
-        def show_edit_dialog(v=None):
-            is_edit = v is not None
-            dialog = ui.dialog().props('max-width=720px')
-            with dialog, ui.card().classes('w-full p-4'):
-                ui.label('编辑模型' if is_edit else '新增模型').classes('text-lg font-bold mb-2')
-                f = {}
-                with ui.grid(columns=2).classes('w-full gap-3'):
-                    f['id'] = ui.input('厂商 ID（唯一，如 myvendor）', value=(v or {}).get('id', '')).props('dense outlined').classes('w-full')
-                    f['name'] = ui.input('厂商名称', value=(v or {}).get('name', '')).props('dense outlined').classes('w-full')
-                    f['icon'] = ui.input('图标 URL（原厂 logo，留空用默认 AI）', value=(v or {}).get('icon', '')).props('dense outlined').classes('w-full')
-                    f['tag'] = ui.input('标签（如 国内 · 免费）', value=(v or {}).get('tag', '')).props('dense outlined').classes('w-full')
-                    f['region'] = ui.select({'国内': '国内', '海外': '海外', '本地': '本地'}, label='地域', value=(v or {}).get('region', '国内')).props('dense outlined').classes('w-full')
-                    f['base_url'] = ui.input('Base URL（OpenAI 兼容）', value=(v or {}).get('base_url', '')).props('dense outlined').classes('w-full')
-                    f['signup_url'] = ui.input('注册/拿 Key 链接', value=(v or {}).get('signup_url', '')).props('dense outlined').classes('w-full')
-                    f['quota_note'] = ui.input('额度说明', value=(v or {}).get('quota_note', '')).props('dense outlined').classes('w-full')
-                    f['access_note'] = ui.input('访问提醒（可选，如需要科学上网）', value=(v or {}).get('access_note', '')).props('dense outlined').classes('w-full')
-                with ui.row().classes('items-center gap-4 mt-1'):
-                    f['balance_support'] = ui.switch('支持余额查询', value=(v or {}).get('balance_support', False)).props('dense')
-                    f['no_key'] = ui.switch('无 Key 厂商（本地模型）', value=(v or {}).get('no_key', False)).props('dense')
-                f['models'] = ui.textarea('模型列表（JSON 数组，模型对象可加 "free": true 标记为免费）', value=json.dumps((v or {}).get('models', []), ensure_ascii=False, indent=1)) \
-                    .props('dense outlined autogrow input-style="font-family:monospace;font-size:12px"').classes('w-full mt-1')
-                f['steps'] = ui.textarea('接入步骤（JSON 字符串数组）', value=json.dumps((v or {}).get('steps', []), ensure_ascii=False, indent=1)) \
-                    .props('dense outlined autogrow input-style="font-family:monospace;font-size:12px"').classes('w-full mt-1')
-                with ui.row().classes('items-center justify-end w-full gap-2 mt-2'):
-                    ui.button('取消', on_click=dialog.close).props('outline no-caps')
-                    ui.button('保存', on_click=lambda: save()).props('color=primary no-caps').classes('wg-vendor-save')
-
-            def save():
-                vendor_id = (f['id'].value or '').strip()
-                name = (f['name'].value or '').strip()
-                base_url = (f['base_url'].value or '').strip()
-                if not vendor_id or not name or not base_url:
-                    ui.notify('ID / 名称 / Base URL 必填', type='warning')
-                    return
-                try:
-                    models = json.loads(f['models'].value or '[]')
-                    steps = json.loads(f['steps'].value or '[]')
-                except json.JSONDecodeError:
-                    ui.notify('模型列表/接入步骤不是合法 JSON', type='warning')
-                    return
-                if not isinstance(models, list) or not isinstance(steps, list):
-                    ui.notify('模型列表/接入步骤必须是 JSON 数组', type='warning')
-                    return
-                vendor_dict = {
-                    'id': vendor_id,
-                    'name': name,
-                    'icon': (f['icon'].value or '').strip(),
-                    'tag': (f['tag'].value or '').strip(),
-                    'region': f['region'].value or '国内',
-                    'base_url': base_url,
-                    'models': models,
-                    'signup_url': (f['signup_url'].value or '').strip(),
-                    'steps': steps,
-                    'balance_support': f['balance_support'].value,
-                    'quota_note': (f['quota_note'].value or '').strip(),
-                    'no_key': f['no_key'].value,
-                }
-                if f['access_note'].value:
-                    vendor_dict['access_note'] = f['access_note'].value.strip()
-
-                async def persist():
-                    async with AsyncSessionLocal() as s:
-                        existing = (await s.execute(select(VendorOverride).where(VendorOverride.id == vendor_id))).scalar_one_or_none()
-                        if existing:
-                            existing.vendor_json = json.dumps(vendor_dict, ensure_ascii=False)
-                            existing.is_deleted = False
-                            existing.enabled = True
-                        else:
-                            s.add(VendorOverride(id=vendor_id, vendor_json=json.dumps(vendor_dict, ensure_ascii=False), is_deleted=False, enabled=True))
-                        await s.commit()
-                    dialog.close()
-                    vendor_table.refresh()
-                    ui.notify('已保存（修改已生效，刷新向导页可见）', type='positive')
-                asyncio.create_task(persist())
-
-            dialog.open()
+    async def plugins_view():
+        """插件管理视图（SPA tab 面板内容）——重新设计版"""
 
         @ui.refreshable
-        async def vendor_table():
-            async with AsyncSessionLocal() as s:
-                merged = await _merged_vendors(s)
-                overrides = (await s.execute(select(VendorOverride))).scalars().all()
-                _acc = (await s.execute(select(ModelAccount.vendor, ModelAccount.model_name))).all()
-            ov_by_id = {o.id: o for o in overrides}
-            _acc_models = [(r[0] or '', r[1]) for r in _acc]
+        async def plugins_content():
+            from app.extensions.loader import get_plugin_registry, get_plugin_stats
+            from app.extensions.sdk import config_registry as _cfg_reg, get_plugin_config, set_plugin_config
 
-            def _connected_models(v):
-                return [mn for vn, mn in _acc_models if vendor_matches(vn, v['id'])]
+            stats = get_plugin_stats()
+            registry = get_plugin_registry()
+            all_configs = _cfg_reg.list()
 
-            b_ids = builtin_ids()
-            _filter_state = {'kw': '', 'src': 'all'}
-
-            def apply_filter():
-                st = _filter_state['src']
-                ui.run_javascript(f"""
-                    let _v = 0;
-                    const _kw = (document.querySelector('.wg-vendor-search input')?.value || '').toLowerCase();
-                    document.querySelectorAll('.vendor-menu-card').forEach(c => {{
-                        let show = true;
-                        if (_kw && !(c.textContent||'').toLowerCase().includes(_kw)) show = false;
-                        const src = c.getAttribute('data-src') || '';
-                        if ({st!r} !== 'all' && src !== {st!r}) show = false;
-                        c.style.display = show ? '' : 'none';
-                        if (show) _v++;
-                    }});
-                    const _n = document.getElementById('vendor-menu-count');
-                    if (_n) _n.textContent = '模型菜单（' + _v + '/{len(merged)} 家）';
-                """)
-
-            with ui.card().classes('w-full shadow-lg p-4'):
+            with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
+                # ═══ 标题 ═══
                 with ui.row().classes('items-center justify-between w-full'):
-                    ui.label(f'模型菜单（{len(merged)} 家）').classes('text-lg font-bold').props('id=vendor-menu-count')
-                    ui.button('新增模型', on_click=lambda: show_edit_dialog()).props('color=primary size=md no-caps').classes('wg-vendor-add')
-                ui.label('内置菜单随版本发布；此处新增/修改/停用即时生效（合并后供免费向导使用）').classes('text-xs text-gray-500 mt-1')
-                with ui.row().classes('items-center gap-2 mt-2 w-full flex-wrap'):
-                    ui.input('搜索厂商/模型', on_change=lambda e: (_filter_state.__setitem__('kw', e.value or ''), apply_filter())) \
-                        .props('dense outlined clearable').classes('w-72 wg-vendor-search')
-                    ui.select(
-                        {'all': '全部来源', 'builtin': '内置', 'custom': '自定义', 'deleted': '已停用'},
-                        value='all', label='来源',
-                        on_change=lambda e: (_filter_state.__setitem__('src', e.value or 'all'), apply_filter()),
-                    ).props('dense outlined').classes('w-48')
-                with ui.element('div').style('display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;align-items:stretch').classes('w-full mt-3'):
-                    for v in merged:
-                        o = ov_by_id.get(v['id'])
-                        if o and o.is_deleted:
-                            src_tag, src_color, src_key = '已停用', 'red', 'deleted'
-                        elif v['id'] not in b_ids:
-                            src_tag, src_color, src_key = '🆕 自定义', 'purple', 'custom'
-                        else:
-                            # 内置（含被编辑过的内置：修改已生效，不额外标"已覆盖"等技术内部状态）
-                            src_tag, src_color, src_key = '内置', 'grey', 'builtin'
-                        connected = _connected_models(v)
-                        free_cnt = sum(1 for m in v['models'] if isinstance(m, dict) and m.get('free'))
-                        free_displays = [m['display'] for m in v['models'] if isinstance(m, dict) and m.get('free')]
-                        with ui.card().classes('w-full p-3 shadow-md flex flex-col vendor-menu-card').props(f'data-src={src_key} data-vendor-id={v["id"]}'):
-                            with ui.row().classes('items-center gap-2 w-full'):
-                                ui.html(vendor_icon_html(v.get('icon', ''), 'w-8 h-8 rounded object-contain'), sanitize=False)
-                                ui.label(v['name']).classes('font-bold text-sm flex-1 min-w-0')
-                                ui.label(src_tag).classes(f'text-xs bg-{src_color}-100 text-{src_color}-700 px-2 py-0.5 rounded font-bold shrink-0')
-                            with ui.row().classes('items-center gap-1.5 w-full mt-1.5'):
-                                ui.label(f"{free_cnt} 免费模型").classes('text-xs text-gray-500')
-                                if connected:
-                                    ui.label(f'已接入 {len(connected)}').classes('text-xs text-green-600 font-bold')
+                    ui.label('🔌 插件管理').classes('text-3xl font-bold text-gray-800')
+                    ui.button('🔄 刷新', on_click=plugins_content.refresh).props('outline color=primary')
+
+                # ═══ 一、概览统计 ═══
+                def stat_card(icon, title, value, sub=None, color='blue'):
+                    with ui.card().classes(f'flex-1 border-l-4 border-{color}-500').style('height:100px'):
+                        with ui.column().classes('w-full items-center gap-1 justify-center').style('height:100%'):
+                            ui.label(icon).classes('text-xl')
+                            ui.label(str(value)).classes('text-2xl font-bold')
+                            ui.label(title).classes('text-xs text-gray-500')
+                            if sub:
+                                ui.label(sub).classes('text-xs text-gray-400')
+
+                with ui.row().classes('w-full gap-3'):
+                    stat_card('📦', '已加载插件', f'{stats["loaded_plugins"]}/{stats["total_plugins"]}', f'失败 {stats["failed_plugins"]}', 'green')
+                    stat_card('🔌', '生命周期钩子', stats['hook_count'], f'{len(stats["hook_events"])} 个事件', 'blue')
+                    stat_card('⚙️', 'SPI 策略实现', stats['spi_count'], f'{len(stats["spi_types"])} 种类型', 'purple')
+                    stat_card('🖥️', 'UI 扩展点', stats.get('ui_pages', 0) + stats.get('ui_nav_items', 0) + stats.get('ui_components', 0),
+                              f'页面{stats.get("ui_pages",0)} 导航{stats.get("ui_nav_items",0)} 组件{stats.get("ui_components",0)}', 'orange')
+
+                # ═══ 二、概念说明（可折叠）═══
+                with ui.card().classes('w-full'):
+                    with ui.column().classes('gap-3 p-4'):
+                        with ui.row().classes('items-center justify-between w-full'):
+                            ui.label('📚 概念体系说明').classes('text-lg font-bold text-gray-800')
+                            concept_expand = ui.icon('expand_more', size='sm').classes('cursor-pointer text-gray-500')
+
+                        concept_content = ui.column().classes('w-full gap-3')
+                        concept_content.visible = False
+
+                        def toggle_concept():
+                            concept_content.visible = not concept_content.visible
+                            concept_expand.props(f'name={"expand_less" if concept_content.visible else "expand_more"}')
+
+                        concept_expand.on('click', toggle_concept)
+
+                        with concept_content:
+                            # Hook 说明
+                            with ui.card().classes('w-full bg-blue-50 border-l-4 border-blue-500'):
+                                with ui.column().classes('gap-1 p-3'):
+                                    with ui.row().classes('items-center gap-2'):
+                                        ui.label('🔌 Hook（钩子）').classes('font-bold text-blue-800')
+                                        ui.badge('生命周期事件回调', color='info').props('outline')
+                                    ui.label('定义：在程序执行的特定时间点触发的回调函数，用于插入自定义逻辑。').classes('text-sm text-blue-700')
+                                    ui.label('应用场景：请求前过滤（route.before）、请求后处理（route.after）、启动初始化（app.startup）等。').classes('text-xs text-blue-600')
+                                    ui.label('使用方式：register_hook(event_name, callback_func)').classes('text-xs font-mono text-blue-800 bg-white p-1 rounded')
+
+                            # SPI 说明
+                            with ui.card().classes('w-full bg-purple-50 border-l-4 border-purple-500'):
+                                with ui.column().classes('gap-1 p-3'):
+                                    with ui.row().classes('items-center gap-2'):
+                                        ui.label('⚙️ SPI（服务提供者接口）').classes('font-bold text-purple-800')
+                                        ui.badge('策略扩展点', color='secondary').props('outline')
+                                    ui.label('定义：定义了一组接口规范，插件可以实现这些接口来替换或扩展系统的核心策略。').classes('text-sm text-purple-700')
+                                    ui.label('应用场景：自定义路由策略（RouteStrategy）、自定义账号选择策略（AccountSelector）等。').classes('text-xs text-purple-600')
+                                    ui.label('使用方式：实现 SPI 接口类 + register_spi(spi_type, implementation)').classes('text-xs font-mono text-purple-800 bg-white p-1 rounded')
+
+                            # Plugin 说明
+                            with ui.card().classes('w-full bg-green-50 border-l-4 border-green-500'):
+                                with ui.column().classes('gap-1 p-3'):
+                                    with ui.row().classes('items-center gap-2'):
+                                        ui.label('📦 Plugin（插件）').classes('font-bold text-green-800')
+                                        ui.badge('独立功能模块', color='positive').props('outline')
+                                    ui.label('定义：一个独立的 Python 模块，通过注册 Hook/SPI/UI扩展点来扩展系统功能，可独立启用/禁用。').classes('text-sm text-green-700')
+                                    ui.label('应用场景：余额监控插件、审计日志插件、自定义路由插件等完整功能。').classes('text-xs text-green-600')
+                                    ui.label('使用方式：环境变量 WOOLGATE_PLUGINS=module.path，插件在 import 时自动注册扩展点').classes('text-xs font-mono text-green-800 bg-white p-1 rounded')
+
+                            # UI扩展点说明
+                            with ui.card().classes('w-full bg-orange-50 border-l-4 border-orange-500'):
+                                with ui.column().classes('gap-1 p-3'):
+                                    with ui.row().classes('items-center gap-2'):
+                                        ui.label('🖥️ UI 扩展点').classes('font-bold text-orange-800')
+                                        ui.badge('界面注入点', color='warning').props('outline')
+                                    ui.label('定义：管理后台界面中预设的注入位置，插件可以在这些位置添加自定义页面、导航项或组件。').classes('text-sm text-orange-700')
+                                    ui.label('应用场景：添加独立管理页面、添加导航菜单项、在首页添加小部件、在账号卡片添加信息等。').classes('text-xs text-orange-600')
+                                    ui.label('使用方式：register_page() / register_nav_item() / register_component(hook_point, render_func)').classes('text-xs font-mono text-orange-800 bg-white p-1 rounded')
+
+                with ui.row().classes('w-full gap-4 items-start flex-nowrap'):
+                    # ═══ 四、接口插座概览 ═══
+                    with ui.card().classes('flex-1 min-w-0'):
+                        with ui.column().classes('gap-3 p-4'):
+                            ui.label('🔌 接口插座概览（程序执行阶段）').classes('text-lg font-bold text-gray-800')
+                            ui.label('绿色节点为已生效实现（含系统内置与用户插件），点击 📦 用户插件可跳转到右侧配置区域').classes('text-xs text-gray-500')
+
+                            # 获取详细的钩子/SPI信息
+                            hook_details = stats.get('hook_details', {})
+                            spi_details = stats.get('spi_details', {})
+                            plugins_info = stats.get('plugins', {})
+                            user_plugin_names = {info.get('name', '') for info in plugins_info.values()}
+
+                            # 流程节点定义：(阶段名, 钩子事件, SPI类型列表, 功能描述, 颜色)
+                            stages = [
+                                ('1. 请求接入', None, ['security'], '接收请求，安全校验', 'blue'),
+                                ('2. 前置钩子', 'route.before', None, '插件可在此过滤/修改请求', 'cyan'),
+                                ('3. 意图分类', None, ['classifier'], '智能分类请求类型', 'indigo'),
+                                ('4. 路由决策', None, ['router'], '选择目标模型', 'purple'),
+                                ('5. 账号选择', None, ['selector'], '选择具体账号/Key', 'violet'),
+                                ('6. 上下文管理', None, ['context'], '会话上下文处理', 'pink'),
+                                ('7. 执行转发', None, ['adapter'], '转发请求到厂商API', 'green'),
+                                ('8. 后置钩子', 'route.after', None, '插件可在此处理响应', 'orange'),
+                                ('9. 日志存储', None, ['store'], '记录请求/响应日志', 'gray'),
+                            ]
+
+                            with ui.row().classes('w-full items-start gap-2 flex-wrap justify-center'):
+                                for i, (stage_name, hook_event, spi_types, desc, color) in enumerate(stages):
+                                    # 收集该节点已注册的扩展点
+                                    registered_items = []
+                                    if hook_event and hook_event in hook_details:
+                                        for hd in hook_details[hook_event]:
+                                            registered_items.append({
+                                                'type': 'Hook',
+                                                'name': hook_event,
+                                                'plugin': hd['plugin'],
+                                                'function': hd['function'],
+                                            })
+                                    for st in (spi_types or []):
+                                        if st in spi_details:
+                                            for sd in spi_details[st]:
+                                                registered_items.append({
+                                                    'type': 'SPI',
+                                                    'name': st,
+                                                    'plugin': sd['plugin'],
+                                                    'function': sd['name'],
+                                                })
+
+                                    is_active = len(registered_items) > 0
+                                    border_color = 'green' if is_active else color
+
+                                    with ui.column().classes('items-center gap-1'):
+                                        card_classes = f'bg-{color}-50 border-2 border-{border_color}-400'
+                                        if is_active:
+                                            card_classes += ' shadow-md ring-2 ring-green-200'
+                                        with ui.card().classes(card_classes).style('min-width:150px; max-width:180px; padding:8px;'):
+                                            with ui.column().classes('items-center gap-1 w-full'):
+                                                # 阶段名称
+                                                ui.label(stage_name).classes(f'text-xs font-bold text-{color}-800')
+                                                # 扩展点名称
+                                                ext_name = hook_event or (spi_types[0] if spi_types else '')
+                                                if ext_name:
+                                                    ui.label(ext_name).classes(f'text-xs font-mono text-{color}-600')
+                                                # 功能描述
+                                                ui.label(desc).classes('text-xs text-gray-500 text-center')
+                                            
+                                                # 已注册的实现列表（区分系统内置和用户插件）
+                                                if registered_items:
+                                                    ui.label(f'已注册实现 ({len(registered_items)}):').classes('text-xs font-bold text-green-700 mt-1')
+                                                    for item in registered_items:
+                                                        plugin_name = item['plugin']
+                                                        # 判断是否为系统内置实现：模块名以 app. 开头，或不在 plugins_info 中
+                                                        is_builtin = plugin_name.startswith('app.') or plugin_name.startswith('app/') or plugin_name not in user_plugin_names
+                                                        # 判断是否为系统内置实现：模块名以 app. 开头，或不在用户插件名称集合中
+                                                        # 每个实现用一个小容器包裹
+                                                        with ui.row().classes('items-center gap-1 w-full justify-center'):
+                                                            if is_builtin:
+                                                                # 系统内置实现，不可点击
+                                                                ui.label('⚙️ 系统内置').classes('text-xs text-gray-500 bg-gray-100 px-1 rounded font-mono')
+                                                                ui.label(plugin_name).classes('text-xs text-gray-400 font-mono')
+                                                            else:
+                                                                # 用户插件，通过 plugins_info 获取友好名称（统一大小写）
+                                                                display_name = plugins_info[plugin_name].get('name', plugin_name) if plugin_name in plugins_info else plugin_name
+                                                                # data-plugin 目标值统一用小写
+                                                                target_name = display_name.lower()
+                                                                ui.button(
+                                                                    f'📦 {display_name}',
+                                                                    on_click=lambda p=target_name: ui.run_javascript(
+                                                                        f'var el=document.querySelector("[data-plugin=\\\"{p}\\\"]");'
+                                                                        f'if(el){{el.scrollIntoView({{behavior:"smooth",block:"center"}});'
+                                                                        f'var blinkCount=0;var blinkInterval=setInterval(function(){{'
+                                                                        f'if(blinkCount%2===0){{el.classList.add("ring-2","ring-blue-400")}}else{{el.classList.remove("ring-2","ring-blue-400")}};'
+                                                                        f'blinkCount++;if(blinkCount>=6){{clearInterval(blinkInterval);el.classList.remove("ring-2","ring-blue-400")}}}},500);}}'
+                                                                    )
+                                                                ).props('flat dense color=green text-xs').classes('text-xs')
+                                                            # 显示函数名和类型
+                                                            ui.label(f'{item.get("type", "")}:{item.get("function", "")}').classes('text-xs text-gray-400 font-mono')
+                                                    ui.badge('✓ 已生效', color='positive').props('outline').classes('text-xs mt-1')
+                                                else:
+                                                    ui.label('(预留扩展点)').classes('text-xs text-gray-400 italic')
+                                
+                                    if i < len(stages) - 1:
+                                        ui.icon('arrow_forward', size='sm').classes('text-gray-400 mx-1 mt-8')
+
+                            # 统计摘要
+                            with ui.row().classes('w-full gap-6 mt-2 pt-3 border-t'):
+                                with ui.column().classes('gap-1'):
+                                    ui.label(f'🔌 已注册钩子: {len(hook_details)} 个事件').classes('text-sm font-bold text-gray-700')
+                                    if hook_details:
+                                        for event, items in hook_details.items():
+                                            ui.label(f'  • {event}: {len(items)} 个实现').classes('text-xs text-gray-500')
+                                    else:
+                                        ui.label('暂无插件注册钩子').classes('text-xs text-gray-400')
+                                with ui.column().classes('gap-1'):
+                                    ui.label(f'⚙️ 已注册SPI: {len(spi_details)} 种类型').classes('text-sm font-bold text-gray-700')
+                                    if spi_details:
+                                        for stype, items in spi_details.items():
+                                            ui.label(f'  • {stype}: {len(items)} 个实现').classes('text-xs text-gray-500')
+                                    else:
+                                        ui.label('暂无插件注册SPI').classes('text-xs text-gray-400')
+                    with ui.column().classes('flex-1 min-w-0 gap-4'):
+                        # ═══ 三、插件列表（每个插件独立卡片，含配置）═══
+                        with ui.row().classes('items-center gap-3 mt-2'):
+                            ui.label('插件详情').classes('text-2xl font-bold text-gray-800')
+                            # 插件清单按钮：点击显示所有插件的清单
+                            plugin_list_btn = ui.button('📋 插件清单', icon='list').props('flat dense color=blue')
+                            plugin_list_dialog = ui.dialog()
+                            with plugin_list_dialog:
+                                with ui.card().classes('w-[650px]'):
+                                    ui.label('📋 插件清单').classes('text-xl font-bold text-gray-800')
+                                    ui.label('所有已注册的插件及系统内置实现').classes('text-sm text-gray-500')
+                                    ui.separator()
+                                    # 用户插件列表（列表形式，支持多插件）
+                                    if registry:
+                                        ui.label(f'🔌 用户插件 ({len(registry)})').classes('text-sm font-bold text-green-700 mt-2')
+                                        with ui.column().classes('w-full gap-2 max-h-[280px] overflow-y-auto pr-1'):
+                                            for mod_name, p_info in registry.items():
+                                                p_name = p_info.get('name', mod_name.split('.')[-1])
+                                                p_ver = p_info.get('version', 'unknown')
+                                                p_status = '✅ 已加载' if p_info['status'] == 'loaded' else '❌ 加载失败'
+                                                p_desc = p_info.get('description', '')[:50]
+                                                with ui.card().classes('w-full p-3 hover:bg-green-50 transition border-l-4 border-green-400'):
+                                                    with ui.row().classes('items-center gap-2 w-full'):
+                                                        ui.label(f'📦 {p_name}').classes('text-sm font-mono text-green-700 font-bold')
+                                                        ui.label(f'v{p_ver}').classes('text-xs text-gray-400 bg-gray-100 px-1 rounded')
+                                                        ui.label(p_status).classes('text-xs ml-auto')
+                                                    ui.label(mod_name).classes('text-xs text-gray-400 font-mono mt-1')
+                                                    if p_info.get('description'):
+                                                        ui.label(p_info['description']).classes('text-xs text-gray-600 mt-1 leading-relaxed')
+                                    # 系统内置实现列表（列表形式）
+                                    ui.label(f'⚙️ 系统内置实现').classes('text-sm font-bold text-gray-600 mt-3')
+                                    builtin_items = set()
+                                    for event, items in hook_details.items():
+                                        for item in items:
+                                            pn = item['plugin']
+                                            if pn.startswith('app.') or pn not in user_plugin_names:
+                                                builtin_items.add((pn, item.get('type', ''), item.get('function', '')))
+                                    for stype, items in spi_details.items():
+                                        for item in items:
+                                            pn = item['plugin']
+                                            if pn.startswith('app.') or pn not in user_plugin_names:
+                                                builtin_items.add((pn, item.get('type', ''), item.get('function', '')))
+                                    if builtin_items:
+                                        with ui.column().classes('w-full gap-1 max-h-[180px] overflow-y-auto pr-1'):
+                                            for pn, ptype, pfunc in sorted(builtin_items):
+                                                with ui.row().classes('items-center gap-2 w-full p-2 hover:bg-gray-50 rounded border-l-2 border-gray-300'):
+                                                    ui.label('⚙️ 系统内置').classes('text-xs text-gray-500 bg-gray-100 px-1 rounded font-mono whitespace-nowrap')
+                                                    ui.label(pn).classes('text-xs text-gray-600 font-mono')
+                                                    ui.label(f'{ptype}:{pfunc}').classes('text-xs text-gray-400 font-mono ml-auto')
+                                    else:
+                                        ui.label('暂无系统内置实现').classes('text-xs text-gray-400 italic')
+                                    ui.button('关闭', on_click=plugin_list_dialog.close).props('flat color=gray').classes('mt-4 self-end text-sm')
+                            plugin_list_btn.on_click(plugin_list_dialog.open)
+
+                        if registry:
+                            for module_name, info in registry.items():
+                                status = info['status']
+                                error = info.get('error')
+
+                                if status == 'loaded':
+                                    status_color = 'positive'
+                                    status_icon = 'check_circle'
+                                    status_text = '已加载'
                                 else:
-                                    ui.label('未接入').classes('text-xs text-gray-400')
-                            with ui.column().classes('flex-1 w-full gap-0'):
-                                if v.get('quota_note'):
-                                    ui.label(v['quota_note']).classes('text-xs text-gray-500 mt-1').style('line-height:1.35')
-                                if free_displays:
-                                    ui.label(f"{'、'.join(free_displays[:3])}{'…' if len(free_displays) > 3 else ''}").classes('text-[11px] text-green-700 mt-1')
-                            with ui.row().classes('gap-1 mt-2 w-full flex-wrap'):
-                                ui.button('编辑', on_click=lambda vv=v: show_edit_dialog(vv)).props('outline size=sm color=primary no-caps').classes('wg-vendor-edit')
-                                if o and o.is_deleted:
-                                    ui.button('恢复', on_click=lambda vid=v['id']: set_deleted(vid, False)).props('outline size=sm color=positive no-caps')
-                                elif v['id'] in b_ids:
-                                    ui.button('停用', on_click=lambda vid=v['id']: set_deleted(vid, True)).props('outline size=sm color=warning no-caps')
-                                if o and not o.is_deleted and v['id'] not in b_ids:
-                                            ui.button('删除', on_click=lambda vid=v['id']: delete_override(vid)).props('outline size=sm color=negative no-caps')
+                                    status_color = 'negative'
+                                    status_icon = 'error'
+                                    status_text = '加载失败'
 
-        ui.timer(0.01, vendor_table, once=True)
+                                # 插件友好名称（用于 data-plugin 属性和点击跳转）
+                                display_name = info.get('name', module_name.split('.')[-1])
+                                plugin_version = info.get('version', 'unknown')
+                                plugin_author = info.get('author', 'unknown')
+                                plugin_description = info.get('description', '')
+                                plugin_tags = info.get('tags', [])
 
+                                with ui.card().classes('w-full shadow-sm hover:shadow-md transition-shadow').props(f'data-plugin="{display_name}"'):
+                                    with ui.column().classes('gap-3 p-4'):
+                                        # 插件头部
+                                        with ui.row().classes('items-center justify-between w-full'):
+                                            with ui.row().classes('items-center gap-2'):
+                                                ui.icon(status_icon, size='sm').classes(f'text-{status_color}')
+                                                ui.label(display_name).classes('font-bold text-gray-800 text-lg')
+                                                ui.badge(f'v{plugin_version}', color='grey').props('outline')
+                                                ui.badge(status_text, color=status_color).props('outline')
 
+                                            # 展开/收起配置按钮
+                                            if module_name in all_configs and all_configs[module_name].get('schema'):
+                                                cfg_btn = ui.button('⚙️ 配置', icon='settings').props('outline color=primary size=sm')
+                                            else:
+                                                cfg_btn = None
 
+                                        # 插件元信息
+                                        with ui.column().classes('gap-1'):
+                                            ui.label(module_name).classes('text-xs text-gray-400 font-mono')
+                                            if plugin_description:
+                                                ui.label(plugin_description).classes('text-sm text-gray-600')
+                                            if plugin_author and plugin_author != 'unknown':
+                                                ui.label(f'👤 作者: {plugin_author}').classes('text-xs text-gray-400')
+                                            if plugin_tags:
+                                                with ui.row().classes('gap-1 flex-wrap'):
+                                                    for tag in plugin_tags:
+                                                        ui.badge(tag, color='primary').props('outline').classes('text-xs')
 
-async def sync_model_to_catalog(account, session):
-    """同步账号模型到能力目录并计算向量，返回 (model_name, is_new)"""
-    from app.services.model_catalog_service import ModelCatalogService
-    from app.services.embedding import EmbeddingService
-    from app.pipeline.config import PipelineConfig
-    
-    svc = ModelCatalogService(session)
-    catalog = await svc.ensure_model(account.model_name, account.vendor, account_id=account.id)
-    is_new = catalog.examples is None or len(catalog.examples) == 0
-    
-    # 新模型设置默认示例
-    if is_new:
-        default_examples = [
-            '你好，今天天气怎么样', '帮我写一封请假邮件', '1+1等于几',
-            '推荐一本好看的小说', '今天吃什么好呢', '帮我翻译这句话成英文',
-            '给孩子讲个睡前故事', '微信怎么改密码', '周末去哪里玩比较好',
-            '帮我总结一下这段文字', '电脑开不了机怎么办', '给我几个减肥的建议',
-            '怎么提高工作效率', '推荐几部科幻电影', '帮我写个朋友圈文案',
-        ]
-        catalog.examples = default_examples
-        if not catalog.capability_description:
-            catalog.capability_description = f'{account.vendor}大模型，通用对话能力'
-        await session.commit()
-    
-    # 计算向量（多示例平均）
-    cfg = await PipelineConfig.load(session)
-    embed_svc = EmbeddingService(cfg.router_config, db=session)
-    if catalog.examples:
-        vectors = []
-        for example in catalog.examples:
-            vec = await embed_svc.embed(example)
-            if vec:
-                vectors.append(vec)
-        if vectors:
-            dim = len(vectors[0])
-            avg_vector = [sum(v[i] for v in vectors) / len(vectors) for i in range(dim)]
-            catalog.embedding_vector = avg_vector
-    elif catalog.capability_description:
-        vec = await embed_svc.embed(catalog.capability_description)
-        if vec:
-            catalog.embedding_vector = vec
-    await session.commit()
-    
-    return catalog.display_name or catalog.model_name, is_new
+                                        if error:
+                                            ui.label(f'❌ 加载错误: {error}').classes('text-sm text-red-600')
 
+                                        # 该插件注册的扩展点统计（从 hook_details 和 spi_details 中收集）
+                                        plugin_hook_count = 0
+                                        plugin_spi_count = 0
+                                        for event, hooks in stats.get('hook_details', {}).items():
+                                            plugin_hook_count += sum(1 for h in hooks if h['plugin'] == display_name)
+                                        for stype, impls in stats.get('spi_details', {}).items():
+                                            plugin_spi_count += sum(1 for s in impls if s['plugin'] == display_name)
+
+                                        with ui.row().classes('gap-2 flex-wrap'):
+                                            if plugin_hook_count > 0:
+                                                ui.badge(f'🔌 {plugin_hook_count} 个钩子', color='info').props('outline')
+                                            if plugin_spi_count > 0:
+                                                ui.badge(f'⚙️ {plugin_spi_count} 个SPI', color='secondary').props('outline')
+                                            if module_name in all_configs:
+                                                ui.badge('🔧 可配置', color='warning').props('outline')
+
+                                        # 插件配置区域（默认隐藏，点击展开）
+                                        if cfg_btn and module_name in all_configs:
+                                            cfg_area = ui.column().classes('w-full gap-3 border-t pt-3')
+                                            cfg_area.visible = False
+
+                                            def toggle_cfg(area=cfg_area, btn=cfg_btn):
+                                                area.visible = not area.visible
+                                                btn.props(f'label={"收起配置" if area.visible else "⚙️ 配置"}')
+
+                                            cfg_btn.on_click(lambda e, area=cfg_area, btn=cfg_btn: toggle_cfg(area, btn))
+
+                                            with cfg_area:
+                                                schema = all_configs[module_name].get('schema', {})
+                                                try:
+                                                    current_cfg = await get_plugin_config(module_name)
+                                                except Exception:
+                                                    current_cfg = all_configs[module_name].get('default', {})
+
+                                                config_values = dict(current_cfg)
+
+                                                for field_key, field_def in schema.items():
+                                                    field_type = field_def.get('type', 'string')
+                                                    field_label = field_def.get('label', field_key)
+                                                    field_help = field_def.get('help', '')
+                                                    field_default = field_def.get('default', config_values.get(field_key))
+
+                                                    with ui.row().classes('items-center gap-3 w-full'):
+                                                        ui.label(field_label).classes('text-sm text-gray-600 w-36 shrink-0')
+                                                        if field_type == 'boolean':
+                                                            switch = ui.switch(value=bool(config_values.get(field_key, field_default)))
+                                                            switch.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
+                                                        elif field_type == 'select':
+                                                            options = field_def.get('options', [])
+                                                            select = ui.select(options, value=config_values.get(field_key, field_default))
+                                                            select.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
+                                                        elif field_type == 'number':
+                                                            number = ui.number(value=config_values.get(field_key, field_default))
+                                                            number.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
+                                                        elif field_type == 'textarea':
+                                                            textarea = ui.textarea(value=str(config_values.get(field_key, field_default)))
+                                                            textarea.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
+                                                        else:
+                                                            text_input = ui.input(value=str(config_values.get(field_key, field_default)))
+                                                            text_input.on_value_change(lambda e, k=field_key: config_values.update({k: e.value}))
+                                                        if field_help:
+                                                            ui.tooltip(field_help).classes('text-xs')
+
+                                                async def save_plugin_config(pn=module_name, cv=config_values):
+                                                    try:
+                                                        await set_plugin_config(pn, cv)
+                                                        ui.notify(f'{pn} 配置已保存', type='positive')
+                                                    except Exception as e:
+                                                        ui.notify(f'保存失败: {e}', type='negative')
+
+                                                ui.button('💾 保存配置', on_click=save_plugin_config).props('color=primary')
+                            else:
+                                with ui.card().classes('w-full text-center p-12'):
+                                    ui.icon('extension', size='4rem').classes('text-gray-400')
+                                    ui.label('暂无配置插件').classes('text-xl text-gray-500 mt-4')
+                                    ui.label('设置环境变量 WOOLGATE_PLUGINS 来启用插件').classes('text-sm text-gray-400 mt-2')
+
+                # ═══ 配置说明 ═══
+                with ui.card().classes('w-full bg-blue-50 border-l-4 border-blue-500'):
+                    with ui.column().classes('gap-2 p-4'):
+                        ui.label('💡 插件配置说明').classes('text-lg font-bold text-blue-800')
+                        ui.label('插件通过环境变量 WOOLGATE_PLUGINS 配置，逗号分隔模块路径。例如：').classes('text-sm text-blue-700')
+                        ui.code('WOOLGATE_PLUGINS=plugins.balance_monitor,my_company.audit_plugin').classes('text-xs bg-white p-2 rounded w-full')
+                        ui.label('修改后需重启服务生效。插件 import 失败会被跳过，不影响启动。').classes('text-xs text-blue-600')
+
+        await plugins_content()
 
 def _type_label(t):
     """模型类型显示汉化"""
     return {'chat': '对话', 'embedding': '向量', 'image': '图像', 'video': '视频', 'audio': '音频'}.get(t or 'chat', t or 'chat')
 
 
-def toggle_model_active(model_id: int, active: bool):
-    """启用/停用账号下的单个模型（模型级开关，路由过滤含 is_active）"""
-    async def toggle():
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(select(ModelCatalog).where(ModelCatalog.id == model_id))
-            model = result.scalar_one_or_none()
-            if not model:
-                ui.notify('模型不存在', type='negative')
-                return
-            model.is_active = active
-            await session.commit()
-            ui.notify(f'已{"启用" if active else "停用"}模型 {model.display_name or model.model_name}', type='positive' if active else 'warning')
-            # 局部更新：双按钮 hidden 切换 + 模型卡透明度，不刷新页面
-            ui.run_javascript(f"""
-                (function() {{
-                    const id = {model_id}; const active = {'true' if active else 'false'};
-                    document.querySelectorAll('[data-model-btn="'+id+'"][data-model-action="disable"]').forEach(function(b) {{ b.classList.toggle('hidden', !active); }});
-                    document.querySelectorAll('[data-model-btn="'+id+'"][data-model-action="enable"]').forEach(function(b) {{ b.classList.toggle('hidden', active); }});
-                    const card = document.querySelector('[data-model-card="'+id+'"]');
-                    if (card) card.style.opacity = active ? '' : '0.6';
-                }})();
-            """)
-    ui.timer(0.01, toggle, once=True)
+_plugin_page_refs = []
 
+def _register_plugin_pages():
+    from app.extensions.sdk import page_registry
+    print(f"[插件系统] 模块级别注册插件页面，page_registry 内容: {page_registry.list()}")
+    for route, page_info in page_registry.list().items():
+        full_route = route if route.startswith('/') else '/' + route
+        render_func = page_info['render']
+        page_title = page_info.get('title', '插件页面')
+        print(f"[插件系统] 注册插件页面: {full_route} ({page_title})")
 
-
-ui.add_head_html('''
-<script>
-document.addEventListener('click', function(e){
-  var el = e.target.closest && e.target.closest('.wg-row-click');
-  if (!el) return;
-  el.style.transition = 'background-color .3s ease';
-  el.style.backgroundColor = 'rgba(124,58,237,0.12)';
-  setTimeout(function(){ el.style.backgroundColor = ''; }, 320);
-});
-</script>
-''')
-def toggle_account_enable(account_id: int, enable: bool):
-    """启用/停用账号（账号级总开关；模型级状态由各模型行独立控制）"""
-    async def toggle():
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(ModelAccount).where(ModelAccount.id == account_id)
-            )
-            account = result.scalar_one_or_none()
-            if not account:
-                ui.notify('账号不存在', type='negative')
-                return
-            account.is_enable = enable
-            if enable:
-                account.cool_down_until = None
-            await session.commit()
-
-            # UI 即时反馈：双按钮 hidden 切换 + 徽章/横幅（不依赖后续 sync 完成）
-            ui.run_javascript(f"""
-                (function() {{
-                    const id = {account_id}; const enabling = {'true' if enable else 'false'};
-                    document.querySelectorAll('[data-acc-btn="'+id+'"][data-acc-action="disable"]').forEach(function(b) {{ b.classList.toggle('hidden', !enabling); }});
-                    document.querySelectorAll('[data-acc-btn="'+id+'"][data-acc-action="enable"]').forEach(function(b) {{ b.classList.toggle('hidden', enabling); }});
-                    const badge = document.querySelector('[data-acc-badge="'+id+'"]');
-                    if (badge) {{
-                        badge.textContent = enabling ? '✅ 启用' : '❌ 停用';
-                        badge.classList.toggle('bg-positive', enabling);
-                        badge.classList.toggle('bg-negative', !enabling);
-                    }}
-                    const warn = document.querySelector('[data-acc-warn="'+id+'"]');
-                    if (warn) warn.classList.toggle('hidden', enabling);
-                }})();
-            """)
-
-            if enable:
-                try:
-                    model_display, is_new = await sync_model_to_catalog(account, session)
-                    msg = f'已启用 {account.vendor}，模型 {model_display} 能力已同步' + ('（新增）' if is_new else '')
-                    ui.notify(msg, type='positive')
-                except Exception as e:
-                    ui.notify(f'已启用 {account.vendor}，但模型同步失败: {e}', type='warning')
-            else:
-                from sqlalchemy import func
-                cnt = (await session.execute(
-                    select(func.count()).select_from(ModelCatalog).where(ModelCatalog.account_id == account_id)
-                )).scalar() or 0
-                ui.notify(f'已停用 {account.vendor}（该账号下 {cnt} 个模型不再参与路由）', type='warning')
-    ui.timer(0.01, toggle, once=True)
-
-
-def show_account_dialog(account_id: Optional[int] = None):
-    """显示账号编辑对话框（主从：账号级信息 + 账号下模型勾选；改密钥一处生效）"""
-    async def show():
-        # 加载初始数据用于回填（只读，session 用完即关，不跨回调持有）
-        initial = {
-            'vendor': '',
-            'api_key': '',
-            'model_name': 'chat',
-            'endpoint_id': '',
-            'base_url': '',
-            'is_enable': True,
-            'balance_remaining': None,
-            'balance_unit': 'currency',
-            'currency_rate': 0,
-            'has_key': False,
-            'selected_models': [],
-        }
-        if account_id:
-            async with AsyncSessionLocal() as session:
-                result = await session.execute(
-                    select(ModelAccount).where(ModelAccount.id == account_id)
-                )
-                account = result.scalar_one_or_none()
-                if account:
-                    extra_model = ''
-                    if account.extra_json:
-                        try:
-                            if isinstance(account.extra_json, dict):
-                                extra_model = str(account.extra_json.get('model', ''))
-                            else:
-                                extra_model = str(json.loads(account.extra_json).get('model', ''))
-                        except Exception:
-                            extra_model = ''
-                    initial = {
-                        'vendor': account.vendor or '',
-                        'api_key': '',
-                        'model_name': account.model_name or 'chat',
-                        'endpoint_id': account.endpoint_id or '',
-                        'base_url': account.base_url or '',
-                        'is_enable': account.is_enable if account.is_enable is not None else True,
-                        'balance_remaining': account.balance_remaining,
-                        'balance_unit': account.balance_unit or 'currency',
-                        'currency_rate': account.currency_rate or 0,
-                        'has_key': bool(account.api_key_encrypted),
-                        'selected_models': [],
-                    }
-                    # 该账号已开通模型（catalog 行）
-                    cat_result = await session.execute(
-                        select(ModelCatalog).where(ModelCatalog.account_id == account_id)
-                    )
-                    initial['selected_models'] = [c.model_name for c in cat_result.scalars().all()]
-
-        from app.services.free_tier_catalog import _merged_vendors
-        _merged_vendors_list = await _merged_vendors(None)
-        with ui.dialog() as dialog, ui.card().classes('w-full max-w-3xl'):
-            ui.label('编辑账号' if account_id else '新增账号').classes('text-xl font-bold')
-            ui.label('一个账号 = 一个 API 密钥；密钥下可开通多个模型（主从管理，改密钥一处生效）').classes('text-xs text-gray-400')
-
-            # ── 卡 1：基本信息 ──
-            with ui.card().classes('w-full shadow-sm p-4'):
-                ui.label('基本信息').classes('text-sm font-bold text-purple-700')
-                with ui.row().classes('gap-4 w-full items-start'):
-                    with ui.column().classes('flex-1 gap-2'):
-                        ui.label('厂商').classes('text-xs text-gray-500 font-bold')
-                        merged_vendor_names = [vv['name'] for vv in _merged_vendors_list]
-                        initial_vendor = initial['vendor'] or ''
-                        vendor_sel = ui.select(
-                            merged_vendor_names + ['自定义新厂商'],
-                            value=initial_vendor if initial_vendor in merged_vendor_names else '自定义新厂商',
-                        ).classes('w-full')
-                        custom_vendor = ui.input('自定义厂商名称', value=initial_vendor if initial_vendor not in merged_vendor_names else '')
-                        custom_vendor.set_visibility(initial_vendor not in merged_vendor_names)
-
-                        def _on_vendor_change():
-                            custom_vendor.set_visibility(vendor_sel.value == '自定义新厂商')
-                        vendor_sel.on_value_change(_on_vendor_change)
-
-                        def vendor_val():
-                            if vendor_sel.value == '自定义新厂商':
-                                return (custom_vendor.value or '').strip()
-                            return vendor_sel.value or ''
-                    with ui.column().classes('flex-1 gap-2'):
-                        key_hint = '已配置密钥（留空则沿用）' if (account_id and initial['has_key']) else ('未配置密钥' if account_id else '粘贴 API 密钥')
-                        ui.label('API 密钥').classes('text-xs text-gray-500 font-bold')
-                        api_key = ui.input('', value='', password=True, password_toggle_button=True, placeholder=key_hint).classes('w-full')
-                with ui.row().classes('gap-4 w-full items-start'):
-                    with ui.column().classes('flex-1 gap-2'):
-                        ui.label('默认模型').classes('text-xs text-gray-500 font-bold')
-                        model_name = ui.input('用于路由展示的账号主名', value=initial['model_name']).classes('w-full')
-                    with ui.column().classes('flex-1 gap-2'):
-                        ui.label('Endpoint ID（豆包/火山引擎专用，可留空）').classes('text-xs text-gray-500 font-bold')
-                        endpoint_id = ui.input('', value=initial['endpoint_id']).classes('w-full')
-                base_url = ui.input('接口地址（Base URL，留空自动获取）', value=initial['base_url']).classes('w-full')
-                with ui.row().classes('items-center gap-4 w-full'):
-                    is_enable = ui.checkbox('启用该账号（停用后其模型不参与路由，模型状态保留）', value=initial['is_enable'])
-
-            # ── 卡 2：额度与计费 ──
-            with ui.card().classes('w-full shadow-sm p-4'):
-                with ui.row().classes('items-center gap-2 w-full'):
-                    ui.label('额度与计费').classes('text-sm font-bold text-purple-700')
-                    ui.space()
-                    balance_info_label = ui.label('余额：未获取').classes('text-sm text-gray-600')
-                with ui.row().classes('gap-4 w-full items-center'):
-                    balance_unit = ui.select(
-                        {'token': 'Tokens 额度（免费）', 'currency': '金额（元）'},
-                        label='额度单位',
-                        value=initial['balance_unit'],
-                    ).classes('w-56')
-                    balance_remaining = ui.number('初始额度（自动同步厂商余额；手动充值请在此重置）', value=initial['balance_remaining'], min=0).classes('flex-1')
-                currency_rate = ui.number('结算单价（元/1M tokens，估算消耗用）', value=initial['currency_rate'], min=0).classes('w-full')
-
-            # ── 卡 3：开通模型 ──
-            with ui.card().classes('w-full shadow-sm p-4'):
-                with ui.row().classes('items-center gap-2 w-full'):
-                    ui.label('开通模型（勾选后保存生效）').classes('text-sm font-bold text-purple-700')
-                    ui.space()
-                    ui.button('自动获取', on_click=lambda: asyncio.create_task(auto_fetch())).props('color=orange outline').classes('w-36')
-                model_area = ui.column().classes('w-full gap-1 mt-2')
-                model_checkboxes = {}  # model_name -> checkbox
-
-                def render_models(models: list):
-                    """渲染模型勾选列表（默认全选新增；编辑回显已开通）"""
-                    model_area.clear()
-                    model_checkboxes.clear()
-                    if not models:
-                        with model_area:
-                            ui.label('未发现可用模型；可直接填写默认模型后保存').classes('text-xs text-gray-400')
-                        return
-                    with model_area:
-                        for m in models:
-                            if isinstance(m, str):
-                                name, display = m, m
-                                checked = True
-                            else:
-                                name = m.model_name
-                                display = m.display_name or m.model_name
-                                checked = name in initial['selected_models']
-                            model_checkboxes[name] = ui.checkbox(f'{display}', value=checked)
-
-                if account_id:
-                    # 编辑：回显已开通模型（可继续追加）
-                    render_models(initial['selected_models'])
-                else:
-                    with model_area:
-                        ui.label('点击「自动获取」拉取该厂商可用模型；也可直接填写默认模型后保存').classes('text-xs text-gray-400')
-
-            async def auto_fetch():
-                """自动获取：补 base_url、拉可用模型列表、拉厂商真实余额，实时填入表单"""
-                try:
-                    from app.services.balance import fetch_balance, fetch_models
-                    if not vendor_val():
-                        ui.notify('请先填写厂商名称', type='warning')
-                        return
-                    if not api_key.value:
-                        ui.notify('请先填写 API 密钥', type='warning')
-                        return
-                    ui.notify('正在自动获取...', type='info')
-                    # 构造临时账号对象（仅用于探测）
-                    tmp = ModelAccount(
-                        vendor=vendor_val(),
-                        api_key_encrypted=encryption_service.encrypt(api_key.value),
-                        base_url=base_url.value or None,
-                    )
-                    # 1. 拉模型列表
-                    models = await fetch_models(tmp)
-                    if models:
-                        render_models(models)
-                        ui.notify(f'发现 {len(models)} 个可用模型，已默认勾选', type='info')
-                    # 2. 拉余额
-                    unit, bal = await fetch_balance(tmp)
-                    balance_info_label.set_text(f'厂商余额: {bal:.2f}（{unit}）')
-                    balance_unit.value = unit  # 额度单位跟随厂商余额单位
-                    # 3. 补 base_url（用默认映射）
-                    if not base_url.value:
-                        from app.services.llm_client import LLMClient
-                        guess = LLMClient()._get_api_url(tmp)
-                        if guess:
-                            base_url.value = guess
-                    ui.notify(f'已获取余额: {unit} {bal}，模型 {len(models)} 个', type='positive')
-                except Exception as e:
-                    ui.notify(f'自动获取失败: {str(e)[:120]}', type='negative')
-            async def save():
-                try:
-                    selected = [name for name, cb in model_checkboxes.items() if cb.value]
-                    final_model = selected[0] if selected else (model_name.value or 'chat')
-                    if not account_id and not api_key.value:
-                        ui.notify('请填写 API 密钥', type='warning')
-                        return
-
-                    # 独立打开新 session 写库，避免复用已关闭的旧 session
-                    async with AsyncSessionLocal() as session:
-                        if account_id:
-                            # 编辑：重新加载账号并更新
-                            result = await session.execute(
-                                select(ModelAccount).where(ModelAccount.id == account_id)
-                            )
-                            account = result.scalar_one_or_none()
-                            if not account:
-                                ui.notify('账号不存在', type='negative')
-                                return
-                            account.vendor = vendor_val()
-                            if api_key.value:
-                                account.api_key_encrypted = encryption_service.encrypt(api_key.value)
-                            account.model_name = final_model
-                            account.endpoint_id = endpoint_id.value if endpoint_id.value else None
-                            account.base_url = base_url.value
-                            account.is_enable = is_enable.value
-                            account.balance_unit = balance_unit.value
-                            if balance_remaining.value is not None:
-                                account.balance_remaining = float(balance_remaining.value)
-                            account.currency_rate = float(currency_rate.value or 0)
-                        else:
-                            # 新增：账号行（默认模型）+ 勾选模型 catalog 行
-                            new_account = ModelAccount(
-                                vendor=vendor_val(),
-                                api_key_encrypted=encryption_service.encrypt(api_key.value),
-                                model_name=final_model,
-                                endpoint_id=endpoint_id.value if endpoint_id.value else None,
-                                base_url=base_url.value,
-                                is_enable=is_enable.value,
-                                balance_unit=balance_unit.value,
-                                balance_remaining=float(balance_remaining.value) if balance_remaining.value is not None else None,
-                                currency_rate=float(currency_rate.value or 0),
-                            )
-                            session.add(new_account)
-
-                        await session.commit()
-                        saved_account = account if account_id else new_account
-
-                        # 同步勾选模型到 catalog（主从：每个勾选模型一行，挂本账号）
-                        from app.services.model_catalog_service import ModelCatalogService
-                        svc = ModelCatalogService(session)
-                        synced = 0
-                        # 默认模型即使未勾选也强制建档（路由候选以默认模型为兜底）
-                        if final_model not in selected:
-                            try:
-                                await svc.ensure_model(final_model, saved_account.vendor, account_id=saved_account.id)
-                                synced += 1
-                            except Exception:
-                                pass
-                        for m in selected:
-                            try:
-                                await svc.ensure_model(m, saved_account.vendor, account_id=saved_account.id)
-                                synced += 1
-                            except Exception:
-                                pass
-                        # 编辑：取消勾选的已有模型 → 停用（不删除，保留能力记录）
-                        if account_id:
-                            cat_result = await session.execute(
-                                select(ModelCatalog).where(ModelCatalog.account_id == saved_account.id)
-                            )
-                            for cat in cat_result.scalars().all():
-                                if cat.model_name not in selected:
-                                    cat.is_active = False
-                        await session.commit()
-
-                    ui.notify(f'保存成功，已开通 {synced} 个模型', type='positive')
-                    dialog.close()
-                    # 刷新页面
-                    ui.run_javascript('window.location.reload()')
-                except Exception as e:
-                    ui.notify(f'保存失败: {str(e)}', type='negative')
-
-            with ui.row().classes('w-full justify-end gap-2 mt-4'):
-                ui.button('取消', on_click=dialog.close).props('flat')
-                ui.button('保存', on_click=save).props('color=primary')
-            # T5：编辑弹窗打开即拉厂商完整模型列表（已开通勾选、未开通不勾），失败静默回退已开通列表
-            if account_id and initial['has_key']:
-                async def _load_full_models():
+        def _make_plugin_page(rf, pt, fr):
+            @ui.page(fr)
+            async def plugin_page(request: Request):
+                ui.colors(primary='#667eea', secondary='#764ba2')
+                with ui.header().classes('items-center justify-between px-6 shadow-lg').style('background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);'):
+                    with ui.row().classes('items-center gap-4'):
+                        ui.label('🐑').classes('text-4xl')
+                        ui.label('WoolGate').classes('text-2xl font-bold text-white')
+                    ui.button('← 返回首页', on_click=lambda: ui.navigate.to('/admin/')).props('flat no-caps text-color=white')
+                with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
                     try:
-                        async with AsyncSessionLocal() as _s:
-                            _acc = (await _s.execute(select(ModelAccount).where(ModelAccount.id == account_id))).scalar_one_or_none()
-                        if not _acc:
-                            return
-                        from app.services.balance import fetch_models
-                        _models = await fetch_models(_acc)
-                        if _models:
-                            render_models(_models)
-                            ui.notify(f'已加载 {len(_models)} 个可用模型，勾选后保存即开通', type='info', timeout=3000)
-                    except Exception:
-                        pass  # 拉取失败保持已开通回显
+                        if callable(rf):
+                            result = rf(request) if 'request' in rf.__code__.co_varnames else rf()
+                            if hasattr(result, '__await__'):
+                                await result
+                    except Exception as e:
+                        ui.card().classes('w-full bg-red-50 border-l-4 border-red-500 p-4')
+                        ui.label(f'插件页面渲染异常: {e}').classes('text-red-700')
+            return plugin_page
 
-                ui.timer(0.2, _load_full_models, once=True)
-
-        dialog.open()
-
-    ui.timer(0.01, show, once=True)
-
-
-def show_model_capability_dialog(model_id: int):
-    """显示模型能力详情对话框"""
-    async def show():
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(ModelCatalog).where(ModelCatalog.id == model_id)
-            )
-            model = result.scalar_one_or_none()
-            if not model:
-                ui.notify('模型不存在', type='negative')
-                return
-            
-            # 提前提取数据
-            model_name = model.model_name
-            display_name = model.display_name or model.model_name
-            model_type = model.model_type or 'chat'
-            vendor = model.vendor
-            capability_description = model.capability_description or ''
-            examples = model.examples or []
-            is_active = model.is_active
-        
-        with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl p-4'):
-            # 标题 + 元信息一行
-            ui.label(f'模型能力详情 - {display_name}').classes('text-xl font-bold')
-            with ui.row().classes('items-center gap-2 mt-1 flex-wrap'):
-                ui.badge(f'厂商：{vendor}', color='blue').classes('text-xs')
-                ui.badge(f'类型：{_type_label(model_type)}', color='teal').classes('text-xs')
-                ui.badge('向量已计算' if model.embedding_vector else '向量未计算',
-                         color='purple' if model.embedding_vector else 'grey').classes('text-xs')
-                ui.badge(f'{len(examples)} 条示例', color='indigo').classes('text-xs')
-
-            ui.separator().classes('mt-3')
-
-            # 能力描述
-            ui.label('能力描述').classes('text-sm font-bold text-gray-600')
-            desc_input = ui.textarea(
-                value=capability_description,
-                placeholder='描述这个模型擅长什么，用于智能路由...'
-            ).props('autogrow').classes('w-full')
-
-            # 示例列表（每行一条，用于计算能力向量）
-            ui.label(f'典型请求示例（每行一条，用于计算能力向量）').classes('text-sm font-bold text-gray-600 mt-2')
-            examples_text = '\n'.join(examples) if examples else ''
-            examples_input = ui.textarea(
-                value=examples_text,
-                placeholder='每行一条示例请求...'
-            ).props('autogrow').classes('w-full font-mono text-xs')
-
-            ui.separator().classes('mt-3')
-
-            # 启用状态 + 操作按钮一行
-            with ui.row().classes('items-center gap-2 w-full'):
-                is_active_checkbox = ui.checkbox('启用此模型', value=is_active)
-                ui.space()
-                ui.button('取消', on_click=dialog.close).props('outline')
-                
-                async def save():
-                    async with AsyncSessionLocal() as session:
-                        result = await session.execute(
-                            select(ModelCatalog).where(ModelCatalog.id == model_id)
-                        )
-                        m = result.scalar_one_or_none()
-                        if m:
-                            m.capability_description = desc_input.value
-                            # 解析示例（每行一条）
-                            new_examples = [line.strip() for line in examples_input.value.split('\n') if line.strip()]
-                            m.examples = new_examples
-                            m.is_active = is_active_checkbox.value
-                            await session.commit()
-                            ui.notify('模型能力已保存', type='positive')
-                            dialog.close()
-                            # 刷新页面
-                            ui.navigate.to('/admin/accounts')
-                
-                ui.button('保存', on_click=save).props('color=primary')
-        dialog.open()
-    
-    ui.timer(0.01, show, once=True)
-
-
-def auto_config_account(account_id: int, fetch_balance: bool = False):
-    """智能配置账号（补 base_url/模型；fetch_balance=True 时同时拉取厂商真实余额）"""
-    async def config():
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(ModelAccount).where(ModelAccount.id == account_id)
-            )
-            account = result.scalar_one_or_none()
-            if not account:
-                ui.notify('账号不存在', type='negative')
-                return
-            
-            # 根据厂商名称智能配置
-            vendor_lower = account.vendor.lower()
-            config_map = {
-                '智谱': {
-                    'base_url': 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
-                    'model': 'glm-4-flash'
-                },
-                '百度': {
-                    'base_url': 'https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions',
-                    'model': 'ernie-speed-128k'
-                },
-                '月之暗面': {
-                    'base_url': 'https://api.moonshot.cn/v1/chat/completions',
-                    'model': 'moonshot-v1-8k'
-                },
-                'moonshot': {
-                    'base_url': 'https://api.moonshot.cn/v1/chat/completions',
-                    'model': 'moonshot-v1-8k'
-                },
-                'kimi': {
-                    'base_url': 'https://api.moonshot.cn/v1/chat/completions',
-                    'model': 'moonshot-v1-8k'
-                },
-                '阿里百炼': {
-                    'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-                    'model': 'qwen-plus'
-                },
-                '阿里': {
-                    'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-                    'model': 'qwen-plus'
-                },
-                '通义': {
-                    'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-                    'model': 'qwen-plus'
-                },
-                'qwen': {
-                    'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-                    'model': 'qwen-plus'
-                },
-                'deepseek': {
-                    'base_url': 'https://api.deepseek.com/v1/chat/completions',
-                    'model': 'deepseek-chat'
-                },
-                '深度求索': {
-                    'base_url': 'https://api.deepseek.com/v1/chat/completions',
-                    'model': 'deepseek-chat'
-                },
-                '硅基流动': {
-                    'base_url': 'https://api.siliconflow.cn/v1/chat/completions',
-                    'model': 'Qwen/Qwen2.5-7B-Instruct'
-                },
-                'siliconflow': {
-                    'base_url': 'https://api.siliconflow.cn/v1/chat/completions',
-                    'model': 'Qwen/Qwen2.5-7B-Instruct'
-                },
-                'openai': {
-                    'base_url': 'https://api.openai.com/v1/chat/completions',
-                    'model': 'gpt-3.5-turbo'
-                },
-                '豆包': {
-                    'base_url': 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
-                    'model': 'doubao-lite-4k'
-                },
-                'doubao': {
-                    'base_url': 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
-                    'model': 'doubao-lite-4k'
-                },
-            }
-            
-            # 查找匹配的配置
-            config = None
-            for key, value in config_map.items():
-                if key in vendor_lower:
-                    config = value
-                    break
-            
-            if not config:
-                ui.notify(f'未找到 "{account.vendor}" 的智能配置，请手动编辑', type='warning')
-                return
-            
-            # 更新账号
-            if not account.base_url:
-                account.base_url = config['base_url']
-            if not account.extra_json:
-                account.extra_json = {'model': config['model']}
-            
-            # 拉取厂商真实余额（自动获取）
-            balance_info = ''
-            if fetch_balance:
-                try:
-                    from app.services.balance import fetch_balance, get_today_str
-                    unit, bal = await fetch_balance(account)
-                    account.balance_remaining = bal
-                    account.balance_unit = unit
-                    account.balance_sync_date = get_today_str()
-                    balance_info = f"\n余额: {unit} {bal}"
-                except Exception as e:
-                    balance_info = f"\n余额获取失败: {str(e)[:80]}"
-            
-            await session.commit()
-            
-            ui.notify(f"已自动获取 {account.vendor}\nBase URL: {config['base_url']}\n模型: {config['model']}{balance_info}", type='positive')
-            # 刷新页面
-            ui.run_javascript('setTimeout(() => window.location.reload(), 1200)')
-    
-    ui.timer(0.01, config, once=True)
-
-
-def show_delete_dialog(account_id: int):
-    """显示删除确认对话框"""
-    async def show():
-        with ui.dialog() as dialog, ui.card():
-            ui.label('确认删除').classes('text-xl font-bold text-red-600')
-            ui.label('此操作不可恢复，确定要删除这个账号吗？').classes('text-gray-600')
-            
-            async def confirm_delete():
-                async with AsyncSessionLocal() as session:
-                    result = await session.execute(
-                        select(ModelAccount).where(ModelAccount.id == account_id)
-                    )
-                    acc = result.scalar_one_or_none()
-                    if acc:
-                        await session.delete(acc)
-                        await session.commit()
-                        ui.notify('账号已删除，正在刷新...', type='positive')
-                        dialog.close()
-                        # 刷新页面
-                        ui.run_javascript('window.location.reload()')
-            
-            with ui.row().classes('mt-4 gap-2'):
-                ui.button('取消', on_click=dialog.close).props('flat')
-                ui.button('确认删除', on_click=confirm_delete).props('color=negative')
-        
-    
-        dialog.open()
-    ui.timer(0.01, show, once=True)
+        _plugin_page_refs.append(_make_plugin_page(render_func, page_title, full_route))
 
 
 def init_ui(fastapi_app):
     """初始化NiceGUI并挂载到FastAPI"""
     create_ui()
+    _register_plugin_pages()
     # 显式挂载静态目录（含路由省钱演示页等），容器内项目根 /app/static
     _static_dir = Path(__file__).resolve().parent.parent.parent / 'static'
     if _static_dir.exists():

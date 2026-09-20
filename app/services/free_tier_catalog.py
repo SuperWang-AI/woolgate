@@ -832,6 +832,8 @@ class FreeTierService:
         # 1. 探测真实模型列表（优先用真实模型，目录兜底）
         catalog_model_ids = [m["id"] for m in vendor["models"]]
         real_models = []
+        key_validated = True
+        key_validation_error = None
         try:
             from app.services.balance import fetch_models
             tmp = ModelAccountProxy(
@@ -841,6 +843,8 @@ class FreeTierService:
             )
             real_models = await fetch_models(tmp)
         except Exception as e:
+            key_validated = False
+            key_validation_error = str(e)[:200]
             logger.warning(f"[向导] {vendor['name']} 模型探测失败: {e}")
 
         if vendor.get("no_key"):
@@ -870,22 +874,30 @@ class FreeTierService:
 
         # 2. Key 决策（保持语义）：留空 = 沿用该厂商已有 Key；填写 = 统一更换该厂商全部账号的 Key
         #    注意：reuse_account 必须在替换前记录（替换会把其他账号 key 改为新值，避免误复用）
+        #    重要：Fernet 加密非确定性（随机IV），必须解密后比较明文，不能用密文相等判断
         key_input = (api_key or "").strip()
         vendor_accs = (
             await self.db.execute(select(ModelAccount))
         ).scalars().all()
         vendor_accs = [a for a in vendor_accs if vendor_matches(a.vendor or "", vendor["id"])]
+        
+        def _acc_key_plain(a) -> str:
+            try:
+                return encryption_service.decrypt(a.api_key_encrypted) if a.api_key_encrypted else ""
+            except Exception:
+                return ""
+        
         keys_updated = []
         if key_input:
             key_enc = encryption_service.encrypt(key_input)
-            reuse_account = next((a for a in vendor_accs if a.api_key_encrypted == key_enc), None)
+            reuse_account = next((a for a in vendor_accs if _acc_key_plain(a) == key_input), None)
             for a in vendor_accs:
-                if a.api_key_encrypted and a.api_key_encrypted != key_enc:
+                if _acc_key_plain(a) and _acc_key_plain(a) != key_input:
                     a.api_key_encrypted = key_enc
-                    keys_updated.append(a.model_name)
+                    keys_updated.append(a.default_model_name)
         else:
             key_enc = next((a.api_key_encrypted for a in vendor_accs if a.api_key_encrypted), None)
-            reuse_account = next((a for a in vendor_accs if a.api_key_encrypted == key_enc), None)
+            reuse_account = next((a for a in vendor_accs if a.api_key_encrypted == key_enc), None) if key_enc else None
         if key_enc is None:
             if vendor.get("no_key"):
                 key_enc = encryption_service.encrypt("")   # 本地模型无 Key
@@ -920,8 +932,12 @@ class FreeTierService:
                     api_key_encrypted=key_enc,
                     base_url=base_url,
                 )
+                target_account.key_verified = key_validated
                 self.db.add(target_account)
                 await self.db.flush()
+            else:
+                # 复用已有账号时也更新验证状态
+                target_account.key_verified = key_validated
 
         # 5. 逐个模型同步目录（挂 account_id）+ 能力描述 + 计算向量
         result = {
@@ -932,6 +948,8 @@ class FreeTierService:
             "keys_updated": keys_updated,
             "balance": None,
             "errors": [],
+            "key_validated": key_validated,
+            "key_validation_error": key_validation_error,
         }
 
         for model_id in models:
@@ -1063,10 +1081,9 @@ class ModelAccountProxy:
         from app.models.database import ModelAccount
         return ModelAccount(
             vendor=vendor_name,
-            model_name=model_name,
+            default_model_name=model_name,
             api_key_encrypted=api_key_encrypted,
             base_url=base_url,
-            virtual_model="woolgate",
             priority=50,
             is_enable=True,
             balance_unit="token",

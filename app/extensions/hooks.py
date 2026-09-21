@@ -78,6 +78,14 @@ class HookRegistry:
         """返回按优先级排序的钩子列表（空列表表示无钩子，零开销路径）"""
         return [fn for _, _, fn in self._hooks.get(event, [])]
 
+    def snapshot_all(self) -> dict:
+        """返回所有钩子的完整快照（事件 -> [(priority, order, function)]），供统计/展示用"""
+        return {event: list(hooks) for event, hooks in self._hooks.items()}
+
+    def events(self) -> list:
+        """返回所有已注册钩子的事件名列表"""
+        return sorted(self._hooks.keys())
+
 
 # 全局钩子注册表（单进程单事件循环，FastAPI 部署下安全）
 hook_registry = HookRegistry()

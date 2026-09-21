@@ -42,24 +42,35 @@ def get_plugin_registry() -> Dict[str, dict]:
     return dict(_PLUGIN_REGISTRY)
 
 
+def _match_plugin(func_module: str) -> Optional[str]:
+    """根据函数模块名精确匹配所属插件（按模块路径层级分割，避免前缀误匹配）"""
+    if not func_module:
+        return None
+    func_parts = func_module.split('.')
+    for mod_name, info in _PLUGIN_REGISTRY.items():
+        mod_parts = mod_name.split('.')
+        # 精确匹配：函数模块以插件模块为完整前缀（按层级）
+        if len(func_parts) >= len(mod_parts) and func_parts[:len(mod_parts)] == mod_parts:
+            return info['name']
+    return None
+
+
 def get_plugin_stats() -> dict:
     """获取插件统计信息（钩子数、SPI 数、UI扩展点数）"""
     from app.extensions.hooks import hook_registry
     from app.extensions.sdk import spi_registry, page_registry, nav_registry, component_registry, config_registry
 
+    # 使用公共 snapshot 方法，不直接访问私有属性
+    hook_snapshot = hook_registry.snapshot_all()
+    spi_snapshot = spi_registry.snapshot_all()
+
     # 统计钩子数
-    hook_count = 0
-    hook_events = set()
-    for event, hooks in hook_registry._hooks.items():
-        hook_count += len(hooks)
-        hook_events.add(event)
+    hook_count = sum(len(hooks) for hooks in hook_snapshot.values())
+    hook_events = hook_registry.events()
 
     # 统计 SPI 数
-    spi_count = 0
-    spi_types = set()
-    for spi_type, impls in spi_registry._impls.items():
-        spi_count += len(impls)
-        spi_types.add(spi_type)
+    spi_count = sum(len(impls) for impls in spi_snapshot.values())
+    spi_types = spi_registry.types()
 
     # 统计 UI 扩展点
     page_count = len(page_registry.list())
@@ -69,35 +80,26 @@ def get_plugin_stats() -> dict:
 
     # 收集钩子详情（事件 -> [{plugin, function, priority}]）
     hook_details: Dict[str, List[dict]] = {}
-    for event, hooks in hook_registry._hooks.items():
+    for event, hooks in hook_snapshot.items():
         hook_details[event] = []
         for priority, order, func in hooks:
-            # 通过函数的 __module__ 判断属于哪个插件
             func_module = getattr(func, '__module__', '')
-            plugin_name = None
-            for mod_name in _PLUGIN_REGISTRY:
-                if func_module.startswith(mod_name) or mod_name.startswith(func_module):
-                    plugin_name = _PLUGIN_REGISTRY[mod_name]['name']
-                    break
+            plugin_name = _match_plugin(func_module)
             hook_details[event].append({
-                'plugin': plugin_name or func_module,
+                'plugin': plugin_name or func_module or 'core',
                 'function': getattr(func, '__name__', str(func)),
                 'priority': priority,
             })
 
-    # 收集 SPI 详情（类型 -> [{plugin, name, impl}]）
+    # 收集 SPI 详情（类型 -> [{plugin, name}]）
     spi_details: Dict[str, List[dict]] = {}
-    for spi_type, impls in spi_registry._impls.items():
+    for spi_type, impls in spi_snapshot.items():
         spi_details[spi_type] = []
         for name, impl in impls.items():
             impl_module = getattr(impl, '__module__', '')
-            plugin_name = None
-            for mod_name in _PLUGIN_REGISTRY:
-                if impl_module.startswith(mod_name) or mod_name.startswith(impl_module):
-                    plugin_name = _PLUGIN_REGISTRY[mod_name]['name']
-                    break
+            plugin_name = _match_plugin(impl_module)
             spi_details[spi_type].append({
-                'plugin': plugin_name or impl_module,
+                'plugin': plugin_name or impl_module or 'core',
                 'name': name,
             })
 
@@ -106,10 +108,10 @@ def get_plugin_stats() -> dict:
         "loaded_plugins": sum(1 for p in _PLUGIN_REGISTRY.values() if p["status"] == "loaded"),
         "failed_plugins": sum(1 for p in _PLUGIN_REGISTRY.values() if p["status"] == "failed"),
         "hook_count": hook_count,
-        "hook_events": sorted(hook_events),
+        "hook_events": hook_events,
         "hook_details": hook_details,
         "spi_count": spi_count,
-        "spi_types": sorted(spi_types),
+        "spi_types": spi_types,
         "spi_details": spi_details,
         "ui_pages": page_count,
         "ui_nav_items": nav_count,
@@ -117,6 +119,21 @@ def get_plugin_stats() -> dict:
         "plugin_configs": config_count,
         "plugins": dict(_PLUGIN_REGISTRY),
     }
+
+
+def unload_plugin(module_name: str) -> bool:
+    """
+    从注册表移除插件元信息（预留接口；不做 import 回滚，仅清理注册状态）。
+    运行时完全卸载需要重启进程，Python 不支持可靠的模块热卸载。
+    Returns:
+        True 如果插件存在并已移除，False 如果不存在
+    """
+    if module_name in _PLUGIN_REGISTRY:
+        del _PLUGIN_REGISTRY[module_name]
+        logger.info(f"[extensions] 插件已从注册表移除: {module_name}")
+        return True
+    logger.warning(f"[extensions] 卸载失败，插件未注册: {module_name}")
+    return False
 
 
 def load_plugins() -> List[str]:

@@ -3,7 +3,7 @@ WoolGate 余额监控与额度预警插件
 
 功能：
 1. 余额同步引擎：自动获取各厂商账号余额，支持5种触发时机
-2. 预警引擎：4级预警（正常/注意/警告/紧急/耗尽），可配置阈值，耗尽预测
+2. 预警引擎：5级预警（正常/注意/警告/紧急/耗尽），可配置阈值，耗尽预测
 3. 路由感知：route.before钩子过滤耗尽账号，紧急账号降权
 4. UI展示：独立余额看板页面、首页总览卡片、账号卡片余额标识
 
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 PLUGIN_NAME = "balance_monitor"
 PLUGIN_VERSION = "1.0.0"
 PLUGIN_AUTHOR = "WoolGate Team"
-PLUGIN_DESCRIPTION = "自动监控各厂商账号余额，4级预警与耗尽预测，route.before钩子自动过滤耗尽账号，独立余额看板页面"
+PLUGIN_DESCRIPTION = "自动监控各厂商账号余额，5级预警与耗尽预测，route.before钩子自动过滤耗尽账号，独立余额看板页面"
 PLUGIN_TAGS = ["余额监控", "预警", "成本控制", "路由过滤"]
 
 # ══════════════════════════════════════════════════════════════
@@ -74,13 +74,14 @@ register_config(CONFIG_SCHEMA, default={
     "notice_threshold": 10.0,
     "auto_sync_enabled": True,
     "sync_cooldown_minutes": 60,
-})
+}, plugin_name=PLUGIN_NAME)
 
 # ══════════════════════════════════════════════════════════════
 # 余额同步引擎
 # ══════════════════════════════════════════════════════════════
 
 # 内存缓存：账号ID -> (同步时间戳, 余额信息)
+# 注意：模块级全局变量仅在单进程部署时有效；多 worker 部署时缓存不共享，需迁移到 Redis 或数据库
 _balance_cache: Dict[int, Dict[str, Any]] = {}
 _last_sync_attempt: Dict[int, float] = {}
 

@@ -28,6 +28,7 @@ from app.extensions.sdk import (
     register_page,            # 注册独立管理后台页面
     register_nav_item,        # 注册导航菜单项
     register_component,       # 注册UI组件到挂载点
+    get_plugin,               # 获取插件受限上下文
     UI_HOOK_DASHBOARD_WIDGETS,  # 预设挂载点：首页仪表盘
 )
 
@@ -182,15 +183,12 @@ async def hello_world_route_before_hook(ctx: "PipelineContext"):
     # 在日志中打印请求信息
     logger.info(f"[Hello World] 收到请求: {request_path}")
 
-    # 在插件自己的命名空间中存储数据（不会影响其他插件）
-    # ctx.extensions 的结构：{plugin_name: {key: value}}
-    if hasattr(ctx, "extensions"):
-        ctx.extensions.setdefault("hello_world", {})["last_visit_path"] = request_path
-        # 增加访问计数
-        visit_count = ctx.extensions["hello_world"].get("visit_count", 0) + 1
-        ctx.extensions["hello_world"]["visit_count"] = visit_count
-
-        logger.debug(f"[Hello World] 插件访问计数: {visit_count}")
+    # 在插件自己的命名空间中存储数据（通过 PluginContext 封装，不直接操作 ctx.extensions）
+    pctx = get_plugin(PLUGIN_NAME, ctx)
+    pctx.set("last_visit_path", request_path)
+    visit_count = pctx.get("visit_count", 0) + 1
+    pctx.set("visit_count", visit_count)
+    logger.debug(f"[Hello World] 插件访问计数: {visit_count}")
 
 
 # ══════════════════════════════════════════════════════════════

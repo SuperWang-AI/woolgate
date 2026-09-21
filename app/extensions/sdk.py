@@ -9,6 +9,7 @@
 
 详见 docs/extensions/03-plugin-sdk.md。
 """
+import contextvars
 import logging
 from typing import Any, Dict, Optional, Type, TYPE_CHECKING
 
@@ -26,7 +27,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# 当前钩子执行阶段（用于 set_decision 权限校验）
+_current_hook_phase: contextvars.ContextVar = contextvars.ContextVar("hook_phase", default=None)
+
 # 决策字段白名单：after 类钩子可改写（其余核心字段只读，防止插件破坏管线）
+# 系统配置默认 ID（单租户场景固定为 1；多租户时需按租户隔离）
+DEFAULT_SYSTEM_CONFIG_ID = 1
+
 _DECISION_FIELDS = {
     "target_model",
     "router_decision",
@@ -39,19 +46,32 @@ _DECISION_FIELDS = {
 }
 
 
+class _ReadOnlyCtx:
+    """只读上下文代理：禁止插件直接 setattr 修改核心字段，须通过 set_decision()"""
+    def __init__(self, ctx):
+        object.__setattr__(self, '_inner', ctx)
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, '_inner'), name)
+    def __setattr__(self, name, value):
+        raise AttributeError(
+            f"禁止直接修改上下文字段 '{name}'；决策字段用 ctx.set_decision()，插件数据用 ctx.set()"
+        )
+
+
 class PluginContext:
     """插件运行时上下文：底层 ctx 只读 + 本插件命名空间可写"""
 
     def __init__(self, ctx: "PipelineContext", plugin_name: str):
         self._ctx = ctx
         self._plugin_name = plugin_name
+        self._ro_ctx = _ReadOnlyCtx(ctx)
         if plugin_name not in ctx.extensions:
             ctx.extensions[plugin_name] = {}
 
-    # ── 只读访问底层核心字段 ──
+    # ── 只读访问底层核心字段（返回只读代理，防止直接修改） ──
     @property
-    def ctx(self) -> "PipelineContext":
-        return self._ctx
+    def ctx(self) -> "_ReadOnlyCtx":
+        return self._ro_ctx
 
     def get(self, key: str, default: Any = None) -> Any:
         return self._ctx.extensions.get(self._plugin_name, {}).get(key, default)
@@ -62,6 +82,11 @@ class PluginContext:
 
     def set_decision(self, field: str, value: Any) -> None:
         """after 类钩子改写决策字段（before 钩子调用将抛错，防止语义混乱）"""
+        phase = _current_hook_phase.get()
+        if phase is not None and phase not in MUTABLE_HOOKS:
+            raise RuntimeError(
+                f"set_decision 只能在 after 类钩子中调用，当前阶段: {phase}"
+            )
         if field not in _DECISION_FIELDS:
             raise ValueError(
                 f"字段 {field} 不在可改写白名单内；插件只能写自己的命名空间（ctx.set）"
@@ -102,6 +127,14 @@ class SPIRegistry:
     def list(self, spi_type: str) -> Dict[str, Any]:
         return dict(self._impls.get(spi_type, {}))
 
+    def snapshot_all(self) -> Dict[str, Dict[str, Any]]:
+        """返回所有 SPI 实现的完整快照（类型 -> {name: impl}），供统计/展示用"""
+        return {spi_type: dict(impls) for spi_type, impls in self._impls.items()}
+
+    def types(self) -> list:
+        """返回所有已注册 SPI 类型列表"""
+        return sorted(self._impls.keys())
+
 
 spi_registry = SPIRegistry()
 
@@ -130,6 +163,7 @@ async def emit_hooks(event: str, ctx: "PipelineContext", registry: Optional[Hook
         return
 
     for fn in hooks:
+        token = _current_hook_phase.set(event)
         try:
             await fn(ctx)
         except Exception as e:
@@ -138,6 +172,8 @@ async def emit_hooks(event: str, ctx: "PipelineContext", registry: Optional[Hook
                 raise
             logger.error(f"[hooks] 插口 {event} 钩子 {getattr(fn, '__name__', '?')} 异常（已隔离）: {e}",
                          exc_info=True)
+        finally:
+            _current_hook_phase.reset(token)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -294,7 +330,8 @@ class ConfigRegistry:
 config_registry = ConfigRegistry()
 
 
-def register_config(schema: dict, default: dict, on_save: Optional[Any] = None) -> None:
+def register_config(schema: dict, default: dict, on_save: Optional[Any] = None,
+                    plugin_name: Optional[str] = None) -> None:
     """
     注册插件配置表单（在统一插件配置页面展示和保存）。
 
@@ -303,17 +340,18 @@ def register_config(schema: dict, default: dict, on_save: Optional[Any] = None) 
             type 支持: string / number / boolean / select / textarea
         default: 默认值字典
         on_save: 保存时的回调函数（接收 config dict 参数），可选
+        plugin_name: 插件模块名（推荐显式传入；不传时从调用栈推断，不保证准确）
     """
-    # 自动从调用栈获取插件模块名
-    import inspect
-    frame = inspect.currentframe()
-    caller_module = "unknown"
-    try:
-        if frame and frame.f_back:
-            caller_module = frame.f_back.f_globals.get("__name__", "unknown")
-    finally:
-        del frame
-    config_registry.register(caller_module, schema, default, on_save)
+    if plugin_name is None:
+        # fallback: 从调用栈推断（装饰器/中间函数包装时可能不准确，推荐显式传入）
+        import inspect
+        frame = inspect.currentframe()
+        try:
+            if frame and frame.f_back:
+                plugin_name = frame.f_back.f_globals.get("__name__", "unknown")
+        finally:
+            del frame
+    config_registry.register(plugin_name, schema, default, on_save)
 
 
 # ── 5. 插件配置读写函数 ──
@@ -344,7 +382,7 @@ async def get_plugin_config(plugin_name: str) -> dict:
         from app.models.database import SystemConfig
         from sqlalchemy import select
         async with AsyncSessionLocal() as session:
-            result_db = await session.execute(select(SystemConfig).where(SystemConfig.id == 1))
+            result_db = await session.execute(select(SystemConfig).where(SystemConfig.id == DEFAULT_SYSTEM_CONFIG_ID))
             config = result_db.scalar_one_or_none()
             if config and config.plugin_configs:
                 plugin_cfg = config.plugin_configs.get(plugin_name, {})
@@ -352,7 +390,7 @@ async def get_plugin_config(plugin_name: str) -> dict:
     except Exception as e:
         logger.warning(f"[sdk] 读取插件配置失败（使用默认值）: {plugin_name}: {e}")
 
-    # 3. 环境变量覆盖
+    # 3. 环境变量覆盖（仅覆盖 schema 中已定义的配置项，未定义的 env var 静默忽略）
     env_prefix = f"WOOLGATE_PLUGIN_{plugin_name.upper().replace('.', '_').replace('-', '_')}_"
     for key in list(result.keys()):
         env_key = f"{env_prefix}{key.upper().replace('.', '_').replace('-', '_')}"
@@ -391,7 +429,7 @@ async def set_plugin_config(plugin_name: str, config: dict) -> None:
         from app.models.database import SystemConfig
         from sqlalchemy import select
         async with AsyncSessionLocal() as session:
-            result = await session.execute(select(SystemConfig).where(SystemConfig.id == 1))
+            result = await session.execute(select(SystemConfig).where(SystemConfig.id == DEFAULT_SYSTEM_CONFIG_ID))
             sys_config = result.scalar_one_or_none()
             if not sys_config:
                 sys_config = SystemConfig(id=1)
@@ -408,14 +446,17 @@ async def set_plugin_config(plugin_name: str, config: dict) -> None:
 
             await session.commit()
 
-            # 触发 on_save 回调
+            # 触发 on_save 回调（支持同步和异步）
             config_info = config_registry.get(plugin_name)
             if config_info and config_info.get("on_save"):
                 try:
+                    import asyncio
                     callback = config_info["on_save"]
                     if callable(callback):
                         merged = await get_plugin_config(plugin_name)
-                        callback(merged)
+                        result = callback(merged)
+                        if asyncio.iscoroutine(result):
+                            await result
                 except Exception as e:
                     logger.error(f"[sdk] 插件配置 on_save 回调异常: {plugin_name}: {e}")
 

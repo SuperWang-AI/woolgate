@@ -305,12 +305,15 @@ async def apply_onboard_profile(answers: dict):
 
 def create_ui():
     """创建UI"""
-    print(f"[DEBUG] create_ui() 被调用")
 
     # ═══ SPA 全局状态 ═══
     _tabs_ref = None          # 当前tabs对象引用，用于SPA内导航
     _plugin_active = None     # 当前激活的插件key（用于插件页面动态渲染）
     _plugin_refresh = None    # 插件页面刷新回调（SPA内切换插件时调用）
+
+    # SPA 路由映射：路由路径 ↔ tab key（插件统一使用 /plugins?active=xxx）
+    PATH_TO_KEY = {'/': 'home', '/wizard': 'wizard', '/accounts': 'accounts', '/config': 'config', '/pipeline': 'pipeline', '/logs': 'logs', '/plugins': 'plugins'}
+    KEY_TO_PATH = {v: k for k, v in PATH_TO_KEY.items()}
 
     def spa_navigate(key: str, active: str = None):
         """SPA内导航：切换tab value + 同步URL，不触发整页刷新"""
@@ -374,14 +377,26 @@ function hideDropdown(id) {
     const el = document.getElementById(id);
     if (el) el.classList.add('hidden');
 }
-// 插件按钮hover显示下拉菜单（轮询等待NiceGUI内容加载）
+// 插件按钮hover显示下拉菜单（MutationObserver等待NiceGUI渲染完成，替代轮询）
 function initPluginDropdownHover() {
-    const pluginBtn = document.getElementById('c17');
+    const pluginBtn = document.getElementById('plugin-nav-btn');
     const dropdown = document.getElementById('plugin-dropdown-menu');
     if (!pluginBtn || !dropdown) {
-        setTimeout(initPluginDropdownHover, 200);
+        // 元素尚未渲染，用 MutationObserver 等待 DOM 变化
+        const observer = new MutationObserver(function(mutations, obs) {
+            const btn = document.getElementById('plugin-nav-btn');
+            const dd = document.getElementById('plugin-dropdown-menu');
+            if (btn && dd) {
+                obs.disconnect();
+                bindHoverEvents(btn, dd);
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
         return;
     }
+    bindHoverEvents(pluginBtn, dropdown);
+}
+function bindHoverEvents(pluginBtn, dropdown) {
     let hideTimer = null;
     pluginBtn.addEventListener('mouseenter', function() {
         if (hideTimer) clearTimeout(hideTimer);
@@ -420,10 +435,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 </style>
 ''')
 
-    # SPA 路由映射：路由路径 ↔ tab key（插件统一使用/plugins?active=xxx）
-    PATH_TO_KEY = {'/': 'home', '/wizard': 'wizard', '/accounts': 'accounts', '/config': 'config', '/pipeline': 'pipeline', '/logs': 'logs', '/plugins': 'plugins'}
-    KEY_TO_PATH = {v: k for k, v in PATH_TO_KEY.items()}
-
     def nav_tabs(active_key: str):
         """SPA 顶部导航 tabs：点击仅前端切换面板，无整页刷新（插件统一聚合入口，带下拉列表）"""
         nonlocal _tabs_ref
@@ -441,7 +452,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                             ui.tab(name=key, label=label)
                 # 插件聚合入口：按钮+自定义下拉面板（JavaScript控制显示）
                 plugin_dropdown_id = 'plugin-dropdown-menu'
-                ui.button('🔌 插件 ▼').props('flat color=white dense').classes('text-white')
+                ui.button('🔌 插件 ▼').props('flat color=white dense id=plugin-nav-btn').classes('text-white')
                 # 下拉面板（默认隐藏）
                 with ui.card().classes('absolute top-full right-0 mt-1 shadow-xl z-50 hidden').style('min-width: 240px;') as dropdown_card:
                     dropdown_card.props(f'id={plugin_dropdown_id}')
@@ -1844,7 +1855,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 plugin_route = None
                 plugin_info = None
                 for nav_item in nav_registry.list():
-                    if nav_item['route'].strip('/') == active_plugin or nav_item['route'] == f'/{active_plugin}':
+                    nav_key = nav_item['route'].strip('/')
+                    # 兼容连字符/下划线变体（hello-world vs hello_world）
+                    if (nav_key == active_plugin or nav_key == active_plugin.replace('_', '-')
+                            or nav_key.replace('-', '_') == active_plugin):
                         plugin_route = nav_item['route']
                         plugin_info = nav_item
                         break
@@ -1858,9 +1872,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         # 插件切换下拉
                         plugin_options = {nav_item['route'].strip('/'): nav_item['label'] for nav_item in nav_registry.list()}
                         current_key = plugin_route.strip('/') if plugin_route else active_plugin
+                        # 安全检查：value 必须在 options 中，否则 NiceGUI 抛 ValueError
+                        select_value = current_key if current_key in plugin_options else (next(iter(plugin_options)) if plugin_options else None)
                         def on_plugin_change(e):
                             spa_navigate('plugins', active=e.value)
-                        ui.select(options=plugin_options, value=current_key, on_change=on_plugin_change, label='切换插件').props('outlined dense').classes('w-48')
+                        ui.select(options=plugin_options, value=select_value, on_change=on_plugin_change, label='切换插件').props('outlined dense').classes('w-48')
 
                     # 插件内容区域
                     if plugin_route and plugin_route in page_registry.list():
@@ -1868,7 +1884,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         if page_info and callable(page_info['render']):
                             try:
                                 render_func = page_info['render']
-                                result = render_func(request) if 'request' in render_func.__code__.co_varnames else render_func()
+                                import inspect as _inspect
+                                _sig = _inspect.signature(render_func)
+                                result = render_func(request) if 'request' in _sig.parameters else render_func()
                                 if hasattr(result, '__await__'):
                                     await result
                             except Exception as e:
@@ -2135,7 +2153,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                             plugin_list_btn.on_click(plugin_list_dialog.open)
 
                         # 插件详情滚动容器（固定高度，内部滚动，不影响整个页面）
-                        with ui.column().classes('w-full gap-4 overflow-y-auto pr-2').style('max-height: 72vh; scroll-behavior: smooth;').props('id=plugin-detail-scroll') as plugin_detail_scroll:
+                        with ui.column().classes('w-full gap-4 overflow-y-auto px-3 py-4').style('max-height: 72vh; scroll-behavior: smooth;').props('id=plugin-detail-scroll') as plugin_detail_scroll:
                             if registry:
                                 for module_name, info in registry.items():
                                     status = info['status']

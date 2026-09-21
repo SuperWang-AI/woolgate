@@ -391,7 +391,16 @@ function initPluginDropdownHover() {
                 bindHoverEvents(btn, dd);
             }
         });
-        observer.observe(document.body, { childList: true, subtree: true });
+        // 兼容 document.body 尚未创建的情况（NiceGUI 早期执行 JS 时 body 可能为 null）
+        const observeTarget = document.body || document.documentElement;
+        if (observeTarget) {
+            observer.observe(observeTarget, { childList: true, subtree: true });
+        } else {
+            // 极端情况：连 documentElement 都没有，等待 DOMContentLoaded
+            document.addEventListener('DOMContentLoaded', function() {
+                initPluginDropdownHover();
+            });
+        }
         return;
     }
     bindHoverEvents(pluginBtn, dropdown);

@@ -29,7 +29,8 @@ WoolGate's smart routing is designed for exactly these three types of waste: **f
 - **Local Model Support** — built-in Ollama support; local models handle embedding, task classification, and simple Q&A, keeping data on-premises.
 - **Streaming Safety** — account is locked once SSE streaming starts, preventing context fragmentation from mid-stream model switching.
 - **Quota Prediction & Smart Retry** — predicts remaining quota before a request to avoid mid-stream exhaustion; exponential backoff + jitter retry prevents thundering herds.
-- **Web Admin Panel** — Free Tier Wizard, Account Management, Model Catalog, Pipeline Policy, System Config, and Logs in one visual console.
+- **Web Admin Panel** — Free Tier Wizard, Account Management, Model Catalog, Pipeline Policy, System Config, Plugins, and Logs in one visual console.
+- **Plugin System & SPI** — 9 lifecycle hooks + 6 SPI extension points + UI injection slots. Load plugins via `WOOLGATE_PLUGINS` env var; failed plugins are skipped without blocking startup. Build custom routing, security, monitoring, or UI extensions without forking the core.
 - **One-Command Docker Deployment** — out of the box, image trimmed to ~400MB.
 
 ## Quick Start
@@ -119,6 +120,54 @@ Clients (Dify / OpenClaw / OpenAI-compatible)
 
 > Since v0.6.0, WoolGate supports componentization/pluginization: the classification engine, client adapters, session storage, security review, and more can be replaced via SPI; plugins are loaded via the `WOOLGATE_PLUGINS` env var and skipped on failure without blocking startup. See [ARCHITECTURE.md](ARCHITECTURE.md#七组件化插件化v060) and [docs/extensions/](docs/extensions/).
 
+## Plugin System & Extensibility
+
+WoolGate is built around a **socket-and-hook** extension architecture: every stage of the request pipeline exposes a well-defined insertion point, so you can customize behavior without forking the core. Community developers and enterprise teams can ship their own plugins that plug directly into the running gateway.
+
+### Three Extension Mechanisms
+
+| Mechanism | What it does | Where it plugs in |
+|---|---|---|
+| **Lifecycle Hooks** | Intercept and modify requests/responses at 9 pipeline stages | `security` → `route.before` → `classify` → `route.after` → `select.before` → `select.after` → `context.before` → `execute.before` → `execute.after` |
+| **SPI (Strategy Provider Interface)** | Replace core strategy implementations | classifier · router · selector · context · security · adapter · store |
+| **UI Injection Slots** | Extend the admin panel visually | dashboard widgets · account card footer · log detail extra · config page extra · custom nav pages · custom tab pages |
+
+### Plugin Management Console
+
+The admin panel includes a dedicated **Plugins** page with a visual socket overview — see exactly which hooks and SPIs are registered, which plugin owns each implementation, and click to jump to the plugin's configuration panel.
+
+![Plugin Management — Socket Overview & Plugin Details](docs/assets/plugins-overview.png)
+
+### Hello World Example Plugin
+
+A complete, annotated example plugin ships with the repo at [`plugins/hello_world.py`](plugins/hello_world.py). It demonstrates all four extension types in ~150 lines: independent page registration, nav menu injection, a lifecycle hook, and a dashboard widget. Use it as a template for your own plugins.
+
+![Hello World Example Plugin](docs/assets/hello-world-plugin.png)
+
+### Writing a Plugin (30-second template)
+
+```python
+from app.extensions.sdk import register_hook, register_page, PLUGIN_NAME, PLUGIN_VERSION
+
+PLUGIN_NAME = "my_plugin"
+PLUGIN_VERSION = "1.0.0"
+
+# 1. Hook into the request pipeline
+@register_hook("route.before")
+async def my_hook(ctx):
+    ctx.set("my_plugin.touched", True)
+
+# 2. Register an admin page
+@register_page("/my-plugin", title="My Plugin")
+def my_page(request):
+    from nicegui import ui
+    ui.label("Hello from my plugin!")
+
+# 3. Enable via env var: WOOLGATE_PLUGINS=plugins.my_plugin
+```
+
+See [docs/extensions/PLUGIN_GUIDE.md](docs/extensions/PLUGIN_GUIDE.md) for the full plugin development guide.
+
 ## Project Structure
 
 ```
@@ -151,6 +200,7 @@ woolgate/
 | Account Management | Vendor / account / model three-tier management |
 | Model Catalog | Built-in model directory & filtering |
 | Pipeline Policy | Routing & context policy configuration |
+| Plugins | Plugin management — socket overview, plugin details, configuration, Hello World example |
 | System Config | Global configuration |
 | Logs | Request logs & statistics |
 

@@ -29,7 +29,10 @@ from app.extensions.sdk import (
     register_nav_item,        # 注册导航菜单项
     register_component,       # 注册UI组件到挂载点
     get_plugin,               # 获取插件受限上下文
-    UI_HOOK_DASHBOARD_WIDGETS,  # 预设挂载点：首页仪表盘
+    UI_HOOK_DASHBOARD_WIDGETS,     # 预设挂载点：首页仪表盘
+    UI_HOOK_ACCOUNT_CARD_FOOTER,   # 预设挂载点：账号卡片底部
+    UI_HOOK_LOG_DETAIL_EXTRA,      # 预设挂载点：日志详情扩展
+    UI_HOOK_CONFIG_PAGE_EXTRA,      # 预设挂载点：系统配置页扩展
 )
 
 if TYPE_CHECKING:
@@ -103,8 +106,8 @@ def render_hello_page():
             with ui.row().classes("items-center gap-3"):
                 ui.label("🧩").classes("text-2xl")
                 with ui.column().classes("gap-0"):
-                    ui.label("UI组件挂载").classes("font-bold text-gray-700")
-                    ui.label("通过 register_component() 在首页仪表盘注入组件").classes(
+                    ui.label("UI组件挂载（4个挂载点）").classes("font-bold text-gray-700")
+                    ui.label("dashboard.widgets / account.card.footer / log.detail.extra / config.page.extra").classes(
                         "text-sm text-gray-500"
                     )
 
@@ -221,6 +224,96 @@ register_component(UI_HOOK_DASHBOARD_WIDGETS, render_dashboard_widget, priority=
 
 
 # ══════════════════════════════════════════════════════════════
+# 4b. 账号卡片底部挂载点（account.card.footer）
+# ══════════════════════════════════════════════════════════════
+
+def render_account_card_footer(acc):
+    """
+    渲染账号卡片底部组件。
+
+    这个函数在账号管理页面的每个账号卡片底部执行，接收账号对象 acc。
+    可以用来显示账号健康度、额外统计信息、快捷操作等。
+
+    参数：
+        acc: 账号对象（包含 vendor, api_key, status, models 等属性）
+    """
+    from nicegui import ui
+
+    vendor_name = getattr(acc, 'vendor', 'unknown')
+    status = getattr(acc, 'status', 'unknown')
+    model_count = len(getattr(acc, 'models', []) or [])
+
+    with ui.row().classes('items-center gap-2 px-2 py-1 bg-blue-50 rounded text-xs'):
+        ui.label("🧪 HelloWorld").classes('text-blue-600 font-medium')
+        ui.label(f"厂商: {vendor_name}").classes('text-gray-600')
+        ui.label(f"状态: {status}").classes('text-gray-600')
+        ui.label(f"模型数: {model_count}").classes('text-gray-600')
+
+
+register_component(UI_HOOK_ACCOUNT_CARD_FOOTER, render_account_card_footer, priority=100)
+
+
+# ══════════════════════════════════════════════════════════════
+# 4c. 日志详情扩展挂载点（log.detail.extra）
+# ══════════════════════════════════════════════════════════════
+
+def render_log_detail_extra(log):
+    """
+    渲染日志详情扩展组件。
+
+    这个函数在请求日志详情面板中执行，接收日志对象 log。
+    可以用来显示插件自定义的分析信息、请求耗时拆解、模型选择原因等。
+
+    参数：
+        log: 日志对象（包含 model, status, latency, tokens, error 等属性）
+    """
+    from nicegui import ui
+
+    model = getattr(log, 'model', 'unknown')
+    status = getattr(log, 'status', 'unknown')
+    latency = getattr(log, 'latency', 0)
+
+    with ui.row().classes('items-center gap-2 px-2 py-1 bg-purple-50 rounded text-xs'):
+        ui.label("🧪 HelloWorld分析").classes('text-purple-600 font-medium')
+        ui.label(f"模型: {model}").classes('text-gray-600')
+        ui.label(f"状态: {status}").classes('text-gray-600')
+        ui.label(f"耗时: {latency}s").classes('text-gray-600')
+        ui.label("（示例插件注入的日志扩展信息）").classes('text-gray-400')
+
+
+register_component(UI_HOOK_LOG_DETAIL_EXTRA, render_log_detail_extra, priority=100)
+
+
+# ══════════════════════════════════════════════════════════════
+# 4d. 系统配置页扩展挂载点（config.page.extra）
+# ══════════════════════════════════════════════════════════════
+
+def render_config_page_extra():
+    """
+    渲染系统配置页扩展组件。
+
+    这个函数在系统配置页面底部执行，无参数。
+    可以用来添加插件专属的配置项、开关、说明文档等。
+    """
+    from nicegui import ui
+
+    with ui.card().classes("w-full p-4 bg-gradient-to-r from-amber-50 to-orange-50"):
+        with ui.row().classes("items-center gap-3"):
+            ui.label("🧪").classes("text-2xl")
+            with ui.column().classes("gap-0"):
+                ui.label("Hello World 插件配置").classes("font-bold text-gray-800")
+                ui.label("这是通过 config.page.extra 挂载点注入的插件配置区域").classes(
+                    "text-xs text-gray-500"
+                )
+        with ui.row().classes("mt-3 items-center gap-2"):
+            ui.switch("启用示例功能").props('color=amber')
+            ui.label("（演示插件可在此添加专属配置项）").classes("text-xs text-gray-500")
+
+
+register_component(UI_HOOK_CONFIG_PAGE_EXTRA, render_config_page_extra, priority=100)
+
+
+# ══════════════════════════════════════════════════════════════
 # 插件加载完成日志
 # ══════════════════════════════════════════════════════════════
 
@@ -229,7 +322,7 @@ logger.info(
     f" (v{PLUGIN_VERSION}, 作者: {PLUGIN_AUTHOR})"
 )
 logger.info(
-    f"[{PLUGIN_NAME}] 已注册: 1个页面 + 1个导航菜单 + 1个钩子 + 1个UI组件"
+    f"[{PLUGIN_NAME}] 已注册: 1个页面 + 1个导航菜单 + 1个钩子 + 4个UI组件（dashboard/account/log/config）"
 )
 logger.info(
     f"[{PLUGIN_NAME}] 访问 http://localhost:8765/admin/hello-world 查看效果"

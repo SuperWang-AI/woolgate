@@ -38,8 +38,8 @@ async def db_session():
 @pytest.mark.asyncio
 async def test_ensure_model_master_slave_same_model_two_accounts(db_session):
     """同一模型在两个账号下 → 各建一行，互不覆盖"""
-    acc_a = ModelAccount(vendor="厂商A", model_name="m-1", api_key_encrypted="k-a", virtual_model="chat")
-    acc_b = ModelAccount(vendor="厂商B", model_name="m-1", api_key_encrypted="k-b", virtual_model="chat")
+    acc_a = ModelAccount(vendor="厂商A", default_model_name="m-1", api_key_encrypted="k-a", virtual_model="chat")
+    acc_b = ModelAccount(vendor="厂商B", default_model_name="m-1", api_key_encrypted="k-b", virtual_model="chat")
     db_session.add_all([acc_a, acc_b])
     await db_session.commit()
 
@@ -62,8 +62,8 @@ async def test_ensure_model_master_slave_same_model_two_accounts(db_session):
 @pytest.mark.asyncio
 async def test_ensure_model_proto_copy_without_recompute(db_session):
     """第二行复制原型行的能力/示例/单价/向量（不重算）"""
-    acc_a = ModelAccount(vendor="厂商A", model_name="m-2", api_key_encrypted="k-a", virtual_model="chat")
-    acc_b = ModelAccount(vendor="厂商B", model_name="m-2", api_key_encrypted="k-b", virtual_model="chat")
+    acc_a = ModelAccount(vendor="厂商A", default_model_name="m-2", api_key_encrypted="k-a", virtual_model="chat")
+    acc_b = ModelAccount(vendor="厂商B", default_model_name="m-2", api_key_encrypted="k-b", virtual_model="chat")
     db_session.add_all([acc_a, acc_b])
     await db_session.commit()
 
@@ -90,8 +90,8 @@ async def test_ensure_model_proto_copy_without_recompute(db_session):
 @pytest.mark.asyncio
 async def test_get_by_account_model(db_session):
     """按 (account_id, model_name) 精确查本账号行"""
-    acc_a = ModelAccount(vendor="厂商A", model_name="m-3", api_key_encrypted="k-a", virtual_model="chat")
-    acc_b = ModelAccount(vendor="厂商B", model_name="m-3", api_key_encrypted="k-b", virtual_model="chat")
+    acc_a = ModelAccount(vendor="厂商A", default_model_name="m-3", api_key_encrypted="k-a", virtual_model="chat")
+    acc_b = ModelAccount(vendor="厂商B", default_model_name="m-3", api_key_encrypted="k-b", virtual_model="chat")
     db_session.add_all([acc_a, acc_b])
     await db_session.commit()
 

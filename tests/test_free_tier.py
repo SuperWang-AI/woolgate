@@ -252,7 +252,7 @@ async def test_auto_configure_dedup_by_alias(db_session, monkeypatch):
     # 预置已有账号（模拟账号管理里的月之暗面）+ 对应 catalog（主从后 catalog 挂账号行）
     existing = ModelAccount(
         vendor="月之暗面 (Moonshot)",
-        model_name="kimi-k2.6",
+        default_model_name="kimi-k2.6",
         api_key_encrypted="enc-old-key",
         virtual_model="chat",
         is_enable=True,

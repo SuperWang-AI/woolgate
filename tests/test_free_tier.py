@@ -254,7 +254,6 @@ async def test_auto_configure_dedup_by_alias(db_session, monkeypatch):
         vendor="月之暗面 (Moonshot)",
         default_model_name="kimi-k2.6",
         api_key_encrypted="enc-old-key",
-        virtual_model="chat",
         is_enable=True,
     )
     db_session.add(existing)

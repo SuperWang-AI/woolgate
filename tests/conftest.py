@@ -30,7 +30,6 @@ async def seed_account(db, vendor, model_name, **extra):
         vendor=vendor,
         default_model_name=model_name,
         api_key_encrypted=f"key-{vendor}-{model_name}",
-        virtual_model="chat",
         **extra,
     )
     db.add(acc)

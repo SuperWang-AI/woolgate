@@ -28,7 +28,7 @@ async def seed_account(db, vendor, model_name, **extra):
     extra.setdefault("balance_remaining", 1000000)
     acc = ModelAccount(
         vendor=vendor,
-        model_name=model_name,
+        default_model_name=model_name,
         api_key_encrypted=f"key-{vendor}-{model_name}",
         virtual_model="chat",
         **extra,

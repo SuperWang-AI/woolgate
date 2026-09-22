@@ -46,13 +46,12 @@ class TestCostFirst:
         accs = [mk(5, inp=0.0, out=0.0, bal=1.0), mk(9, inp=0.0, out=0.0, bal=1.0)]
         assert pick(accs).id == 9
 
-    def test_filter_by_model(self):
-        """指定模型时只从匹配账号中选；无匹配回退全部"""
-        accs = [mk(1, model="deepseek-chat", inp=1.0, out=2.0), mk(2, model="qwen-plus", inp=0.0, out=0.0)]
-        # 匹配 deepseek-chat 的只有 id=1
-        assert pick(accs, model="deepseek-chat").id == 1
-        # 无匹配 → 回退全部 → 免费 id=2 胜
-        assert pick(accs, model="nonexistent").id == 2
+    def test_select_ranks_pre_filtered_accounts(self):
+        """上游已按 ModelCatalog 过滤，select 只做排序选择"""
+        # 假设上游已过滤出目标模型的账号列表
+        accs = [mk(1, inp=1.0, out=2.0), mk(2, inp=0.0, out=0.0)]
+        # select 按成本排序选最优 → 免费 id=2 胜
+        assert pick(accs, model="deepseek-chat").id == 2
 
     def test_empty(self):
         assert pick([]) is None

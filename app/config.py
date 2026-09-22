@@ -10,7 +10,7 @@ from pathlib import Path
 class Settings(BaseSettings):
     """启动配置 - 修改后需重启服务"""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="allow")
     
     # 服务配置
     HOST: str = Field(default="0.0.0.0", description="监听地址")

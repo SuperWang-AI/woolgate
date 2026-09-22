@@ -52,6 +52,7 @@ class RouterConfig:
     embedding_local_plugin: str = "bge-small-zh"
     embedding_local_model_path: str = ""
     embedding_local_installed: bool = False
+    ollama_base_url: str = "http://host.docker.internal:11434"  # Ollama 服务地址
 
     # 向量匹配阈值（M4 适配模型能力向量的相似度分布）
     threshold_high: float = 0.65  # 高置信度阈值，超过则向量路由直接用

@@ -1,6 +1,6 @@
 # WoolGate 插件开发指南
 
-> 版本：v0.7.0 | 最后更新：2026-09-20
+> 版本：v0.7.1 | 最后更新：2026-09-21
 
 ## 目录
 
@@ -782,6 +782,28 @@ from app.extensions.sdk import (
     UI_HOOK_CONFIG_PAGE_EXTRA,       # "config.page.extra"
 )
 ```
+
+### D. 学习型路由与插件
+
+WoolGate v0.7.0+ 内置学习型选号路由，插件可以通过以下方式参与或影响学习过程：
+
+**学习机制说明：**
+- 系统每小时自动聚合最近7天的请求日志（滑动窗口，时间衰减）
+- 按 (账号×模型×路由模型) 统计：请求数、成功数、流式中断数、重试数、平均成本
+- 综合质量分 = 成功率 × (1-中断率) × (1-重试率)
+- 有效成本 = 平均实际成本 / 综合质量分（质量越低，有效成本越高）
+- 选号排序：免费优先 → 有效成本升序 → 价格升序 → 余额降序 → id降序
+
+**插件可参与的方式：**
+1. 通过 `selector.before` 钩子修改候选账号列表
+2. 通过 `selector.after` 钩子修改选号结果
+3. 通过 `adapter.after` 钩子记录自定义质量信号（写入 RequestLog.implicit_signal）
+4. 自定义 SPI 选号策略（`register_spi("selector", "my_strategy", MySelector)`）
+
+**相关源码：**
+- 学习聚合：`app/services/performance_learner.py`
+- 选号策略：`app/pipeline/selector/cost_first.py`
+- 数据模型：`app/models/database.py` → `ModelPerformance`
 
 ### C. 相关资源
 

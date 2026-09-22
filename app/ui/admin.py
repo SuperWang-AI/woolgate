@@ -181,6 +181,66 @@ async def get_stats():
         }
 
 
+async def get_trend_data(days: int = 7):
+    """获取最近N天的趋势数据（请求量、成本、Token、模型分布）"""
+    async with AsyncSessionLocal() as session:
+        today = datetime.now(timezone.utc).date()
+        start_date = today - timedelta(days=days - 1)
+        
+        # 按天统计请求量、成功量、成本、Token
+        result = await session.execute(
+            select(
+                func.date(RequestLog.created_at).label('date'),
+                func.count(RequestLog.id).label('total'),
+                func.sum(case((RequestLog.status == "success", 1), else_=0)).label('success'),
+                func.sum(RequestLog.actual_cost).label('cost'),
+                func.sum(RequestLog.prompt_tokens).label('prompt_tokens'),
+                func.sum(RequestLog.completion_tokens).label('completion_tokens'),
+            )
+            .where(RequestLog.created_at >= datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc))
+            .group_by(func.date(RequestLog.created_at))
+            .order_by(func.date(RequestLog.created_at))
+        )
+        daily_stats = {}
+        for row in result.all():
+            daily_stats[str(row.date)] = {
+                'total': row.total or 0,
+                'success': row.success or 0,
+                'cost': float(row.cost or 0),
+                'prompt_tokens': row.prompt_tokens or 0,
+                'completion_tokens': row.completion_tokens or 0,
+            }
+        
+        # 补齐缺失的日期
+        dates = []
+        for i in range(days):
+            d = start_date + timedelta(days=i)
+            dates.append(str(d))
+            if str(d) not in daily_stats:
+                daily_stats[str(d)] = {'total': 0, 'success': 0, 'cost': 0, 'prompt_tokens': 0, 'completion_tokens': 0}
+        
+        # 模型使用分布（累计）
+        result = await session.execute(
+            select(
+                RequestLog.routed_model,
+                func.count(RequestLog.id).label('count'),
+            )
+            .where(RequestLog.routed_model.isnot(None))
+            .group_by(RequestLog.routed_model)
+            .order_by(desc(func.count(RequestLog.id)))
+            .limit(10)
+        )
+        model_distribution = []
+        for row in result.all():
+            model_distribution.append({'name': row.routed_model or 'unknown', 'value': row.count or 0})
+        
+        return {
+            'dates': dates,
+            'daily': daily_stats,
+            'model_distribution': model_distribution,
+        }
+
+
 async def get_accounts():
     """获取所有账号列表（启用的排在前面）"""
     async with AsyncSessionLocal() as session:
@@ -732,7 +792,74 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         ]
                         ui.table(columns=_cols, rows=stats['domain_stats']).classes('w-full').props('dense flat')
             
-            # API 配置信息卡片
+            # ── 数据趋势可视化 ──
+            trend_data = await get_trend_data(days=7)
+            ui.label('数据趋势').classes('text-2xl font-bold text-gray-800 mt-4')
+            ui.add_head_html('<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>')
+
+            chart_dates = trend_data['dates']
+            chart_requests = [trend_data['daily'][d]['total'] for d in chart_dates]
+            chart_success = [trend_data['daily'][d]['success'] for d in chart_dates]
+            chart_costs = [round(trend_data['daily'][d]['cost'], 4) for d in chart_dates]
+            chart_prompt = [round(trend_data['daily'][d]['prompt_tokens'] / 1000, 1) for d in chart_dates]
+            chart_completion = [round(trend_data['daily'][d]['completion_tokens'] / 1000, 1) for d in chart_dates]
+            chart_model_dist = json.dumps(trend_data['model_distribution'], ensure_ascii=False)
+            chart_dates_json = json.dumps(chart_dates)
+            chart_requests_json = json.dumps(chart_requests)
+            chart_success_json = json.dumps(chart_success)
+            chart_costs_json = json.dumps(chart_costs)
+            chart_prompt_json = json.dumps(chart_prompt)
+            chart_completion_json = json.dumps(chart_completion)
+
+            # 用纯HTML渲染图表区域，完全控制布局
+            charts_html = (
+                '<div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:16px;">'
+                '<div style="flex:1;min-width:400px;background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.1);padding:16px;">'
+                '<div style="font-size:14px;font-weight:600;color:#4b5563;margin-bottom:8px;">最近7天请求趋势</div>'
+                '<div id="chart-requests" style="width:100%;height:320px;"></div>'
+                '</div>'
+                '<div style="flex:1;min-width:400px;background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.1);padding:16px;">'
+                '<div style="font-size:14px;font-weight:600;color:#4b5563;margin-bottom:8px;">模型使用分布（累计TOP10）</div>'
+                '<div id="chart-model-dist" style="width:100%;height:320px;"></div>'
+                '</div>'
+                '</div>'
+                '<div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:16px;">'
+                '<div style="flex:1;min-width:400px;background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.1);padding:16px;">'
+                '<div style="font-size:14px;font-weight:600;color:#4b5563;margin-bottom:8px;">最近7天实际成本</div>'
+                '<div id="chart-cost" style="width:100%;height:320px;"></div>'
+                '</div>'
+                '<div style="flex:1;min-width:400px;background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.1);padding:16px;">'
+                '<div style="font-size:14px;font-weight:600;color:#4b5563;margin-bottom:8px;">最近7天Token消耗（K）</div>'
+                '<div id="chart-tokens" style="width:100%;height:320px;"></div>'
+                '</div>'
+                '</div>'
+            )
+            ui.html(charts_html)
+
+                        # ECharts初始化脚本
+            _script = (
+                '<script>(function(){'
+                'function initCharts(){'
+                'if(typeof echarts==="undefined"){setTimeout(initCharts,200);return;}'
+                'try{'
+                'if(!document.getElementById("chart-requests"))return;'
+                'var c1=echarts.init(document.getElementById("chart-requests"));'
+                'c1.setOption({tooltip:{trigger:"axis"},legend:{data:["总请求","成功"],bottom:0},grid:{left:"3%",right:"4%",bottom:"15%",containLabel:true},xAxis:{type:"category",data:' + chart_dates_json + ',axisLabel:{fontSize:10}},yAxis:{type:"value"},series:[{name:"总请求",type:"line",data:' + chart_requests_json + ',smooth:true,itemStyle:{color:"#8b5cf6"},areaStyle:{opacity:0.1}},{name:"成功",type:"line",data:' + chart_success_json + ',smooth:true,itemStyle:{color:"#10b981"}}]});'
+                'var c2=echarts.init(document.getElementById("chart-model-dist"));'
+                'c2.setOption({tooltip:{trigger:"item"},legend:{orient:"horizontal",bottom:0,type:"scroll",textStyle:{fontSize:10}},series:[{type:"pie",radius:["35%","65%"],center:["50%","42%"],avoidLabelOverlap:true,itemStyle:{borderRadius:6,borderColor:"#fff",borderWidth:2},label:{show:false},emphasis:{label:{show:true,fontSize:14,fontWeight:"bold"}},data:' + chart_model_dist + '}]});'
+                'var c3=echarts.init(document.getElementById("chart-cost"));'
+                'c3.setOption({tooltip:{trigger:"axis"},grid:{left:"3%",right:"4%",bottom:"15%",containLabel:true},xAxis:{type:"category",data:' + chart_dates_json + ',axisLabel:{fontSize:10}},yAxis:{type:"value",name:"元"},series:[{name:"实际成本",type:"bar",data:' + chart_costs_json + ',itemStyle:{color:"#f59e0b",borderRadius:[4,4,0,0]},barWidth:"50%"}]});'
+                'var c4=echarts.init(document.getElementById("chart-tokens"));'
+                'c4.setOption({tooltip:{trigger:"axis"},legend:{data:["输入Token","输出Token"],bottom:0},grid:{left:"3%",right:"4%",bottom:"15%",containLabel:true},xAxis:{type:"category",boundaryGap:false,data:' + chart_dates_json + ',axisLabel:{fontSize:10}},yAxis:{type:"value",name:"K"},series:[{name:"输入Token",type:"line",data:' + chart_prompt_json + ',smooth:true,itemStyle:{color:"#3b82f6"},areaStyle:{opacity:0.2}},{name:"输出Token",type:"line",data:' + chart_completion_json + ',smooth:true,itemStyle:{color:"#ec4899"},areaStyle:{opacity:0.2}}]});'
+                'window.addEventListener("resize",function(){c1.resize();c2.resize();c3.resize();c4.resize();});'
+                '}catch(e){console.error("charts error:",e);}'
+                '}'
+                'if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",initCharts);}else{initCharts();}'
+                '})();</script>'
+            )
+            ui.add_body_html(_script)
+
+            # API 配置信息卡片            # API 配置信息卡片
             ui.label('API 配置信息').classes('text-2xl font-bold text-gray-800 mt-4')
             with ui.card().classes('w-full shadow-lg border-l-4 border-purple-500'):
                 with ui.grid(columns=2).classes('w-full gap-4'):
@@ -1599,6 +1726,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     with ui.column().classes('gap-1'):
                         ollama_url = ui.input('Ollama 地址', value=config.ollama_base_url).classes('w-full')
                         ui.label('默认 http://localhost:11434').classes('text-xs text-gray-400')
+                    with ui.column().classes('gap-1'):
+                        local_embed_model = ui.input('本地 Embedding 模型', value=config.embedding_local_plugin).classes('w-full')
+                        ui.label('需先在 Ollama 中拉取，如 bge-small-zh / nomic-embed-text').classes('text-xs text-gray-400')
 
             # 保存按钮
             async def save_pipeline():
@@ -1624,6 +1754,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     'context_strategy': context_strategy.value,
                     'ollama_enabled': ollama_enabled.value,
                     'ollama_base_url': ollama_url.value,
+                    'embedding_local_plugin': local_embed_model.value,
                     'router_config_json': router_config_json,
                     'context_config_json': context_config_json,
                 }

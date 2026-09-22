@@ -8,7 +8,7 @@ from app.pipeline.selector.free_first import FreeFirstSelector
 
 def mk(id_: int, model="deepseek-chat", inp=None, out=None, bal=None, priority=50, vendor="x"):
     """构造账号（默认 priority=50，与退场后的默认值一致）"""
-    a = ModelAccount(id=id_, vendor=vendor, model_name=model, priority=priority)
+    a = ModelAccount(id=id_, vendor=vendor, default_model_name=model, priority=priority)
     a._cost_input = inp
     a._cost_output = out
     a.balance_remaining = bal

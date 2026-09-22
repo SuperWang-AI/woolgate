@@ -26,6 +26,8 @@ class SystemConfig(Base):
     ollama_enabled = Column(Boolean, default=True, comment="Ollama调度总开关")
     ollama_base_url = Column(String(255), default="http://host.docker.internal:11434", 
                             comment="Ollama地址")
+    embedding_local_plugin = Column(String(100), default="bge-small-zh",
+                                     comment="本地Embedding模型名（Ollama）")
     
     # 日志配置
     log_retention_days = Column(Integer, default=30, comment="日志保留天数")
@@ -236,12 +238,38 @@ class ModelPerformance(Base):
         return self.success_count / self.request_count
 
     @property
-    def effective_cost(self) -> float:
-        """有效成本 = 挂牌平均成本 / 成功率（成功率低意味着要重试多次）"""
+    def interrupted_rate(self) -> float:
+        """流式中断率 = 中断次数 / 总请求数"""
+        if self.request_count == 0:
+            return 0.0
+        return self.interrupted_count / self.request_count
+
+    @property
+    def retry_rate(self) -> float:
+        """重试率 = 重试次数 / 总请求数"""
+        if self.request_count == 0:
+            return 0.0
+        return self.retry_count / self.request_count
+
+    @property
+    def quality_score(self) -> float:
+        """综合质量分 = 成功率 x (1-中断率) x (1-重试率)
+        考虑了请求成功、流式不中断、不需要重试三个维度，越低说明账号质量越差。
+        """
         sr = self.success_rate
-        if sr <= 0.01:
+        ir = self.interrupted_rate
+        rr = self.retry_rate
+        return sr * (1 - ir) * (1 - rr)
+
+    @property
+    def effective_cost(self) -> float:
+        """有效成本 = 平均实际成本 / 综合质量分
+        质量分低（成功率低、中断多、需重试）意味着实际需要多次请求，有效成本更高。
+        """
+        qs = self.quality_score
+        if qs <= 0.01:
             return float("inf")
-        return self.avg_actual_cost / sr
+        return self.avg_actual_cost / qs
 
 class SessionState(Base):
     """会话状态表（ContextManager 依赖，初期用 SQLite，可换 Redis）"""

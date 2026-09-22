@@ -15,10 +15,11 @@ from app.models import AsyncSessionLocal
 logger = logging.getLogger(__name__)
 
 
-async def aggregate_performance(hours: int = 24):
+async def aggregate_performance(hours: int = 168):
     """
-    聚合最近 N 小时的请求日志到 model_performance 表。
-    幂等：每次按 (account_id, model_name, routed_model) upsert。
+    聚合最近 N 小时（默认7天=168小时）的请求日志到 model_performance 表。
+    滑动窗口：每次先删除窗口外的旧记录，再重新聚合窗口内数据。
+    时间衰减：超过7天的历史数据不再影响选号决策。
     """
     since = datetime.utcnow() - timedelta(hours=hours)
 
@@ -58,19 +59,12 @@ async def aggregate_performance(hours: int = 24):
             ).scalar_one_or_none()
 
             if existing:
-                # 增量累加（历史累计 + 新窗口）
-                existing.request_count += row.req_count
-                existing.success_count += (row.ok_count or 0)
-                existing.interrupted_count += (row.interrupted or 0)
-                existing.retry_count += (row.retried or 0)
-                # 平均成本加权更新
-                if row.avg_cost is not None:
-                    total_old = existing.request_count
-                    total_new = row.req_count
-                    existing.avg_actual_cost = (
-                        (existing.avg_actual_cost * total_old + row.avg_cost * total_new) / (total_old + total_new)
-                        if (total_old + total_new) > 0 else existing.avg_actual_cost
-                    )
+                # 滑动窗口：全量替换（窗口内重新统计，不是增量累加）
+                existing.request_count = row.req_count
+                existing.success_count = (row.ok_count or 0)
+                existing.interrupted_count = (row.interrupted or 0)
+                existing.retry_count = (row.retried or 0)
+                existing.avg_actual_cost = row.avg_cost or 0.0
                 existing.last_updated = datetime.utcnow()
             else:
                 perf = ModelPerformance(

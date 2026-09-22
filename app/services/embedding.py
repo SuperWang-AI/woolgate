@@ -113,9 +113,8 @@ class EmbeddingService:
         Body: {"model": "nomic-embed-text", "prompt": text}
         Response: {"embedding": [...]}
         """
-        # 从 SystemConfig 的 ollama_base_url 读取（通过 RouterConfig 暂不直接访问，这里用默认）
-        # TODO M3: 从配置注入 Ollama 地址，支持本地 embedding 模型选择
-        ollama_url = "http://host.docker.internal:11434"
+        # 从 RouterConfig 读取 Ollama 地址（支持配置化）
+        ollama_url = getattr(self.config, 'ollama_base_url', 'http://host.docker.internal:11434')
         model = self.config.embedding_local_plugin or "nomic-embed-text"
 
         if not self.config.embedding_local_installed:

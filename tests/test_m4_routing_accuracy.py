@@ -9,7 +9,7 @@ sys.path.insert(0, '/app')
 from app.models import AsyncSessionLocal
 from app.models.database import ModelCatalog
 from app.services.embedding import EmbeddingService
-from app.services.model_catalog_service import ModelCatalogService
+from app.services.model_catalog import ModelCatalogService
 from app.pipeline.config import RouterConfig, PipelineConfig
 from app.pipeline.router.vector import VectorRouter
 from app.pipeline.context import PipelineContext

@@ -22,7 +22,7 @@ from pathlib import Path
 # 数据库时间统一以 UTC 存储，展示层转换为本地时区（Asia/Shanghai）
 CN_TZ = timezone(timedelta(hours=8))
 
-def local_fmt(dt):
+def format_local_time(dt):
     """UTC naive datetime → 本地时区展示字符串"""
     if not dt:
         return '未知'
@@ -30,7 +30,7 @@ def local_fmt(dt):
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(CN_TZ).strftime('%Y-%m-%d %H:%M:%S')
 
-def today_start_utc():
+def get_today_start_utc():
     """本地今天 00:00 对应的 UTC 时间（naive），用于按本地日统计"""
     local_midnight = datetime.now(CN_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
     return local_midnight.astimezone(timezone.utc).replace(tzinfo=None)
@@ -65,7 +65,7 @@ async def get_stats():
         enabled_accounts = result.scalar() or 0
         
         # 今日请求量
-        today_start = today_start_utc()
+        today_start = get_today_start_utc()
         result = await session.execute(
             select(func.count(RequestLog.id))
             .where(RequestLog.created_at >= today_start)
@@ -288,7 +288,7 @@ ONBOARD_ANSWERS_CN = {
     "resource": {"local": "本地大模型就绪", "key": "已有API Key", "none": "都还没有"},
 }
 
-def build_onboard_data(answers: dict):
+def build_onboarding_data(answers: dict):
     """
     A2 引导映射 v2.1（纯函数，便于测试）：3 个回答 → 推荐策略配置数据。
 
@@ -354,7 +354,7 @@ async def apply_onboard_profile(answers: dict):
     Returns:
         (success, profile_name)
     """
-    data, profile_name = build_onboard_data(answers)
+    data, profile_name = build_onboarding_data(answers)
     ok = await save_system_config(data)
     if ok:
         # 使管线配置缓存失效，新策略立即生效
@@ -397,6 +397,8 @@ def create_ui():
                     _plugin_refresh()
             else:
                 _plugin_active = None
+        # 关闭插件下拉菜单
+        ui.run_javascript("var dd = document.getElementById('plugin-dropdown-menu'); if(dd) dd.classList.add('hidden');")
 
     # 插件系统 v2：UI 扩展点注册表
     from app.extensions.sdk import (
@@ -889,7 +891,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 # Dify 配置示例
                 ui.label('Dify 配置示例').classes('text-lg font-bold text-gray-700 mt-4 mb-2')
                 _dash_cfg = await get_system_config()
-                _entry_name = getattr(_dash_cfg, 'virtual_entry_name', 'woolgate') or 'woolgate'
+                _entry_name = getattr(_dash_cfg, 'virtual_model_name', 'woolgate') or 'woolgate'
                 with ui.column().classes('gap-3 bg-blue-50 p-4 rounded'):
                     config_items = [
                         ('模型供应商', 'OpenAI-API-compatible'),
@@ -940,7 +942,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         ''')
 
         from app.services.free_tier_catalog import list_vendors_merged, get_vendor_merged, FreeTierService, vendor_matches
-        from app.services.model_catalog_service import ModelCatalogService
+        from app.services.model_catalog import ModelCatalogService
         from app.utils.encryption import encryption_service
 
         extra_inputs = {}            # extra 字段输入框引用（detail 重建后重填）
@@ -1262,7 +1264,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 """重算所有模型能力向量（高级工具，后续挂入高级设置）"""
                 try:
                     async with AsyncSessionLocal() as session:
-                        from app.services.model_catalog_service import ModelCatalogService
+                        from app.services.model_catalog import ModelCatalogService
                         from app.services.embedding import EmbeddingService
                         from app.pipeline.config import PipelineConfig
                         cfg = await PipelineConfig.load(session)
@@ -1466,7 +1468,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                 ui.label('客户端（Dify/OpenClaw 等）配置模型时统一填这个名字，网关内部智能路由自动映射真实模型').classes('text-xs text-gray-500 mb-3')
                 entry_name = ui.input(
                     '对外模型名',
-                    value=getattr(config, 'virtual_entry_name', 'woolgate') or 'woolgate',
+                    value=getattr(config, 'virtual_model_name', 'woolgate') or 'woolgate',
                 ).classes('w-full max-w-md').props('placeholder=woolgate')
                 ui.label('修改后，首页 Dify 配置示例、/v1/models 模型列表、路由判断将同步生效').classes('text-xs text-amber-600')
                 with ui.expansion('为什么有这个字段？入口名 vs 真实模型名', icon='help').classes('w-full mt-1'):
@@ -1510,7 +1512,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                     'max_retry_count': int(max_retry.value),
                     'cool_down_seconds': int(cool_down.value),
                     'log_retention_days': int(log_retention.value),
-                    'virtual_entry_name': (entry_name.value or 'woolgate').strip(),
+                    'virtual_model_name': (entry_name.value or 'woolgate').strip(),
                 }
                 success = await save_system_config(config_data)
                 if success:
@@ -1846,7 +1848,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
                         log_vendor = log.vendor or '未知'
                         log_model = log.model_name or '未知'
                         log_status = log.status
-                        log_created = local_fmt(log.created_at)
+                        log_created = format_local_time(log.created_at)
                         log_prompt_tokens = log.prompt_tokens or 0
                         log_completion_tokens = log.completion_tokens or 0
                         log_total_tokens = log.total_tokens or 0

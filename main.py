@@ -11,7 +11,7 @@ from app.config import settings
 from app.models import init_database
 from app.routes.api import router as api_router
 from app.services.scheduler import start_scheduler, stop_scheduler
-from app.ui.admin import init_ui
+from app.admin.admin import init_ui
 
 # 配置日志
 logging.basicConfig(

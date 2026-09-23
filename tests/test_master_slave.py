@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.pool import StaticPool
 
 from app.models.database import Base, ModelAccount, ModelCatalog, SystemConfig
-from app.services.model_catalog_service import ModelCatalogService
+from app.services.model_catalog import ModelCatalogService
 
 
 @pytest.fixture

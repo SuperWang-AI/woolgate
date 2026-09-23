@@ -8,7 +8,7 @@ sys.path.insert(0, '/app')
 from app.models import AsyncSessionLocal
 from app.models.database import ModelCatalog
 from app.services.embedding import EmbeddingService
-from app.services.model_catalog_service import PRESET_MODEL_DESCRIPTIONS
+from app.services.model_catalog import PRESET_MODEL_DESCRIPTIONS
 from app.pipeline.config import PipelineConfig
 from sqlalchemy import select
 

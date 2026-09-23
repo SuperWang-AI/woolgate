@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.pipeline.router.base import ModelRouter
 from app.services.embedding import EmbeddingService, cosine_similarity
-from app.services.model_catalog_service import ModelCatalogService
+from app.services.model_catalog import ModelCatalogService
 from app.models.database import ModelCatalog
 
 if TYPE_CHECKING:

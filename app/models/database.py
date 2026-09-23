@@ -66,7 +66,7 @@ class SystemConfig(Base):
     onboard_profile = Column(String(100), nullable=True, comment="引导应用的推荐配置模板名")
 
     # ── M5 对外模型名（网关统一入口）──
-    virtual_entry_name = Column(String(50), default="woolgate",
+    virtual_model_name = Column(String(50), default="woolgate",
                                 comment="对外暴露的入口模型名（全局级，客户端统一用这个，智能路由自动映射真实模型；跟账号级的 default_model 不是一个层级）")
 
     # ── P0 技术债：模型参数约束配置化 ──
@@ -94,7 +94,6 @@ class ModelAccount(Base):
     
     # 基础信息
     vendor = Column(String(50), nullable=False, comment="厂商名称")
-    default_model = Column(String(100), default="woolgate", comment="【已废弃，勿用】历史遗留字段，无代码使用；账号默认模型请用 default_model_name")
     default_model_name = Column(String(100), nullable=False, comment="账号默认模型名（T1 后降级，模型级信息在 ModelCatalog；原 model_name）")
     endpoint_id = Column(String(100), nullable=True, comment="Endpoint ID(如豆包/火山引擎需要,调用时优先使用)")
     api_key_encrypted = Column(Text, nullable=False, comment="加密后的API Key")

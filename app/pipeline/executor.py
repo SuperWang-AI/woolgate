@@ -148,7 +148,7 @@ class Executor:
             # ①.5 加载会话状态（滞回判定 + 摘要复用；租户前缀隔离见契约 06）
             session = None
             if ctx.session_id:
-                from app.services.session_service import SessionStateService
+                from app.services.session import SessionStateService
                 session_svc = SessionStateService(self.db, tenant_id=ctx.tenant_id)
                 session = await session_svc.get_or_create(ctx.session_id)
                 ctx.current_model = session.current_model  # 供 VectorClassifier 滞回判定
@@ -163,7 +163,7 @@ class Executor:
                     ctx.model_switched = True
                     logger.info(f"[executor] 模型切换: {old_model} → {ctx.target_model}")
                 if ctx.target_model:
-                    from app.services.session_service import SessionStateService
+                    from app.services.session import SessionStateService
                     await SessionStateService(self.db, tenant_id=ctx.tenant_id).set_model(
                         ctx.session_id, ctx.target_model
                     )
@@ -370,7 +370,7 @@ class Executor:
 
         # cost-first 需要"账号+模型"维度的单价：注入临时属性供排序，不落库
         if self._account_selector.name == "cost-first" and target:
-            from app.services.model_catalog_service import ModelCatalogService
+            from app.services.model_catalog import ModelCatalogService
             from app.services.performance_learner import get_effective_cost_map
             _svc = ModelCatalogService(self.db)
             # 历史有效成本（学习型选号信号）
@@ -400,7 +400,7 @@ class Executor:
         return account
 
     async def _get_entry_name(self) -> str:
-        """读取对外暴露的模型名（system_config.virtual_entry_name，默认 woolgate），本请求内缓存"""
+        """读取对外暴露的模型名（system_config.virtual_model_name，默认 woolgate），本请求内缓存"""
         if self._entry_name:
             return self._entry_name
         try:
@@ -408,8 +408,8 @@ class Executor:
                 select(SystemConfig).where(SystemConfig.id == 1)
             )
             config = result.scalar_one_or_none()
-            if config and config.virtual_entry_name:
-                self._entry_name = config.virtual_entry_name
+            if config and config.virtual_model_name:
+                self._entry_name = config.virtual_model_name
                 return self._entry_name
         except Exception as e:
             logger.warning(f"[executor] 读取对外模型名失败: {e}")
@@ -772,7 +772,7 @@ class Executor:
     async def _get_model_prices(self, account, model_name: str):
         """读取账号+模型维度单价（ModelCatalog 行）；无数据返回 (None, None)"""
         try:
-            from app.services.model_catalog_service import ModelCatalogService
+            from app.services.model_catalog import ModelCatalogService
             row = await ModelCatalogService(self.db).get_by_account_model(account.id, model_name or account.default_model_name)
             if row:
                 return row.input_price, row.output_price

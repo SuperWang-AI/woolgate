@@ -388,7 +388,7 @@ async def list_models(
         select(SystemConfig).where(SystemConfig.id == 1)
     )
     config = result.scalar_one_or_none()
-    entry_name = (config.virtual_entry_name if config and config.virtual_entry_name else "woolgate")
+    entry_name = (config.virtual_model_name if config and config.virtual_model_name else "woolgate")
 
     return {
         "object": "list",

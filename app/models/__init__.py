@@ -65,7 +65,7 @@ async def _ensure_columns(conn):
         ("edition", "VARCHAR(20) DEFAULT 'opensource'"),
         ("onboarded", "BOOLEAN DEFAULT 0"),
         ("onboard_profile", "VARCHAR(100)"),
-        ("virtual_entry_name", "VARCHAR(50) DEFAULT 'woolgate'"),
+        ("virtual_model_name", "VARCHAR(50) DEFAULT 'woolgate'"),
     ]
     for col, coltype in sys_migrations:
         if col not in cols:

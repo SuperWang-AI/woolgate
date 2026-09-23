@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.pipeline.router.base import ModelRouter
-from app.services.model_catalog_service import ModelCatalogService
+from app.services.model_catalog import ModelCatalogService
 
 if TYPE_CHECKING:
     from app.pipeline.context import PipelineContext

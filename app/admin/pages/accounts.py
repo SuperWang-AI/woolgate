@@ -160,8 +160,83 @@ class AccountsPage(BasePage):
                 dialog.open()
             
             async def show_model_capability_dialog(model_id):
-                """模型能力配置弹窗（占位）"""
-                ui.notify('模型能力配置功能开发中...', type='info')
+                """模型能力配置弹窗"""
+                from app.models.database import ModelCatalog
+                from app.models import AsyncSessionLocal
+                
+                # 获取模型信息
+                async with AsyncSessionLocal() as session:
+                    result = await session.execute(
+                        select(ModelCatalog).where(ModelCatalog.id == model_id)
+                    )
+                    model = result.scalar_one_or_none()
+                    if not model:
+                        ui.notify('模型不存在', type='negative')
+                        return
+                
+                # 常用能力标签选项
+                tag_options = {
+                    'code': '代码生成',
+                    'chat': '对话聊天',
+                    'vision': '图像理解',
+                    'embedding': '向量嵌入',
+                    'long_context': '长文本处理',
+                    'math': '数学推理',
+                    'translation': '翻译',
+                    'summary': '文本摘要',
+                }
+                
+                with ui.dialog() as dialog, ui.card().classes('w-[600px]'):
+                    ui.label('模型能力配置').classes('text-xl font-bold')
+                    ui.label(f'模型：{model.model_name}').classes('text-sm text-gray-500 mb-4')
+                    
+                    # 能力描述
+                    ui.label('能力描述').classes('text-sm font-bold mt-4')
+                    ui.label('描述这个模型擅长什么，系统会用这些信息来智能路由请求').classes('text-xs text-gray-400 mb-2')
+                    desc_input = ui.textarea(
+                        value=model.capability_description or '',
+                        placeholder='例如：擅长代码生成、算法实现、技术问答、数据分析、数学推理',
+                        rows=4
+                    ).classes('w-full')
+                    
+                    # 能力标签
+                    ui.label('能力标签').classes('text-sm font-bold mt-6')
+                    ui.label('选择这个模型支持的能力类型').classes('text-xs text-gray-400 mb-2')
+                    
+                    current_tags = model.capability_tags or []
+                    tag_checkboxes = {}
+                    with ui.row().classes('gap-2 flex-wrap'):
+                        for tag_key, tag_label in tag_options.items():
+                            tag_checkboxes[tag_key] = ui.checkbox(
+                                tag_label,
+                                value=tag_key in current_tags
+                            )
+                    
+                    # 按钮
+                    with ui.row().classes('justify-end gap-2 mt-6'):
+                        ui.button('取消', on_click=dialog.close).props('outline')
+                        ui.button('保存', on_click=lambda: save_capability()).props('color=primary')
+                
+                async def save_capability():
+                    """保存模型能力配置"""
+                    new_desc = desc_input.value.strip()
+                    new_tags = [tag for tag, cb in tag_checkboxes.items() if cb.value]
+                    
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(
+                            select(ModelCatalog).where(ModelCatalog.id == model_id)
+                        )
+                        m = result.scalar_one_or_none()
+                        if m:
+                            m.capability_description = new_desc
+                            m.capability_tags = new_tags
+                            await session.commit()
+                            ui.notify('模型能力配置已保存', type='positive')
+                            dialog.close()
+                        else:
+                            ui.notify('模型不存在', type='negative')
+                
+                dialog.open()
 
             with ui.row().classes('items-center justify-between w-full'):
                 ui.label('账号模型管理').classes('text-3xl font-bold text-gray-800')

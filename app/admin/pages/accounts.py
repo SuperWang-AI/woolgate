@@ -60,15 +60,14 @@ class AccountsPage(BasePage):
             with ui.row().classes('items-center justify-between w-full'):
                 ui.label('账号模型管理').classes('text-3xl font-bold text-gray-800')
                 with ui.row().classes('gap-2'):
-                    from app.admin.admin import show_account_dialog
-                    ui.button('新增账号', on_click=lambda: show_account_dialog()).props('color=primary size=lg')
+                    ui.button('新增账号', on_click=lambda: ui.notify('功能开发中...', type='info')).props('color=primary size=lg')
 
             accounts = self.accounts
             account_models = self.account_models
 
             def mask_key(acc):
                 """密钥脱敏：已配置显示首尾，未配置显示占位"""
-                from app.admin.admin import encryption_service
+                from app.utils.encryption import encryption_service
                 if not acc.api_key_encrypted:
                     return '未配置密钥'
                 try:
@@ -135,7 +134,7 @@ class AccountsPage(BasePage):
                                                  color='positive' if acc.is_enable else 'negative').props(f'data-acc-badge="{acc.id}"').classes('text-xs')
                                         if not getattr(acc, 'key_verified', True):
                                             ui.badge('⚠ Key未验证', color='warning').props(f'data-acc-keywarn="{acc.id}"').classes('text-xs')
-                                        from app.admin.admin import show_account_dialog, toggle_account_enable
+                                        # from app.admin.admin import show_account_dialog, toggle_account_enable
                                         ui.button('编辑', on_click=lambda aid=acc.id: show_account_dialog(account_id=aid)).props('outline size=xs color=primary').classes('text-xs').on('click', lambda: None, ['stop'])
                                         ui.button('停用', on_click=lambda aid=acc.id: toggle_account_enable(aid, False)).props(f'outline size=xs color=warning data-acc-btn="{acc.id}" data-acc-action="disable"').classes('text-xs' + ('' if acc.is_enable else ' hidden')).on('click', lambda: None, ['stop'])
                                         ui.button('启用', on_click=lambda aid=acc.id: toggle_account_enable(aid, True)).props(f'outline size=xs color=positive data-acc-btn="{acc.id}" data-acc-action="enable"').classes('text-xs' + ('' if not acc.is_enable else ' hidden')).on('click', lambda: None, ['stop'])
@@ -152,7 +151,7 @@ class AccountsPage(BasePage):
                                                 ui.space()
                                                 ui.button('添加模型', on_click=lambda aid=acc.id: show_account_dialog(account_id=aid)) \
                                                     .props('outline size=xs color=orange no-caps').classes('text-xs').on('click', lambda: None, ['stop'])
-                                            from app.admin.admin import show_model_capability_dialog, toggle_model_active, _type_label
+                                            from app.admin.admin import _type_label
                                             for model in models:
                                                 m_cls = 'w-full shadow-sm cursor-pointer hover:bg-gray-100 transition-colors wg-row-click' + ('' if model.is_active else ' opacity-60')
                                                 with ui.card().classes(m_cls).props(f'data-model-card="{model.id}"').on('click', lambda mid=model.id: show_model_capability_dialog(mid)):

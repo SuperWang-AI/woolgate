@@ -438,3 +438,21 @@ async def apply_onboard_profile(answers: dict):
         from app.pipeline.config import PipelineConfig
         PipelineConfig.invalidate_cache()
     return ok, profile_name
+
+
+# ========== 启动引导判断 ==========
+
+async def needs_onboard(request=None) -> bool:
+    """A2 引导触发条件：未完成引导 且（全新安装无账号 或 URL 带 ?onboard=1 强制预览）；
+    预览模式仅在尚未完成引导时生效——应用成功后即使 URL 仍带 onboard=1 也进入仪表盘"""
+    preview = bool(request and request.query_params.get('onboard') == '1')
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(SystemConfig).where(SystemConfig.id == 1))
+        config = result.scalar_one_or_none()
+        onboarded = bool(config and getattr(config, "onboarded", False))
+        if onboarded:
+            return False
+        if not preview:
+            cnt = (await session.execute(select(func.count(ModelAccount.id)))).scalar() or 0
+            return cnt == 0
+        return True

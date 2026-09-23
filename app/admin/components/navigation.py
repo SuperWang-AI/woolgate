@@ -103,8 +103,19 @@ def render_navigation(active_key: str = "home"):
     Args:
         active_key: 当前激活的导航项
     """
-    from app.admin.admin import NAV_PAGES, nav_registry, spa_navigate
-    from app.admin.utils import init_spa_state
+    from app.extensions.sdk import nav_registry
+    from app.admin.utils import spa_navigate, init_spa_state
+    
+    # 导航页面定义（label, path, key）
+    NAV_PAGES = [
+        ('首页', '/', 'home'),
+        ('🆓 免费向导', '/wizard', 'wizard'),
+        ('账号管理', '/accounts', 'accounts'),
+        ('系统配置', '/config', 'config'),
+        ('管线策略', '/pipeline', 'pipeline'),
+        ('请求日志', '/logs', 'logs'),
+        ('插件管理', '/plugins', 'plugins'),
+    ]
     
     render_page_head()
     

@@ -135,31 +135,31 @@ def create_ui():
 
         with ui.tab_panels(tabs, value=active_key).classes('w-full'):
             with ui.tab_panel('home'):
-                page = DashboardPage(request=request)
+                page = DashboardPage(None, {}, request=request)
                 await page.load()
                 await page.render()
             with ui.tab_panel('wizard'):
-                page = WizardPage()
+                page = WizardPage(None, {})
                 await page.load()
                 await page.render()
             with ui.tab_panel('accounts'):
-                page = AccountsPage()
+                page = AccountsPage(None, {})
                 await page.load()
                 await page.render()
             with ui.tab_panel('config'):
-                page = ConfigPage()
+                page = ConfigPage(None, {})
                 await page.load()
                 await page.render()
             with ui.tab_panel('pipeline'):
-                page = PipelinePage()
+                page = PipelinePage(None, {})
                 await page.load()
                 await page.render()
             with ui.tab_panel('logs'):
-                page = LogsPage()
+                page = LogsPage(None, {})
                 await page.load()
                 await page.render()
             with ui.tab_panel('plugins'):
-                page = PluginsPage(request=request)
+                page = PluginsPage(None, {}, request=request)
                 await page.load()
                 await page.render()
 
@@ -167,6 +167,36 @@ def create_ui():
     async def index(request: Request):
         """首页（SPA）"""
         await build_spa('home', request)
+    
+    @ui.page('/wizard')
+    async def wizard_page(request: Request):
+        """免费向导（SPA）"""
+        await build_spa('wizard', request)
+    
+    @ui.page('/accounts')
+    async def accounts_page(request: Request):
+        """账号管理（SPA）"""
+        await build_spa('accounts', request)
+    
+    @ui.page('/config')
+    async def config_page(request: Request):
+        """系统配置（SPA）"""
+        await build_spa('config', request)
+    
+    @ui.page('/pipeline')
+    async def pipeline_page(request: Request):
+        """管线策略（SPA）"""
+        await build_spa('pipeline', request)
+    
+    @ui.page('/logs')
+    async def logs_page(request: Request):
+        """请求日志（SPA）"""
+        await build_spa('logs', request)
+    
+    @ui.page('/plugins')
+    async def plugins_page(request: Request):
+        """插件管理（SPA）"""
+        await build_spa('plugins', request)
 
 def init_ui(fastapi_app):
     """初始化NiceGUI并挂载到FastAPI"""

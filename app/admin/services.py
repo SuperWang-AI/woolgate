@@ -13,7 +13,13 @@ from datetime import datetime, timedelta, timezone
 
 from app.models import AsyncSessionLocal
 from app.models.database import SystemConfig, ModelAccount, RequestLog
-from app.utils.time_utils import get_today_start_utc
+# 时间工具函数
+CN_TZ = timezone(timedelta(hours=8))
+
+def get_today_start_utc():
+    """本地今天 00:00 对应的 UTC 时间（naive），用于按本地日统计"""
+    local_midnight = datetime.now(CN_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_midnight.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 # ========== 仪表盘数据 ==========

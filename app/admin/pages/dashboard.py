@@ -20,7 +20,8 @@ class DashboardPage(BasePage):
 
     async def _needs_onboard(self) -> bool:
         """判断是否需要启动引导"""
-        from app.models.database import AsyncSessionLocal, SystemConfig, ModelAccount
+        from app.models import AsyncSessionLocal
+        from app.models.database import SystemConfig, ModelAccount
         from sqlalchemy import select, func
         
         preview = bool(self.request and self.request.query_params.get('onboard') == '1')

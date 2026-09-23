@@ -52,7 +52,7 @@ class AccountsPage(BasePage):
                         svc = ModelCatalogService(session)
                         count = await svc.recompute_all_embeddings(embed_svc)
                     ui.notify(f'已重算 {count} 个模型能力向量', type='positive')
-                    from app.admin.admin import spa_navigate
+                    from app.admin.utils import spa_navigate
                     spa_navigate('accounts')
                 except Exception as e:
                     ui.notify(f'重算失败: {e}', type='negative')

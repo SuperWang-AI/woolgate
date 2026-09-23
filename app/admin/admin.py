@@ -375,30 +375,7 @@ def create_ui():
     PATH_TO_KEY = {'/': 'home', '/wizard': 'wizard', '/accounts': 'accounts', '/config': 'config', '/pipeline': 'pipeline', '/logs': 'logs', '/plugins': 'plugins'}
     KEY_TO_PATH = {v: k for k, v in PATH_TO_KEY.items()}
 
-    def spa_navigate(key: str, active: str = None):
-        """SPA内导航：切换tab value + 同步URL，不触发整页刷新"""
-        nonlocal _plugin_active
-        if _tabs_ref is not None:
-            _tabs_ref.value = key
-        # 同步URL（不刷新页面）
-        if key == 'plugins' and active:
-            ui.run_javascript(f"history.replaceState(null, '', '/admin/plugins?active={active}')")
-            _plugin_active = active
-            # 触发插件页面刷新（SPA内切换插件）
-            if _plugin_refresh is not None:
-                _plugin_refresh()
-        else:
-            path = KEY_TO_PATH.get(key, '/')
-            ui.run_javascript(f"history.replaceState(null, '', '/admin{path}')")
-            if key == 'plugins':
-                # 切回插件管理页面：重置active并刷新
-                _plugin_active = None
-                if _plugin_refresh is not None:
-                    _plugin_refresh()
-            else:
-                _plugin_active = None
-        # 关闭插件下拉菜单
-        ui.run_javascript("var dd = document.getElementById('plugin-dropdown-menu'); if(dd) dd.classList.add('hidden');")
+    from app.admin.utils import spa_navigate, init_spa_state, set_plugin_active, set_plugin_refresh
 
     # 插件系统 v2：UI 扩展点注册表
     from app.extensions.sdk import (
@@ -517,6 +494,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
             with ui.row().classes('items-center gap-1'):
                 with ui.tabs().props('dense active-color=white indicator-color=white text-color=white').classes('gap-1') as tabs:
                     _tabs_ref = tabs  # 保存tabs引用供SPA导航使用
+                    # 初始化 utils.py 中的 SPA 全局状态
+                    from app.admin.utils import init_spa_state
+                    init_spa_state(tabs)
                     # 内置页面tab（除了插件管理）
                     for label, path, key in NAV_PAGES:
                         if key != 'plugins':
@@ -995,9 +975,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
         """插件管理视图（SPA tab 面板内容）"""
         nonlocal _plugin_refresh
         from app.admin.pages.plugins import PluginsPage
+        from app.admin.utils import set_plugin_refresh, set_plugin_active
         page = PluginsPage(db=None, config=None, request=request, plugin_active=_plugin_active)
         await page.render()
         _plugin_refresh = page.refresh  # 保存 refresh 函数供 spa_navigate 调用
+        set_plugin_refresh(page.refresh)  # 同步到 utils.py 全局状态
+        set_plugin_active(_plugin_active)  # 同步当前插件激活状态
 
 def _type_label(t):
     """模型类型显示汉化"""

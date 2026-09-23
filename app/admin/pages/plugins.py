@@ -57,7 +57,7 @@ class PluginsPage(BasePage):
                 with ui.column().classes('w-full max-w-[1440px] mx-auto p-5 gap-4'):
                     # 插件页面顶部：返回按钮 + 插件名称
                     with ui.row().classes('items-center justify-between w-full'):
-                        from app.admin.admin import spa_navigate
+                        from app.admin.utils import spa_navigate
                         with ui.row().classes('items-center gap-3'):
                             ui.button('← 返回插件管理', on_click=lambda: spa_navigate('plugins')).props('outline color=primary')
                             ui.label(plugin_info['label'] if plugin_info else active_plugin).classes('text-2xl font-bold text-gray-800')

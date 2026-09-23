@@ -1,8 +1,14 @@
 # WoolGate · AI 聚合网关
 
+![Version](https://img.shields.io/badge/version-v0.8.0-blue)
+![License](https://img.shields.io/badge/license-Apache%202.0-green)
+![Docker](https://img.shields.io/badge/Docker-Ready-blue)
+
 > **10 秒接入全部免费大模型。**
 
 > **English**: [README.md](README.md) · **中文**: 以下正文
+
+> 📦 **最新版本**: [v0.8.0](https://github.com/SuperWang-AI/woolgate/releases/tag/v0.8.0) - 前端架构重构与插件系统完善
 
 **WoolGate 是一个自托管开源 AI 聚合网关：把国内厂商免费大模型 API 聚合到一个 OpenAI 兼容端点，智能路由省钱，30 秒 Docker 部署，本地模型兜底。Apache-2.0。**
 

@@ -1,8 +1,14 @@
 # WoolGate · AI Aggregation Gateway
 
+![Version](https://img.shields.io/badge/version-v0.8.0-blue)
+![License](https://img.shields.io/badge/license-Apache%202.0-green)
+![Docker](https://img.shields.io/badge/Docker-Ready-blue)
+
 > **10 seconds to connect all free LLMs.**
 
 > **中文**：[README.zh-CN.md](README.zh-CN.md) · **English**: below
+
+> 📦 **Latest Release**: [v0.8.0](https://github.com/SuperWang-AI/woolgate/releases/tag/v0.8.0) - Frontend Architecture Refactor & Plugin System Enhancement
 
 **WoolGate is a self-hosted, open-source AI aggregation gateway: it unifies free LLM APIs from Chinese vendors behind one OpenAI-compatible endpoint, with smart cost-saving routing, 30-second Docker deployment, and local-model fallback. Apache-2.0.**
 

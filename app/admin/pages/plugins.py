@@ -37,6 +37,7 @@ class PluginsPage(BasePage):
         @ui.refreshable
         async def render_content():
             """统一渲染：根据 plugin_active 全局状态决定显示插件详情或插件管理"""
+            self.refresh = render_content.refresh  # 暴露 refresh 函数供外部调用
             if self.plugin_active:
                 # ═══ 插件详情页面 ═══
                 from app.extensions.sdk import page_registry, nav_registry

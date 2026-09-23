@@ -993,9 +993,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino 
 
     async def plugins_view(request: Optional[Request] = None):
         """插件管理视图（SPA tab 面板内容）"""
+        nonlocal _plugin_refresh
         from app.admin.pages.plugins import PluginsPage
         page = PluginsPage(db=None, config=None, request=request, plugin_active=_plugin_active)
         await page.render()
+        _plugin_refresh = page.refresh  # 保存 refresh 函数供 spa_navigate 调用
 
 def _type_label(t):
     """模型类型显示汉化"""

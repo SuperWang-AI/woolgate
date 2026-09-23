@@ -29,7 +29,7 @@ WoolGate's smart routing is designed for exactly these three types of waste: **f
 - **Local Model Support** — built-in Ollama support; local models handle embedding, task classification, and simple Q&A, keeping data on-premises.
 - **Streaming Safety** — account is locked once SSE streaming starts, preventing context fragmentation from mid-stream model switching.
 - **Quota Prediction & Smart Retry** — predicts remaining quota before a request to avoid mid-stream exhaustion; exponential backoff + jitter retry prevents thundering herds.
-- **Web Admin Panel** — Free Tier Wizard, Account Management, Model Catalog, Pipeline Policy, System Config, Plugins, and Logs in one visual console.
+- **Web Admin Panel** — Free Tier Wizard, Account Management, Model Catalog, Pipeline Policy, System Config, Plugins, and Logs in one visual console. Built with a clean layered architecture (services / pages / components / admin.py) for maintainability and extensibility.
 - **Plugin System & SPI** — 9 lifecycle hooks + 6 SPI extension points + UI injection slots. Load plugins via `WOOLGATE_PLUGINS` env var; failed plugins are skipped without blocking startup. Build custom routing, security, monitoring, or UI extensions without forking the core.
 - **One-Command Docker Deployment** — out of the box, image trimmed to ~400MB.
 

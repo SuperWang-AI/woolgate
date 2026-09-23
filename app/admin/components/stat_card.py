@@ -6,19 +6,23 @@ from __future__ import annotations
 from nicegui import ui
 
 
-def render_stat_card(title: str, value: str, subtitle: str = "", color: str = "blue"):
+def render_stat_card(icon: str, icon_color: str, title: str, value: str, sub=None):
     """
     渲染统计卡片
     
     Args:
+        icon: 图标名称
+        icon_color: 图标颜色（如 'blue-500'）
         title: 卡片标题
         value: 主数值
-        subtitle: 副标题
-        color: 主题色
+        sub: 副标题（可以是字符串或列表，每行一条）
     """
-    # TODO: 从 admin.py 迁移统计卡片 UI
-    with ui.card().classes('w-full'):
-        ui.label(title)
-        ui.label(value)
-        if subtitle:
-            ui.label(subtitle)
+    with ui.card().classes('flex-1 stat-card shadow-lg').style('height:170px'):
+        with ui.column().classes('w-full items-center gap-1 justify-center').style('height:100%'):
+            ui.icon(icon, size='2.5rem').classes(f'text-{icon_color}')
+            ui.label(title).classes('text-gray-500 text-sm')
+            ui.label(value).classes('text-3xl font-bold').style('min-height:36px; display:flex; align-items:center; justify-content:center;')
+            if sub:
+                lines = sub if isinstance(sub, (list, tuple)) else [sub]
+                for line in lines:
+                    ui.label(line).classes('text-xs text-gray-500 text-center').style('line-height:1.4')

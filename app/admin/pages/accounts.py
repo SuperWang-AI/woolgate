@@ -57,10 +57,116 @@ class AccountsPage(BasePage):
                 except Exception as e:
                     ui.notify(f'重算失败: {e}', type='negative')
 
+            # ── 弹窗与操作函数（占位实现，待后续完善） ──
+            
+            def _type_label(model_type):
+                """模型类型汉化标签"""
+                type_map = {
+                    'chat': '对话',
+                    'embedding': '向量',
+                    'vision': '视觉',
+                    'image': '图像',
+                    'audio': '音频',
+                    'rerank': '重排',
+                }
+                return type_map.get(model_type, model_type or '未知')
+            
+            async def toggle_account_enable(account_id, enable):
+                """切换账号启用状态"""
+                try:
+                    from app.models.database import AsyncSessionLocal, ModelAccount
+                    async with AsyncSessionLocal() as session:
+                        acc = await session.get(ModelAccount, account_id)
+                        if acc:
+                            acc.is_enable = enable
+                            await session.commit()
+                    ui.notify('操作成功', type='positive')
+                    from app.admin.utils import spa_navigate
+                    spa_navigate('accounts')
+                except Exception as e:
+                    ui.notify(f'操作失败: {e}', type='negative')
+            
+            async def toggle_model_active(model_id, active):
+                """切换模型启用状态"""
+                try:
+                    from app.models.database import AsyncSessionLocal, ModelCatalog
+                    async with AsyncSessionLocal() as session:
+                        model = await session.get(ModelCatalog, model_id)
+                        if model:
+                            model.is_active = active
+                            await session.commit()
+                    ui.notify('操作成功', type='positive')
+                    from app.admin.utils import spa_navigate
+                    spa_navigate('accounts')
+                except Exception as e:
+                    ui.notify(f'操作失败: {e}', type='negative')
+            
+            async def show_account_dialog(account_id=None):
+                """新增/编辑账号弹窗（简化版）"""
+                edit_data = None
+                if account_id:
+                    for acc in self.accounts:
+                        if acc.id == account_id:
+                            edit_data = acc
+                            break
+
+                with ui.dialog() as dialog, ui.card().classes('w-full max-w-[600px]'):
+                    ui.label('编辑账号' if edit_data else '新增账号').classes('text-xl font-bold mb-4')
+                    
+                    with ui.column().classes('gap-3 w-full'):
+                        vendor_input = ui.input('厂商名称', value=edit_data.vendor if edit_data else '')
+                        model_input = ui.input('默认模型名', value=edit_data.default_model_name if edit_data else '')
+                        api_key_input = ui.input('API Key', value='').props('type=password')
+                        base_url_input = ui.input('Base URL', value=edit_data.base_url if edit_data else '')
+                        enable_switch = ui.switch('启用账号', value=edit_data.is_enable if edit_data else True)
+                    
+                    with ui.row().classes('gap-2 justify-end mt-4'):
+                        ui.button('取消', on_click=dialog.close).props('outline')
+                        
+                        async def save():
+                            try:
+                                from app.models.database import AsyncSessionLocal, ModelAccount
+                                from app.utils.encryption import encryption_service
+                                
+                                async with AsyncSessionLocal() as session:
+                                    if edit_data:
+                                        acc = await session.get(ModelAccount, account_id)
+                                        acc.vendor = vendor_input.value
+                                        acc.default_model_name = model_input.value
+                                        if api_key_input.value:
+                                            acc.api_key_encrypted = encryption_service.encrypt(api_key_input.value)
+                                        acc.base_url = base_url_input.value
+                                        acc.is_enable = enable_switch.value
+                                    else:
+                                        acc = ModelAccount(
+                                            vendor=vendor_input.value,
+                                            default_model_name=model_input.value,
+                                            api_key_encrypted=encryption_service.encrypt(api_key_input.value),
+                                            base_url=base_url_input.value,
+                                            is_enable=enable_switch.value,
+                                        )
+                                        session.add(acc)
+                                    await session.commit()
+                                
+                                ui.notify('保存成功', type='positive')
+                                dialog.close()
+                                from app.admin.utils import spa_navigate
+                                spa_navigate('accounts')
+                            except Exception as e:
+                                ui.notify(f'保存失败: {e}', type='negative')
+                        
+                        ui.button('保存', on_click=save).props('color=primary')
+                
+                dialog.open()
+            
+            async def show_model_capability_dialog(model_id):
+                """模型能力配置弹窗（占位）"""
+                ui.notify('模型能力配置功能开发中...', type='info')
+
             with ui.row().classes('items-center justify-between w-full'):
                 ui.label('账号模型管理').classes('text-3xl font-bold text-gray-800')
                 with ui.row().classes('gap-2'):
-                    ui.button('新增账号', on_click=lambda: ui.notify('功能开发中...', type='info')).props('color=primary size=lg')
+                    ui.button('新增账号', on_click=lambda: show_account_dialog()).props('color=primary size=lg')
 
             accounts = self.accounts
             account_models = self.account_models
@@ -151,7 +257,7 @@ class AccountsPage(BasePage):
                                                 ui.space()
                                                 ui.button('添加模型', on_click=lambda aid=acc.id: show_account_dialog(account_id=aid)) \
                                                     .props('outline size=xs color=orange no-caps').classes('text-xs').on('click', lambda: None, ['stop'])
-                                            from app.admin.admin import _type_label
+                                            # from app.admin.admin import _type_label  # 已在本文件中定义
                                             for model in models:
                                                 m_cls = 'w-full shadow-sm cursor-pointer hover:bg-gray-100 transition-colors wg-row-click' + ('' if model.is_active else ' opacity-60')
                                                 with ui.card().classes(m_cls).props(f'data-model-card="{model.id}"').on('click', lambda mid=model.id: show_model_capability_dialog(mid)):

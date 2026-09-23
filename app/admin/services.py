@@ -336,3 +336,105 @@ async def get_account_models():
         for cat in result.scalars().all():
             account_models.setdefault(cat.account_id, []).append(cat)
         return account_models
+
+
+# ========== 系统配置保存 ==========
+
+async def save_system_config(config_data: dict) -> bool:
+    """保存系统配置"""
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(SystemConfig).where(SystemConfig.id == 1))
+        config = result.scalar_one_or_none()
+        
+        if config:
+            for key, value in config_data.items():
+                if hasattr(config, key):
+                    setattr(config, key, value)
+            await session.commit()
+            return True
+        return False
+
+
+# ========== 启动引导配置 ==========
+
+ONBOARD_ANSWERS_CN = {
+    "way": {"personal": "个人自用省钱", "team": "企业私有化部署"},
+    "saving": {"free": "免费模型优先", "local": "本地模型优先"},
+    "resource": {"local": "本地大模型就绪", "key": "已有API Key", "none": "都还没有"},
+}
+
+def build_onboarding_data(answers: dict):
+    """
+    A2 引导映射 v2.1（纯函数，便于测试）：3 个回答 → 推荐策略配置数据。
+    
+    设计原则（消灭用户侧配置，贴合省钱机制）：
+    - 路由统一 hybrid（智能路由：向量快速路径 + LLM 兜底），LLM 智能判题 + 上下文压缩默认开启
+    - 选号：个人 → 免费额度优先；企业 → 成本优先（付费为主）
+    - 省钱方式：免费云端模型优先 → 摘要压缩走云端免费模型（glm-4-flash）；
+                本地模型优先 → 开启 Ollama，判题/压缩/简单问答走本地（零成本、数据不出域）
+    - 已有资源：本地大模型就绪 → 顺带开启 Ollama 调度；否则不强制。完成引导后统一跳转免费向导（向导回显/新增/本地首个卡片）
+    
+    Returns:
+        (config_data, profile_name)
+    """
+    way = answers.get("way", "personal")
+    saving = answers.get("saving", "free")
+    resource = answers.get("resource", "none")
+
+    router = "hybrid"
+    selector = "free-first" if way == "personal" else "cost-first"
+
+    if saving == "local":
+        context = "summary"
+        context_config = {
+            "summary_provider": "local",
+            "summary_trigger_turns": 20,
+            "summary_trigger_tokens": 4000,
+            "summary_window_turns": 3,
+        }
+    else:
+        context = "summary"
+        context_config = {
+            "summary_provider": "cloud",
+            "summary_model": "glm-4-flash",
+            "summary_trigger_turns": 20,
+            "summary_trigger_tokens": 4000,
+            "summary_window_turns": 3,
+        }
+
+    data = {
+        "router_strategy": router,
+        "router_config_json": {"threshold_high": 0.65, "threshold_low": 0.55},
+        "selector_strategy": selector,
+        "context_strategy": context,
+        "context_config_json": context_config,
+        "onboarded": True,
+    }
+    if saving == "local" or resource == "local":
+        data["ollama_enabled"] = True
+
+    profile_name = "·".join([
+        ONBOARD_ANSWERS_CN["way"].get(way, "个人自用省钱"),
+        ONBOARD_ANSWERS_CN["saving"].get(saving, "免费模型优先"),
+        ONBOARD_ANSWERS_CN["resource"].get(resource, "都还没有"),
+    ])
+    
+    return data, profile_name
+
+
+# ========== 启动引导应用 ==========
+
+async def apply_onboard_profile(answers: dict):
+    """
+    A2 启动意图引导：根据 3 个回答自动套用推荐策略模板。
+    
+    Returns:
+        (success, profile_name)
+    """
+    data, profile_name = build_onboarding_data(answers)
+    ok = await save_system_config(data)
+    if ok:
+        # 使管线配置缓存失效，新策略立即生效
+        from app.pipeline.config import PipelineConfig
+        PipelineConfig.invalidate_cache()
+    return ok, profile_name

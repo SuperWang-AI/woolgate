@@ -37,12 +37,84 @@ class DashboardPage(BasePage):
             return True
 
     async def _render_onboard(self, on_done):
-        """启动引导面板（简化版占位）"""
+        """启动引导面板：3 个问题 → 自动应用推荐策略模板（无整页刷新）"""
+        from app.admin.services import apply_onboard_profile
+        from app.admin.utils import spa_navigate
+        
+        step_idx = {"v": 0}
+        answers: dict = {}
+        steps = [
+            ("使用方式", "你主要怎么使用 WoolGate？",
+             [("personal", "个人自用省钱（免费薅羊毛，几乎零成本）"),
+              ("team", "团队/企业私有化部署（数据不出域，预算可控）")]),
+            ("省钱方式", "智能路由（LLM 智能判题 + 上下文压缩）系统默认开启，为你省 token。你希望优先用哪种资源来跑这些省钱动作？",
+             [("free", "免费云端模型（推荐：免费额度足够，无需额外配置）"),
+              ("local", "本地模型（Ollama：数据不出域，判题/压缩/简单问答零成本）")]),
+            ("已有资源", "你手头已有哪些资源？",
+             [("local", "本地大模型（Ollama）已就绪"),
+              ("key", "已有厂商 API Key"),
+              ("none", "都还没有")]),
+        ]
+        step_keys = ["way", "saving", "resource"]
+
         with ui.column().classes('w-full items-center p-6'):
             with ui.card().classes('w-full shadow-lg border-t-4 border-green-500 p-6').style('max-width:760px'):
-                ui.label('🐑 WoolGate AI 聚合网关').classes('text-2xl font-bold text-gray-800')
-                ui.label('启动引导功能开发中...').classes('text-sm text-gray-500 mt-1')
-                ui.button('跳过引导', on_click=on_done).props('color=primary')
+                with ui.row().classes('items-center gap-3 w-full'):
+                    ui.label('🐑 WoolGate AI 聚合网关').classes('text-2xl font-bold text-gray-800')
+                ui.label('回答 3 个问题，自动为你配好路由与调度策略——你只管用，配置交给系统。').classes('text-sm text-gray-500 mt-1')
+
+                @ui.refreshable
+                async def render_step():
+                    # 步骤指示器（带序号，随步骤切换刷新底色）
+                    with ui.row().classes('gap-2 mt-3 w-full'):
+                        for i, sl in enumerate([s[0] for s in steps]):
+                            active = i == step_idx['v']
+                            done = i < step_idx['v']
+                            ui.label(f'{i + 1}. {sl}').classes(
+                                'text-sm px-3 py-1 rounded-full '
+                                + ('bg-green-100 text-green-700 font-bold' if active
+                                   else ('text-gray-400' if done else 'text-gray-500'))
+                            )
+                    ui.separator().classes('my-4')
+                    title, desc, opts = steps[step_idx['v']]
+                    ui.label(title).classes('text-xl font-bold text-gray-800')
+                    ui.label(desc).classes('text-sm text-gray-500 mb-3')
+                    choices = {k: v for k, v in opts}
+                    key = step_keys[step_idx['v']]
+                    ui.radio(
+                        choices,
+                        value=answers.get(key),
+                        on_change=lambda e, k=key: answers.update({k: e.value}),
+                    ).props('stack').classes('gap-1')
+
+                    async def next_step():
+                        if step_idx['v'] < 2:
+                            await go(1)
+                        else:
+                            await finish()
+
+                    with ui.row().classes('w-full justify-between mt-6'):
+                        if step_idx['v'] > 0:
+                            ui.button('← 上一步', on_click=lambda: go(-1)).props('outline color=grey')
+                        if step_idx['v'] < 2:
+                            ui.button('下一步 →', on_click=next_step).props('color=primary size=lg')
+                        else:
+                            ui.button('完成并应用', on_click=finish).props('color=green size=lg')
+
+                async def go(delta: int):
+                    step_idx['v'] += delta
+                    await render_step.refresh()
+
+                async def finish():
+                    ok, profile = await apply_onboard_profile(answers)
+                    if ok:
+                        ui.notify(f'已应用智能配置：{profile}。可在「管线策略」页随时微调。', type='positive', position='top')
+                        # 统一走免费向导：本地大模型→向导首个卡片；已有 Key→向导粘贴/回显新增；都没有→向导领取免费额度
+                        spa_navigate('wizard')
+                    else:
+                        ui.notify('应用失败，请重试', type='negative')
+
+                await render_step()
 
     async def _render_dashboard(self):
         """首页仪表盘（引导完成后显示）"""

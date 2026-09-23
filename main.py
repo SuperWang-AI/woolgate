@@ -21,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 版本号（统一入口，开源发布前确定正式版本）
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 
 
 @asynccontextmanager

@@ -383,8 +383,8 @@ async def render_balance_page(request=None):
                                         "normal": "positive", "notice": "warning", "warning": "orange",
                                         "critical": "negative", "exhausted": "grey", "unknown": "grey"
                                     }.get(level, "grey")).props('outline')
-                                if account.default_model:
-                                    ui.label(f'默认模型: {account.default_model}').classes('text-sm text-gray-500')
+                                if account.default_model_name:
+                                    ui.label(f'默认模型: {account.default_model_name}').classes('text-sm text-gray-500')
                                 if account.balance_sync_date:
                                     ui.label(f'最后同步: {account.balance_sync_date}').classes('text-xs text-gray-400')
                                 else:

@@ -29,7 +29,7 @@ WoolGate's smart routing is designed for exactly these three types of waste: **f
 - **Local Model Support** — built-in Ollama support; local models handle embedding, task classification, and simple Q&A, keeping data on-premises.
 - **Streaming Safety** — account is locked once SSE streaming starts, preventing context fragmentation from mid-stream model switching.
 - **Quota Prediction & Smart Retry** — predicts remaining quota before a request to avoid mid-stream exhaustion; exponential backoff + jitter retry prevents thundering herds.
-- **Web Admin Panel** — Free Tier Wizard, Account Management, Model Catalog, Pipeline Policy, System Config, Plugins, and Logs in one visual console. Built with a clean layered architecture (services / pages / components / admin.py) for maintainability and extensibility.
+- **Web Admin Panel** — Free Tier Wizard, Account Management, Model Catalog, Pipeline Policy, System Config, Plugins, and Logs in one visual console. Built with a clean layered architecture (services / pages / components / admin.py) for maintainability and extensibility. Plugin navigation uses a hover dropdown menu for clean, scalable navigation as more plugins are added.
 - **Plugin System & SPI** — 9 lifecycle hooks + 6 SPI extension points + UI injection slots. Load plugins via `WOOLGATE_PLUGINS` env var; failed plugins are skipped without blocking startup. Build custom routing, security, monitoring, or UI extensions without forking the core.
 - **One-Command Docker Deployment** — out of the box, image trimmed to ~400MB.
 
@@ -134,7 +134,7 @@ WoolGate is built around a **socket-and-hook** extension architecture: every sta
 
 ### Plugin Management Console
 
-The admin panel includes a dedicated **Plugins** page with a visual socket overview — see exactly which hooks and SPIs are registered, which plugin owns each implementation, and click to jump to the plugin's configuration panel.
+The admin panel includes a dedicated **Plugins** page with a visual socket overview — see exactly which hooks and SPIs are registered, which plugin owns each implementation, and click to jump to the plugin's configuration panel. Plugins with UI pages appear in a hover dropdown menu in the navigation bar, keeping the nav clean as more plugins are added.
 
 ![Plugin Management — Socket Overview & Plugin Details](docs/assets/plugins-overview.png)
 
@@ -175,13 +175,18 @@ woolgate/
 ├── app/
 │   ├── models/          # Data models (vendor / account / model / log)
 │   ├── pipeline/        # Request pipeline (routing / selectors / context / executor)
-│   ├── extensions/      # Extension layer (hooks / SDK / SPI / plugin loader)
+│   ├── extensions/       # Extension layer (hooks / SDK / SPI / plugin loader)
 │   ├── routes/          # OpenAI-compatible API
 │   ├── services/        # Business services (wizard / catalog / accounts / quota / session / health)
-│   ├── ui/              # Admin panel
+│   ├── admin/           # Admin panel (layered architecture)
+│   │   ├── admin.py     # Main entry (SPA root, ~180 lines)
+│   │   ├── utils.py     # SPA state management
+│   │   ├── services.py   # Admin data services (~460 lines)
+│   │   ├── pages/       # Page classes (Dashboard, Wizard, Accounts, Config, Pipeline, Logs, Plugins)
+│   │   └── components/  # Reusable components (Navigation, StatCard)
 │   └── config.py        # Configuration management
 ├── docs/extensions/     # Extension contract docs (01~06)
-├── examples/plugins/    # Example plugin templates
+├── plugins/             # Built-in plugins (balance_monitor, hello_world)
 ├── static/              # Static assets (routing demo page, etc.)
 ├── tests/               # Unit tests (pytest, CI regression)
 ├── main.py              # Main application entry
@@ -212,6 +217,7 @@ The open-source edition targets individuals and self-use: it aggregates free quo
 - **Quota budgets** — per-tenant usage stats with auto-disable on over-limit
 - **Audit & billing** — per-tenant isolated logs and cost details
 - **Local smart saving mode** — local embedding + local classification + local simple Q&A, data never leaves your network
+- **Smart cost routing** — simple tasks use cheap tokens, complex tasks use expensive tokens — spend money where it matters
 
 The Enterprise Edition entrance is reserved in the open-source version and is planned for release soon. For early access, contact the author via the project home page.
 

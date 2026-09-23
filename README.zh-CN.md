@@ -29,7 +29,7 @@ WoolGate 的智能路由正是为这三类浪费而设计：**免费优先、按
 - **本地模型接入** — 内置 Ollama 支持，本地模型用于 embedding、任务判题与简单直答，数据不出域。
 - **流式安全** — SSE 出流后锁定账号，杜绝流式响应中途切换导致上下文割裂。
 - **额度预判与智能重试** — 请求前预判剩余额度避免中途耗尽；失败指数退避 + 随机抖动重试，防止雪崩。
-- **Web 管理后台** — 免费向导、账号管理、模型菜单、管线策略、系统配置、日志一站式可视化管理。采用清晰的分层架构（services / pages / components / admin.py），易于维护和扩展。
+- **Web 管理后台** — 免费向导、账号管理、模型菜单、管线策略、系统配置、插件管理、日志一站式可视化管理。采用清晰的分层架构（services / pages / components / admin.py），易于维护和扩展。插件导航使用悬停下拉菜单，随着插件数量增加保持导航栏简洁。
 - **Docker 一键部署** — 开箱即用，镜像已精简至 400MB 级。
 
 ## 快速开始
@@ -126,13 +126,18 @@ woolgate/
 ├── app/
 │   ├── models/          # 数据模型（厂商 / 账号 / 模型 / 日志）
 │   ├── pipeline/        # 请求管线（路由 / 选择器 / 上下文管理 / 执行器）
-│   ├── extensions/      # 扩展层（hooks / SDK / SPI / 插件加载器）
+│   ├── extensions/       # 扩展层（hooks / SDK / SPI / 插件加载器）
 │   ├── routes/          # OpenAI 兼容 API
 │   ├── services/        # 业务服务（免费向导 / 模型目录 / 账号 / 余额 / 会话 / 健康度）
-│   ├── ui/              # 管理后台
+│   ├── admin/           # 管理后台（分层架构）
+│   │   ├── admin.py     # 主入口（SPA 根，约 180 行）
+│   │   ├── utils.py     # SPA 状态管理
+│   │   ├── services.py   # 管理后台数据服务（约 460 行）
+│   │   ├── pages/       # 页面类（Dashboard, Wizard, Accounts, Config, Pipeline, Logs, Plugins）
+│   │   └── components/  # 可复用组件（Navigation, StatCard）
 │   └── config.py        # 配置管理
 ├── docs/extensions/     # 扩展契约文档（01~06）
-├── examples/plugins/    # 示例插件模板
+├── plugins/             # 内置插件（balance_monitor, hello_world）
 ├── static/              # 静态资源（路由演示页等）
 ├── tests/               # 单元测试（pytest，可 CI 回归）
 ├── main.py              # 主应用入口
@@ -162,6 +167,7 @@ woolgate/
 - **配额预算**：按租户统计用量，超限自动停用
 - **审计与账单**：按租户隔离日志与费用明细
 - **本地智能省钱模式**：本地 embedding + 本地判题 + 本地简单直答，数据不出域
+- **智能成本路由**：简单任务用便宜 token，复杂任务用贵 token，钱都花在刀刃上
 
 企业版在开源版中已预留升级入口，计划即将推出；如需提前接入，请通过项目主页联系作者。
 

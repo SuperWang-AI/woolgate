@@ -26,8 +26,11 @@ def init_spa_state(tabs_ref, plugin_active=None, plugin_refresh=None):
     """初始化 SPA 导航状态（在 create_ui 中调用）"""
     global _tabs_ref, _plugin_active, _plugin_refresh
     _tabs_ref = tabs_ref
-    _plugin_active = plugin_active
-    _plugin_refresh = plugin_refresh
+    # 只有当 plugin_active 参数不是 None 时才覆盖，避免覆盖已设置的值
+    if plugin_active is not None:
+        _plugin_active = plugin_active
+    if plugin_refresh is not None:
+        _plugin_refresh = plugin_refresh
 
 
 def set_plugin_active(active: str = None):
@@ -56,6 +59,9 @@ def spa_navigate(key: str, active: str = None):
     if key == 'plugins' and active:
         ui.run_javascript(f"history.replaceState(null, '', '/admin/plugins?active={active}')")
         _plugin_active = active
+        # 保存 active 参数到 user storage（用于页面刷新后恢复）
+        from nicegui import app
+        app.storage.user['plugin_active'] = active
         # 触发插件页面刷新（SPA内切换插件）
         if _plugin_refresh is not None:
             _plugin_refresh()
@@ -65,6 +71,9 @@ def spa_navigate(key: str, active: str = None):
         if key == 'plugins':
             # 切回插件管理页面：重置active并刷新
             _plugin_active = None
+            # 清除 user storage 中的 active 参数
+            from nicegui import app
+            app.storage.user['plugin_active'] = None
             if _plugin_refresh is not None:
                 _plugin_refresh()
         else:

@@ -126,6 +126,7 @@ def render_navigation(active_key: str = "home"):
         with ui.row().classes('items-center gap-1'):
             with ui.tabs().props('dense active-color=white indicator-color=white text-color=white').classes('gap-1') as tabs:
                 # 初始化 utils.py 中的 SPA 全局状态
+                # 注意：不要覆盖 build_spa 中已设置的 plugin_active
                 init_spa_state(tabs)
                 # 内置页面tab（除了插件管理）
                 for label, path, key in NAV_PAGES:

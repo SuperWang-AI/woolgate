@@ -107,6 +107,9 @@ def create_ui():
         # 从URL解析初始插件active状态
         if request is not None and active_key == 'plugins':
             _plugin_active = request.query_params.get('active', None)
+            # 同步到 utils.py 中的全局变量
+            from app.admin.utils import set_plugin_active
+            set_plugin_active(_plugin_active)
         
         # 从 components 导入导航栏
         from app.admin.components.navigation import render_navigation
@@ -162,6 +165,8 @@ def create_ui():
                 page = PluginsPage(None, {}, request=request)
                 await page.load()
                 await page.render()
+                # 设置插件页面刷新回调（SPA内切换插件时调用）
+                set_plugin_refresh(page.refresh)
 
     @ui.page('/')
     async def index(request: Request):

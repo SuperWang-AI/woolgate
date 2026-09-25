@@ -1,6 +1,6 @@
 # WoolGate · AI Aggregation Gateway
 
-![Version](https://img.shields.io/badge/version-v0.8.0-blue)
+![Version](https://img.shields.io/badge/version-v0.9.0-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green)
 ![Docker](https://img.shields.io/badge/Docker-Ready-blue)
 

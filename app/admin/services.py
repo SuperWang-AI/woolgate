@@ -8,7 +8,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import select, func, case, desc
+from sqlalchemy import select, func, case, desc, literal_column
 from datetime import datetime, timedelta, timezone
 
 from app.models import AsyncSessionLocal
@@ -462,3 +462,120 @@ async def needs_onboard(request=None) -> bool:
             cnt = (await session.execute(select(func.count(ModelAccount.id)))).scalar() or 0
             return cnt == 0
         return True
+
+
+# ========== 图表统计数据 ==========
+
+async def get_request_trend(days: int = 7) -> dict:
+    """获取最近 N 天的请求量趋势（按北京时间日对齐）"""
+    async with AsyncSessionLocal() as session:
+        # 日期标签：北京时间今天往前推 days-1 天，含今天
+        today_cn = datetime.now(CN_TZ).date()
+        dates = [(today_cn - timedelta(days=i)).strftime('%m-%d') for i in range(days - 1, -1, -1)]
+        # 查询窗口：北京时间 (today_cn-(days-1)) 00:00 对应的 UTC naive
+        start_cn = datetime.combine(today_cn - timedelta(days=days - 1), datetime.min.time())
+        start_utc = start_cn.replace(tzinfo=CN_TZ).astimezone(timezone.utc).replace(tzinfo=None)
+
+        # SQLite: date(created_at, '+8 hours') 按北京时间切日
+        cn_date = func.date(RequestLog.created_at, literal_column("'+8 hours'")).label('date')
+        result = await session.execute(
+            select(cn_date, func.count(RequestLog.id).label('count'))
+            .where(RequestLog.created_at >= start_utc)
+            .group_by(cn_date)
+            .order_by(cn_date)
+        )
+        date_counts = {}
+        for row in result.all():
+            ds = row.date[5:10] if isinstance(row.date, str) else (row.date.strftime('%m-%d') if row.date else '')
+            date_counts[ds] = row.count
+        counts = [date_counts.get(d, 0) for d in dates]
+        return {'dates': dates, 'counts': counts}
+
+
+async def get_token_trend(days: int = 7) -> dict:
+    """获取最近 N 天的 Token 使用量趋势（按北京时间日对齐）"""
+    async with AsyncSessionLocal() as session:
+        today_cn = datetime.now(CN_TZ).date()
+        dates = [(today_cn - timedelta(days=i)).strftime('%m-%d') for i in range(days - 1, -1, -1)]
+        start_cn = datetime.combine(today_cn - timedelta(days=days - 1), datetime.min.time())
+        start_utc = start_cn.replace(tzinfo=CN_TZ).astimezone(timezone.utc).replace(tzinfo=None)
+
+        cn_date = func.date(RequestLog.created_at, literal_column("'+8 hours'")).label('date')
+        result = await session.execute(
+            select(
+                cn_date,
+                func.sum(RequestLog.prompt_tokens).label('prompt_tokens'),
+                func.sum(RequestLog.completion_tokens).label('completion_tokens'),
+            )
+            .where(RequestLog.created_at >= start_utc)
+            .group_by(cn_date)
+            .order_by(cn_date)
+        )
+        date_data = {}
+        for row in result.all():
+            ds = row.date[5:10] if isinstance(row.date, str) else (row.date.strftime('%m-%d') if row.date else '')
+            date_data[ds] = {'prompt': row.prompt_tokens or 0, 'completion': row.completion_tokens or 0}
+        prompt_tokens = [date_data.get(d, {}).get('prompt', 0) for d in dates]
+        completion_tokens = [date_data.get(d, {}).get('completion', 0) for d in dates]
+        return {'dates': dates, 'prompt_tokens': prompt_tokens, 'completion_tokens': completion_tokens}
+
+
+async def get_cost_distribution() -> dict:
+    """获取成本分布统计（按厂商）"""
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(
+                RequestLog.vendor,
+                func.sum(RequestLog.actual_cost).label('total_cost'),
+                func.count(RequestLog.id).label('request_count')
+            )
+            .where(RequestLog.actual_cost > 0)
+            .group_by(RequestLog.vendor)
+            .order_by(func.sum(RequestLog.actual_cost).desc())
+        )
+        rows = result.all()
+        
+        vendors = []
+        costs = []
+        request_counts = []
+        for row in rows:
+            vendors.append(row.vendor or '未知')
+            costs.append(round(row.total_cost or 0, 4))
+            request_counts.append(row.request_count or 0)
+        
+        free_result = await session.execute(
+            select(func.count(RequestLog.id))
+            .where(RequestLog.actual_cost == 0)
+        )
+        free_count = free_result.scalar() or 0
+        
+        return {
+            'vendors': vendors,
+            'costs': costs,
+            'request_counts': request_counts,
+            'free_count': free_count,
+        }
+
+
+async def get_success_rate() -> dict:
+    """获取请求成功率统计"""
+    async with AsyncSessionLocal() as session:
+        total_result = await session.execute(
+            select(func.count(RequestLog.id))
+        )
+        total_count = total_result.scalar() or 0
+        
+        success_result = await session.execute(
+            select(func.count(RequestLog.id))
+            .where(RequestLog.status == 'success')
+        )
+        success_count = success_result.scalar() or 0
+        
+        failed_count = total_count - success_count
+        
+        return {
+            'total': total_count,
+            'success': success_count,
+            'failed': failed_count,
+            'success_rate': round((success_count / total_count * 100) if total_count > 0 else 0, 2),
+        }

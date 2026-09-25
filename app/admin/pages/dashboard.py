@@ -8,6 +8,18 @@ from starlette.requests import Request
 from .base import BasePage
 from app.admin.services import get_stats
 from app.admin.components.stat_card import render_stat_card
+from app.admin.components.charts import (
+    render_request_trend_chart,
+    render_token_trend_chart,
+    render_cost_distribution_chart,
+    render_success_rate_gauge,
+)
+from app.admin.services import (
+    get_request_trend,
+    get_token_trend,
+    get_cost_distribution,
+    get_success_rate,
+)
 from app.extensions.sdk import component_registry, UI_HOOK_DASHBOARD_WIDGETS
 
 
@@ -166,6 +178,33 @@ class DashboardPage(BasePage):
                         except Exception as e:
                             with ui.card().classes('flex-1 bg-red-50 border-l-4 border-red-500 p-3'):
                                 ui.label(f'插件组件异常: {e}').classes('text-red-700 text-sm')
+            
+            # ── 图表统计区域 ──
+            ui.label('数据统计').classes('text-2xl font-bold text-gray-800 mt-4')
+            
+            # 第一行：请求量趋势 + Token 趋势
+            with ui.row().classes('w-full gap-4'):
+                with ui.card().classes('flex-1 p-4 shadow-sm').style('min-width: 400px'):
+                    ui.label('请求量趋势（近 7 天）').classes('text-lg font-bold text-gray-800 mb-2')
+                    request_trend_data = await get_request_trend(7)
+                    render_request_trend_chart(request_trend_data)
+                
+                with ui.card().classes('flex-1 p-4 shadow-sm').style('min-width: 400px'):
+                    ui.label('Token 使用量趋势（近 7 天）').classes('text-lg font-bold text-gray-800 mb-2')
+                    token_trend_data = await get_token_trend(7)
+                    render_token_trend_chart(token_trend_data)
+            
+            # 第二行：成本分布 + 成功率
+            with ui.row().classes('w-full gap-4'):
+                with ui.card().classes('flex-1 p-4 shadow-sm').style('min-width: 400px'):
+                    ui.label('成本分布').classes('text-lg font-bold text-gray-800 mb-2')
+                    cost_data = await get_cost_distribution()
+                    render_cost_distribution_chart(cost_data)
+                
+                with ui.card().classes('flex-1 p-4 shadow-sm').style('min-width: 400px'):
+                    ui.label('请求成功率').classes('text-lg font-bold text-gray-800 mb-2')
+                    success_data = await get_success_rate()
+                    render_success_rate_gauge(success_data)
 
     async def render(self):
         """渲染首页仪表盘"""

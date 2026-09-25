@@ -104,6 +104,8 @@ def create_ui():
         """SPA 根：导航 tabs + 内容面板，导航切换零刷新（URL 用 history.replaceState 同步，刷新后仍停留当前页）"""
         nonlocal _plugin_active
         ui.page_title('WoolGate AI 聚合网关')
+        
+
         # 从URL解析初始插件active状态
         if request is not None and active_key == 'plugins':
             _plugin_active = request.query_params.get('active', None)

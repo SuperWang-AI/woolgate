@@ -4,7 +4,7 @@
 from __future__ import annotations
 from nicegui import ui
 from .base import BasePage
-from app.admin.services import get_log_stats, get_recent_logs
+from app.admin.services import get_log_stats, get_recent_logs, get_error_breakdown
 from app.admin.utils import format_local_time
 from app.extensions.sdk import component_registry, UI_HOOK_LOG_DETAIL_EXTRA
 
@@ -16,6 +16,7 @@ class LogsPage(BasePage):
         """加载日志数据"""
         self.stats = await get_log_stats()
         self.logs = await get_recent_logs(50)
+        self.error_bd = await get_error_breakdown(hours=24)
 
     async def render(self):
         """渲染请求日志页面"""
@@ -51,6 +52,27 @@ class LogsPage(BasePage):
                     stat_card('🐑', 'text-orange-600', '累计Token',
                               f"{total_prompt + total_completion:,}",
                               [f'输入 {total_prompt:,}', f'输出 {total_completion:,}'])
+
+                # 错误聚合（最近24h）
+                if self.error_bd['total_failed'] > 0:
+                    with ui.card().classes('w-full bg-red-50 border border-red-200').style('border-left:4px solid #ef4444'):
+                        with ui.column().classes('w-full gap-2 p-1'):
+                            with ui.row().classes('items-center gap-2'):
+                                ui.icon('bug_report').classes('text-red-600')
+                                ui.label(f"⚠️ 错误聚合 · 最近 {self.error_bd['window_hours']}h").classes('text-md font-bold text-red-700')
+                                ui.label(f"共 {self.error_bd['total_failed']} 次失败").classes('text-sm text-red-600 ml-2')
+                            # 按厂商分布
+                            with ui.row().classes('w-full gap-2 flex-wrap'):
+                                for v in self.error_bd['by_vendor']:
+                                    with ui.badge(f"{v['vendor']}: {v['count']}").classes('text-white').style('background:#dc2626'):
+                                        pass
+                            # 最近错误样本
+                            if self.error_bd['samples']:
+                                ui.label('最近错误样本：').classes('text-xs text-gray-600 mt-1')
+                                for smp in self.error_bd['samples'][:5]:
+                                    with ui.row().classes('w-full items-start gap-2 text-xs'):
+                                        ui.label(smp['vendor']).classes('text-red-700 font-mono whitespace-nowrap')
+                                        ui.label(smp['error']).classes('text-gray-700 break-all')
 
                 # 日志列表
                 if self.logs:

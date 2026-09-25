@@ -197,7 +197,7 @@ class DashboardPage(BasePage):
             # 第二行：成本分布 + 成功率
             with ui.row().classes('w-full gap-4'):
                 with ui.card().classes('flex-1 p-4 shadow-sm').style('min-width: 400px'):
-                    ui.label('成本分布').classes('text-lg font-bold text-gray-800 mb-2')
+                    ui.label('按厂商 Token 用量').classes('text-lg font-bold text-gray-800 mb-2')
                     cost_data = await get_cost_distribution()
                     render_cost_distribution_chart(cost_data)
                 

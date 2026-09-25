@@ -188,6 +188,9 @@ class PipelinePage(BasePage):
                     with ui.column().classes('gap-1'):
                         local_embed_model = ui.input('本地 Embedding 模型', value=config.embedding_local_plugin).classes('w-full')
                         ui.label('需先在 Ollama 中拉取，如 bge-small-zh / nomic-embed-text').classes('text-xs text-gray-400')
+                    with ui.column().classes('gap-1'):
+                        cloud_embed_url = ui.input('云端 Embedding API 地址', value=getattr(_router_cfg, 'embedding_cloud_base_url', '')).classes('w-full')
+                        ui.label('留空则默认阿里百炼 https://dashscope.aliyuncs.com/compatible-mode/v1').classes('text-xs text-gray-400')
 
             # 保存按钮
             async def save_pipeline():
@@ -195,6 +198,7 @@ class PipelinePage(BasePage):
                 router_config_json = {
                     'embedding_backend': 'cloud',
                     'embedding_model_id': int(embedding_model_id.value),
+                    'embedding_cloud_base_url': cloud_embed_url.value.strip(),
                     'threshold_high': float(threshold_high.value),
                     'threshold_low': float(threshold_low.value),
                 }

@@ -214,6 +214,45 @@ async def get_trend_data(days: int = 7) -> dict:
         }
 
 
+async def get_error_breakdown(hours: int = 24):
+    """错误日志聚合：按厂商聚合最近 hours 小时内的失败请求，返回错误分类和样本"""
+    from sqlalchemy import func, select, desc
+    from datetime import datetime, timedelta
+    from app.models import AsyncSessionLocal
+    from app.models.database import RequestLog
+
+    since = datetime.utcnow() - timedelta(hours=hours)
+    async with AsyncSessionLocal() as session:
+        # 按厂商聚合失败数
+        by_vendor = await session.execute(
+            select(RequestLog.vendor, func.count(RequestLog.id))
+            .where(RequestLog.status == 'failed', RequestLog.created_at >= since)
+            .group_by(RequestLog.vendor)
+            .order_by(desc(func.count(RequestLog.id)))
+        )
+        vendor_rows = [{"vendor": v or "未知", "count": c} for v, c in by_vendor.all()]
+
+        # 最近错误样本（每厂商取最新一条 error_message）
+        recent = await session.execute(
+            select(RequestLog.vendor, RequestLog.error_message, RequestLog.created_at)
+            .where(RequestLog.status == 'failed', RequestLog.created_at >= since)
+            .order_by(desc(RequestLog.created_at))
+            .limit(20)
+        )
+        samples = [
+            {"vendor": r.vendor or "未知", "error": (r.error_message or "")[:120], "at": r.created_at}
+            for r in recent.all()
+        ]
+
+        total = sum(r["count"] for r in vendor_rows)
+        return {
+            "window_hours": hours,
+            "total_failed": total,
+            "by_vendor": vendor_rows,
+            "samples": samples,
+        }
+
+
 # ========== 账号管理 ==========
 
 async def get_accounts() -> list:
@@ -315,6 +354,45 @@ async def get_recent_logs(limit: int = 50):
             .limit(limit)
         )
         return result.scalars().all()
+
+
+async def get_error_breakdown(hours: int = 24):
+    """错误日志聚合：按厂商聚合最近 hours 小时内的失败请求，返回错误分类和样本"""
+    from sqlalchemy import func, select, desc
+    from datetime import datetime, timedelta
+    from app.models import AsyncSessionLocal
+    from app.models.database import RequestLog
+
+    since = datetime.utcnow() - timedelta(hours=hours)
+    async with AsyncSessionLocal() as session:
+        # 按厂商聚合失败数
+        by_vendor = await session.execute(
+            select(RequestLog.vendor, func.count(RequestLog.id))
+            .where(RequestLog.status == 'failed', RequestLog.created_at >= since)
+            .group_by(RequestLog.vendor)
+            .order_by(desc(func.count(RequestLog.id)))
+        )
+        vendor_rows = [{"vendor": v or "未知", "count": c} for v, c in by_vendor.all()]
+
+        # 最近错误样本（每厂商取最新一条 error_message）
+        recent = await session.execute(
+            select(RequestLog.vendor, RequestLog.error_message, RequestLog.created_at)
+            .where(RequestLog.status == 'failed', RequestLog.created_at >= since)
+            .order_by(desc(RequestLog.created_at))
+            .limit(20)
+        )
+        samples = [
+            {"vendor": r.vendor or "未知", "error": (r.error_message or "")[:120], "at": r.created_at}
+            for r in recent.all()
+        ]
+
+        total = sum(r["count"] for r in vendor_rows)
+        return {
+            "window_hours": hours,
+            "total_failed": total,
+            "by_vendor": vendor_rows,
+            "samples": samples,
+        }
 
 
 # ========== 账号管理 ==========
@@ -521,39 +599,44 @@ async def get_token_trend(days: int = 7) -> dict:
 
 
 async def get_cost_distribution() -> dict:
-    """获取成本分布统计（按厂商）"""
+    """获取按厂商 Token 用量分布（主指标是 token 量，金额仅作参考 tooltip）。
+
+    说明：WoolGate 调度免费额度/包月账号，边际成本=0，actual_cost 只是按官方 API 标价
+    折算的等效市场价，不是真实账单。因此图表主展示 token 量，金额降级为参考。
+    """
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(
                 RequestLog.vendor,
-                func.sum(RequestLog.actual_cost).label('total_cost'),
+                func.coalesce(func.sum(RequestLog.prompt_tokens), 0).label('prompt_tokens'),
+                func.coalesce(func.sum(RequestLog.completion_tokens), 0).label('completion_tokens'),
+                func.coalesce(func.sum(RequestLog.actual_cost), 0.0).label('total_cost'),
                 func.count(RequestLog.id).label('request_count')
             )
-            .where(RequestLog.actual_cost > 0)
             .group_by(RequestLog.vendor)
-            .order_by(func.sum(RequestLog.actual_cost).desc())
+            .order_by(func.sum(RequestLog.prompt_tokens + RequestLog.completion_tokens).desc())
         )
         rows = result.all()
-        
+
         vendors = []
+        prompt_k = []
+        completion_k = []
         costs = []
         request_counts = []
         for row in rows:
             vendors.append(row.vendor or '未知')
+            # token 量按 K（千）展示，Y 轴更直观
+            prompt_k.append(round((row.prompt_tokens or 0) / 1000, 1))
+            completion_k.append(round((row.completion_tokens or 0) / 1000, 1))
             costs.append(round(row.total_cost or 0, 4))
             request_counts.append(row.request_count or 0)
-        
-        free_result = await session.execute(
-            select(func.count(RequestLog.id))
-            .where(RequestLog.actual_cost == 0)
-        )
-        free_count = free_result.scalar() or 0
-        
+
         return {
             'vendors': vendors,
-            'costs': costs,
+            'prompt_tokens_k': prompt_k,
+            'completion_tokens_k': completion_k,
+            'costs': costs,          # 等效市场价，仅 tooltip 参考
             'request_counts': request_counts,
-            'free_count': free_count,
         }
 
 

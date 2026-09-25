@@ -138,6 +138,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Prometheus 指标（必须在路由注册前挂载中间件）
+from app.observability.metrics import setup_metrics
+setup_metrics(app)
+
 # 注册路由
 app.include_router(api_router, tags=["OpenAI Compatible API"])
 

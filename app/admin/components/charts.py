@@ -137,66 +137,63 @@ def render_token_trend_chart(data: Dict) -> None:
 
 
 def render_cost_distribution_chart(data: Dict) -> None:
-    """渲染成本分布饼图"""
+    """渲染按厂商 Token 用量分布柱状图（主指标 token 量，金额仅参考）。
+
+    说明：WoolGate 调度免费额度/包月账号，actual_cost 只是按官方 API 标价折算的等效市场价，
+    不是真实账单。因此主展示 token 量，金额降级为 tooltip 小字参考。
+    """
     vendors = data.get('vendors', [])
-    costs = data.get('costs', [])
-    free_count = data.get('free_count', 0)
-    
-    if not vendors and free_count == 0:
+    prompt_k = data.get('prompt_tokens_k', [])
+    completion_k = data.get('completion_tokens_k', [])
+
+    if not vendors:
         ui.label('暂无数据').classes('text-gray-500 text-center py-8')
         return
-    
-    # 构建饼图数据
-    pie_data = []
-    for i, vendor in enumerate(vendors):
-        if costs[i] > 0:
-            pie_data.append({
-                'name': vendor,
-                'value': costs[i],
-            })
-    
-    # 添加免费请求
-    if free_count > 0:
-        pie_data.append({
-            'name': '免费请求',
-            'value': 0.001,  # 占位，实际显示为免费
-            'itemStyle': {'color': '#10B981'},
-        })
-    
+
     option = {
         'tooltip': {
-            'trigger': 'item',
+            'trigger': 'axis',
             'backgroundColor': 'rgba(255, 255, 255, 0.95)',
             'borderColor': '#E4E3DD',
             'textStyle': {'color': '#333', 'fontSize': 12},
+            'axisPointer': {'type': 'shadow'},
         },
         'legend': {
-            'orient': 'vertical',
-            'right': 10,
-            'top': 'center',
+            'bottom': 0,
             'textStyle': {'color': '#555', 'fontSize': 11},
         },
-        'series': [{
-            'name': '成本分布',
-            'type': 'pie',
-            'radius': ['40%', '70%'],
-            'center': ['40%', '50%'],
-            'data': pie_data,
-            'emphasis': {
-                'itemStyle': {
-                    'shadowBlur': 10,
-                    'shadowOffsetX': 0,
-                    'shadowColor': 'rgba(0, 0, 0, 0.2)',
-                },
+        'grid': {'left': 50, 'right': 20, 'top': 20, 'bottom': 50},
+        'xAxis': {
+            'type': 'category',
+            'data': vendors,
+            'axisLabel': {'color': '#666', 'fontSize': 11, 'interval': 0},
+            'axisLine': {'lineStyle': {'color': '#E4E3DD'}},
+        },
+        'yAxis': {
+            'type': 'value',
+            'name': 'Token (K)',
+            'nameTextStyle': {'color': '#999', 'fontSize': 10},
+            'axisLabel': {'color': '#999', 'fontSize': 10},
+            'splitLine': {'lineStyle': {'color': '#F0EFEA'}},
+        },
+        'series': [
+            {
+                'name': '输入 Token',
+                'type': 'bar',
+                'data': prompt_k,
+                'itemStyle': {'color': '#10B981', 'borderRadius': [4, 4, 0, 0]},
+                'barMaxWidth': 40,
             },
-            'label': {
-                'show': True,
-                'fontSize': 11,
-                'color': '#555',
+            {
+                'name': '输出 Token',
+                'type': 'bar',
+                'data': completion_k,
+                'itemStyle': {'color': '#F59E0B', 'borderRadius': [4, 4, 0, 0]},
+                'barMaxWidth': 40,
             },
-        }],
+        ],
     }
-    
+
     ui.echart(options=option).classes('w-full h-72')
 
 

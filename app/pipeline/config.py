@@ -80,6 +80,9 @@ class ContextConfig:
     summary_window_turns: int = 5  # 摘要后保留最近 N 轮原文
     summary_max_tokens: int = 500   # 摘要模型输出上限
 
+    # 本地模型运行时地址（从 SystemConfig 顶层列注入，避免重复配置）
+    ollama_base_url: str = "http://host.docker.internal:11434"
+
 
 @dataclass
 class PinSelectorConfig:
@@ -143,13 +146,19 @@ class PipelineConfig:
         selector_json = _filter_known_fields(selector_json, PinSelectorConfig)
         context_json = _filter_known_fields(context_json, ContextConfig)
 
+        context_config_obj = ContextConfig(**{**ContextConfig().__dict__, **context_json})
+        # Ollama 地址从 SystemConfig 顶层列注入（统一配置来源，避免 summary/embedding 各读各的）
+        ollama_url = getattr(config, "ollama_base_url", None)
+        if ollama_url:
+            context_config_obj.ollama_base_url = ollama_url
+
         pipeline = cls(
             router_strategy=getattr(config, "router_strategy", "hybrid") or "hybrid",
             router_config=RouterConfig(**{**RouterConfig().__dict__, **router_json}),
             selector_strategy=getattr(config, "selector_strategy", "pin") or "pin",
             pin_config=PinSelectorConfig(**{**PinSelectorConfig().__dict__, **selector_json}),
             context_strategy=getattr(config, "context_strategy", "passthrough") or "passthrough",
-            context_config=ContextConfig(**{**ContextConfig().__dict__, **context_json}),
+            context_config=context_config_obj,
             edition=getattr(config, "edition", "opensource") or "opensource",
         )
 

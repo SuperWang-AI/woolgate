@@ -163,7 +163,8 @@ class SummaryManager(ContextManager):
         """本地摘要：调用 Ollama"""
         import httpx
         model = self.config.summary_model or "qwen2.5:1.5b"
-        url = "http://host.docker.internal:11434/api/generate"
+        ollama_base = (self.config.ollama_base_url or "http://host.docker.internal:11434").rstrip("/")
+        url = f"{ollama_base}/api/generate"
         payload = {"model": model, "prompt": prompt, "stream": False}
 
         async with httpx.AsyncClient(timeout=60.0) as client:

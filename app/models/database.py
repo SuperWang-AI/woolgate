@@ -190,8 +190,8 @@ class RequestLog(Base):
                              comment="隐式信号: stream_interrupted(流式中断)/switch_retry(失败切换)/followup(继续追问)")
 
     # ── C5 学习型路由：成本/决策明细/分类引擎（样本标签）──
-    estimated_cost = Column(Float, default=0.0, comment="估算成本(元)，路由后按预估token×单价")
-    actual_cost = Column(Float, default=0.0, comment="实际成本(元)，执行后按实际token×单价")
+    estimated_cost = Column(Float, default=0.0, comment="估算等效市场价(元)，路由后按预估token×官方标价折算，非真实账单")
+    actual_cost = Column(Float, default=0.0, comment="等效市场价(元)，按实际token×官方标价折算；WoolGate调度免费额度/包月账号，此值非真实账单，仅用于参考")
     router_decision = Column(String(200), nullable=True, comment="路由决策明细（字符串格式：策略: 说明）")
     selector_decision = Column(String(200), nullable=True, comment="选号决策明细（字符串格式：策略: 说明）")
     classify_engine = Column(String(20), nullable=True, comment="实际分类引擎: vector/llm/off（local 预留未实现）")

@@ -261,6 +261,52 @@ class AccountsPage(BasePage):
                     return '******'
                 return f'{plain[:6]}****{plain[-4:]}'
 
+            # ── API Key 查看/复制：明文不落页面，按需弹窗或复制到剪贴板 ──
+            from app.utils.encryption import encryption_service as _enc_svc
+            import json as _json
+            _current_plain_key = {'value': ''}
+            key_dialog_label = None
+
+            with ui.dialog() as key_dialog, ui.card().classes('w-[640px]'):
+                with ui.column().classes('w-full gap-3'):
+                    ui.label('完整 API Key').classes('text-lg font-bold text-gray-800')
+                    key_dialog_label = ui.label('').classes('font-mono text-sm break-all bg-gray-50 p-3 rounded border w-full')
+
+                    def _copy_from_dialog():
+                        """复制弹窗中当前展示的完整密钥（普通 def，非 lambda，确保 run_javascript 执行）"""
+                        plain = _current_plain_key['value']
+                        if not plain:
+                            ui.notify('没有可复制的密钥', type='warning')
+                            return
+                        ui.run_javascript(f"navigator.clipboard.writeText({_json.dumps(plain)});")
+                        ui.notify('已复制到剪贴板', type='positive')
+
+                    with ui.row().classes('gap-2 justify-end w-full'):
+                        ui.button('复制', on_click=_copy_from_dialog).props('color=primary size=sm no-caps')
+                        ui.button('关闭', on_click=key_dialog.close).props('outline size=sm no-caps')
+
+            def _show_key(acc):
+                """点击「查看」：解密并弹窗展示完整密钥（普通 def，确保 dialog 正常打开）"""
+                try:
+                    plain = _enc_svc.decrypt(acc.api_key_encrypted) if acc.api_key_encrypted else ''
+                except Exception:
+                    plain = ''
+                _current_plain_key['value'] = plain
+                key_dialog_label.set_text(plain if plain else '（该账号未配置密钥）')
+                key_dialog.open()
+
+            def _copy_key(acc):
+                """点击「复制」：解密后直接写入剪贴板，页面不展示明文"""
+                try:
+                    plain = _enc_svc.decrypt(acc.api_key_encrypted) if acc.api_key_encrypted else ''
+                except Exception:
+                    plain = ''
+                if not plain:
+                    ui.notify('该账号没有可复制的密钥', type='warning')
+                    return
+                ui.run_javascript(f"navigator.clipboard.writeText({_json.dumps(plain)});")
+                ui.notify('已复制到剪贴板', type='positive')
+
             # 厂商分组：别名归一，避免历史命名差异把同一厂商拆成多组
             from collections import defaultdict
             from app.services.free_tier_catalog import FREE_TIER_VENDORS, vendor_matches
@@ -316,6 +362,9 @@ class AccountsPage(BasePage):
                                         if not getattr(acc, 'key_verified', True):
                                             ui.badge('⚠ Key未验证', color='warning').props(f'data-acc-keywarn="{acc.id}"').classes('text-xs')
                                         # from app.admin.admin import show_account_dialog, toggle_account_enable
+                                        if acc.api_key_encrypted:
+                                            ui.button('查看', on_click=lambda a=acc: _show_key(a)).props('outline size=xs color=teal').classes('text-xs').on('click', lambda: None, ['stop'])
+                                            ui.button('复制', on_click=lambda a=acc: _copy_key(a)).props('outline size=xs color=teal').classes('text-xs').on('click', lambda: None, ['stop'])
                                         ui.button('编辑', on_click=lambda aid=acc.id: show_account_dialog(account_id=aid)).props('outline size=xs color=primary').classes('text-xs').on('click', lambda: None, ['stop'])
                                         ui.button('停用', on_click=lambda aid=acc.id: toggle_account_enable(aid, False)).props(f'outline size=xs color=warning data-acc-btn="{acc.id}" data-acc-action="disable"').classes('text-xs' + ('' if acc.is_enable else ' hidden')).on('click', lambda: None, ['stop'])
                                         ui.button('启用', on_click=lambda aid=acc.id: toggle_account_enable(aid, True)).props(f'outline size=xs color=positive data-acc-btn="{acc.id}" data-acc-action="enable"').classes('text-xs' + ('' if not acc.is_enable else ' hidden')).on('click', lambda: None, ['stop'])
